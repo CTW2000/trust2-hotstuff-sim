@@ -47,9 +47,9 @@ python -m sim2.tests.test_v05
 |---|---|
 | `dirTtru.py at / budget` | 加权下的 AT + CUSUM；信誉预算界 |
 | `dirTtruTune.py run / run_x / run_beta / plot` | AT 门槛 x 与 CUSUM ρ̄ 的联合调参；样本量与同伙份额 |
-| `dirTtruSoft.py run / plot` | P2 中"无 QC"作为软证据；领导者攻击下的吞吐 |
-| `dirTtruSlot.py run / plot` | 加权出块时长分数作为软证据（慢领导者、部分发送） |
-| `dirTtruFwd.py run / net / timed / plot` | 提案转发对部分发送、数据扣留、扣票 + 迟到、慢领导者的作用（两个基线）；出块时长门限在不同网络下的误判与 100 Mbps 下的代价；定时释放 |
+| `dirTtruSoft.py run / plot` | 评估记录（不纳入推荐方案）：P2 中"无 QC"作为软证据；领导者攻击下的吞吐 |
+| `dirTtruSlot.py run / plot` | 评估记录（不纳入推荐方案）：加权出块时长分数作为软证据（慢领导者、部分发送） |
+| `dirTtruFwd.py run / net / timed / plot` | 评估记录（不纳入推荐方案）：提案转发对部分发送、数据扣留、扣票 + 迟到、慢领导者的作用（两个基线）；出块时长门限在不同网络下的误判与 100 Mbps 下的代价；定时释放 |
 | `dirTtruRobust.py async / adaptive` | GST 前的混乱期（随机延迟、区域故障、对抗调度）；了解规则的自适应攻击者 |
 | `dirTtruG1.py` | G1 罚没（NR 自相矛盾 → z=0）闭环 |
 | `dirTtruInc.py reliab / detect` | 加权交易包含证言的可靠性与审查检出 |
