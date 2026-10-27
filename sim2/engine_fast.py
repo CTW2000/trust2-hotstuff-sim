@@ -273,7 +273,7 @@ def _tc_kernel(cfg: RunConfig, net, st: State, v: int) -> bool:
 
 def run(cfg: RunConfig, net) -> Result:
     check_sizes(cfg, net)
-    if cfg.timeout_votes or cfg.track_signed or cfg.vote_weights is not None:
+    if cfg.timeout_votes or cfg.track_signed or cfg.vote_weights is not None or cfg.prop_forward:
         # With vote-carrying timeouts, whether a replica times out in view v (and so contributes its
         # vote to a QC reconstructed from timeouts) can depend on later views, which breaks the
         # per-view decomposition used below. Use the reference engine, which is exact by definition.

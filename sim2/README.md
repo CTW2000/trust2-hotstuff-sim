@@ -8,7 +8,7 @@
 |---|---|
 | `engine_event.py` | **唯一的协议规则定义**：每个副本一个状态机，加一个全局事件队列。支持 P1/P2、三种角色和对手计划，可以对任意视图区间原地求解。也负责加权计票（`RunConfig.vote_weights`）、签名记录（`track_signed`）和签名视图单调规则（`vote_monotone`，即 R3） |
 | `engine_fast.py` | 两个闭式核心：QC 核心（视图内无超时）和纯 TC 核心（任何地方都形成不了 QC）。不满足时调用事件引擎求解；遇到加权、签名记录等配置时整段转交事件引擎 |
-| `common.py` | 配置 `RunConfig`、角色、共享状态 `State`、链与提交（`commit_times`，两链提交）；加权法定份额 `weighted_hit`（份额严格大于 2/3） |
+| `common.py` | 配置 `RunConfig`、角色、共享状态 `State`、链与提交（`commit_times`，两链提交）；加权法定份额 `weighted_hit`（份额严格大于 2/3）；提案到达时间 `proposal_timing`，含提案转发（`RunConfig.prop_forward`："hdr" 转发提案头、缺块者级联取块，"full" 转发整个提案）与每视图提案字节数 `st.prop_bytes` |
 | `schedule.py` | 带滞后的领导者规则与证据：<br>• R0 均匀，R1/R2 失败率剖面，R3 Carousel 式排除；<br>• **R5 `CusumExclusion`**：CUSUM 定罪、排除上限（可按权重，严格先进先出队列）、期满、G1 永久禁止；可选第二条软证据 CUSUM（只取消领导资格）；<br>• 证据 `bad_fact`："失败提议者"、AT 指控、交易包含证言 `omit`、"无 QC" `noqc`、加权出块时长 `slot`；<br>• 槽位时长分数 `slot_score` 与加权版本 `weighted_slot_score`；<br>• NR 自相矛盾 `liars`、E3 证据检查 `e3_violators`；<br>• `verify_leaders`：按最终事实事后重算领导者，检查是否用到了未定稿的事实 |
 | `ttru.py` | T_tru 权重：基础权重 CapNorm(质押 + π·K)（单实体上限、未认证类上限），按纪元生成权重表；信誉 r 只罚不奖、总降权受预算 B_rep 约束；G1 证实者 z=0 |
 | `txlayer.py` | 交易层与交易包含证言（G2）：转发、守卫窗口、到期判定（计数或加权门槛）、豁免、审查与陷害对手 |
@@ -49,6 +49,7 @@ python -m sim2.tests.test_v05
 | `dirTtruTune.py run / run_x / run_beta / plot` | AT 门槛 x 与 CUSUM ρ̄ 的联合调参；样本量与同伙份额 |
 | `dirTtruSoft.py run / plot` | P2 中"无 QC"作为软证据；领导者攻击下的吞吐 |
 | `dirTtruSlot.py run / plot` | 加权出块时长分数作为软证据（慢领导者、部分发送） |
+| `dirTtruFwd.py run / plot` | 提案转发对部分发送、扣票 + 迟到的作用，以及带宽代价 |
 | `dirTtruRobust.py async / adaptive` | GST 前的混乱期（随机延迟、区域故障、对抗调度）；了解规则的自适应攻击者 |
 | `dirTtruG1.py` | G1 罚没（NR 自相矛盾 → z=0）闭环 |
 | `dirTtruInc.py reliab / detect` | 加权交易包含证言的可靠性与审查检出 |

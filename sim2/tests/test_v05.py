@@ -7,7 +7,8 @@
 - soft evidence ("noqc") runs compute leaders from final facts (verify_leaders == 0);
 - weighted slot-duration evidence ("slot"): slow leaders score far above honest views, and slot runs
   compute leaders from final facts;
-- weighted due threshold of the transaction layer: no honest leader flagged in model S.
+- weighted due threshold of the transaction layer: no honest leader flagged in model S;
+- proposal forwarding ("hdr", "full") neutralizes a targeted partial send.
 Run from the repository root:  python -m sim2.tests.test_v05   (or pytest: test_v05)"""
 import sys
 import time
@@ -199,6 +200,25 @@ def check_slot():
     return bad or stale != 0
 
 
+def check_forwarding():
+    """Proposal forwarding: off by default (the regression covers it); with "hdr" or "full" a targeted
+    partial send no longer fails views (eps = 0)."""
+    from sim2.experiments.dirTtru import N, cheapest_set, evade_k, setup
+    from sim2.experiments.ttru_perf import perf
+    cls, s, base, cost = setup(0, 1.0)
+    byz = cheapest_set(base, cost, 0.2)
+    out = {}
+    for fwd in (None, "hdr", "full"):
+        cfg = RunConfig(n=N, views=500, seed=0, protocol="P2", leader_rule=S.Uniform(), byzantine=list(np.flatnonzero(byz)),
+                        adversary=A.PartialSend(evade_k(base, byz, 2 / 3), targeted=True), vote_weights=lambda st, v: base,
+                        prop_forward=fwd)
+        st = State(cfg)
+        engine_event.simulate(cfg, Network(NetConfig(n=N, seed=0, regions=3, jitter_max_ms=2.0)), st, 1, 500)
+        out[fwd] = perf(st, 100, 490)["commit"]
+    print(f"targeted partial send, committed share: no forwarding {out[None]:.3f}, header {out['hdr']:.3f}, full {out['full']:.3f}")
+    return out[None] > 0.9 or out["hdr"] < 0.99 or out["full"] < 0.99
+
+
 def check_tx_weighted():
     from sim2.experiments.dirTtru import N, cheapest_set, setup
     cls, s, base, cost = setup(1, 1.0)
@@ -218,7 +238,7 @@ def check_tx_weighted():
 
 def main():
     t0 = time.time()
-    bad = check_queue() + check_e3() + check_e3_positive() + check_monotone() + check_soft_stale() + check_slot() + check_tx_weighted()
+    bad = check_queue() + check_e3() + check_e3_positive() + check_monotone() + check_soft_stale() + check_slot() + check_forwarding() + check_tx_weighted()
     print(f"({time.time() - t0:.0f}s)")
     if bad:
         print(f"FAILED: {bad}")

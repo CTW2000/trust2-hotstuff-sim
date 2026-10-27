@@ -48,6 +48,10 @@ class RunConfig:
                                        # QC/TC need a share strictly above 2/3 (weighted_hit; equal shares reproduce
                                        # counting when n is not a multiple of 3); leaders are drawn in proportion
                                        # (Uniform, CusumExclusion); event engine only
+    prop_forward: Optional[str] = None  # proposal forwarding by honest replicas (信任2.0_协议级验证 §3.7):
+                                       # "full" = forward the whole proposal on first receipt; "hdr" = forward the
+                                       # signed header only, replicas without the block fetch it from an honest
+                                       # holder; None = off (default). Byte counts per view in st.prop_bytes
     slot_theta_ms: Optional[float] = None  # weighted slot-duration evidence "slot" (schedule.weighted_slot_score):
                                        # a view whose robust slot score exceeds this many ms is a soft bad fact
     at_share: Optional[float] = None   # weighted AT: accuse when the NR=1 timeout share is strictly above this
@@ -223,6 +227,36 @@ class State:
         return p
 
 
+def _relay(arr, D, relay):
+    """Arrival times when replicas in `relay` forward on first receipt (Dijkstra; n is small)."""
+    arr = arr.copy()
+    done = np.zeros(arr.size, bool)
+    for _ in range(arr.size):
+        cand = np.where(done | ~relay, np.inf, arr)
+        j = int(np.argmin(cand))
+        if not np.isfinite(cand[j]):
+            break
+        done[j] = True
+        arr = np.minimum(arr, arr[j] + D[j])
+    return arr
+
+
+def _fetch_cascade(a, data, Dreq, Dresp, serve):
+    """Block arrival when every honest replica that holds the block (directly or by fetching) serves
+    requests: k asks holder j once it has the header, data_k = min_j max(a_k + Dreq[k, j], data_j) + Dresp[j, k]
+    (Dijkstra on data times; n is small)."""
+    data = data.copy()
+    done = np.zeros(data.size, bool)
+    for _ in range(data.size):
+        cand = np.where(done | ~serve, np.inf, data)
+        j = int(np.argmin(cand))
+        if not np.isfinite(cand[j]):
+            break
+        done[j] = True
+        data = np.minimum(data, np.maximum(a + Dreq[:, j], data[j]) + Dresp[j])
+    return data
+
+
 def proposal_timing(cfg, net, st, w: int, L: int, t: float, parent: int):
     """Shared by both engines: timing of the proposal of view w sent by L at time t.
 
@@ -249,6 +283,15 @@ def proposal_timing(cfg, net, st, w: int, L: int, t: float, parent: int):
     a[L] = t
     full[L] = True
     a = np.where(alive, a, np.inf)
+    direct = np.isfinite(a)
+    mode = cfg.prop_forward
+    if mode:
+        relay = st.honest & alive
+        if mode == "hdr":
+            a = _relay(a, net.delays(w, "fwd"), relay)      # the signed header spreads through honest replicas
+            full = full & direct                            # forwarded-only replicas must fetch the block
+        else:
+            a = _relay(a, D, relay)                          # the whole proposal spreads through honest replicas
     data = np.where(full, a, np.inf)
     hdr_only = np.isfinite(a) & ~full
     if hdr_only.any():
@@ -259,7 +302,19 @@ def proposal_timing(cfg, net, st, w: int, L: int, t: float, parent: int):
             cand = np.maximum(a[ks][:, None] + Dreq[np.ix_(ks, holders)], data[holders][None, :]) \
                 + D[np.ix_(holders, ks)].T
             data[ks] = cand.min(axis=1)
+    if mode == "full":
+        data = _relay(data, D, st.honest & alive)
+    elif mode == "hdr":
+        data = _fetch_cascade(a, data, net.delays(w, "vote"), D, st.honest & alive)
     st.payload_time[w] = data
+    if True:                                        # proposal bytes sent for view w (leader + forwards + fetches)
+        sz = net.cfg.sizes_bytes
+        blk, hdr = sz.get("prop", 0.0), sz.get("fwd", 0.0)
+        n_direct = int(direct.sum()) - 1
+        n_fwd = int((np.isfinite(a) & st.honest & alive).sum()) if mode else 0
+        n_fetch = int((np.isfinite(a) & ~full & alive).sum()) if mode == "hdr" else 0
+        per = blk if mode == "full" else hdr
+        st.__dict__.setdefault("prop_bytes", {})[w] = n_direct * blk + n_fwd * (n - 1) * per + n_fetch * blk
     vt = np.maximum(a, data)
     if cfg.vote_needs_parent and parent >= 1:
         pdata = st.payload_time[parent]
