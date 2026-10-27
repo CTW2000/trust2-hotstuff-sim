@@ -8,7 +8,12 @@
 - weighted slot-duration evidence ("slot"): slow leaders score far above honest views, and slot runs
   compute leaders from final facts;
 - weighted due threshold of the transaction layer: no honest leader flagged in model S;
-- proposal forwarding ("hdr", "full") neutralizes a targeted partial send.
+- proposal forwarding ("hdr", "full") neutralizes a targeted partial send; a replica whose own copy is late
+  gets the block by fetching, never with a forwarded header (review v0.8 code C1); byte counts; with
+  nr_requires_data, data withholding under forwarding is caught by AT (review v0.8 code C3);
+- weighted slot score: the shield / frame bounds on synthetic reports; the relative threshold (capped below
+  tau, so views ended by TC stay bad facts);
+  slot evidence with theta = 200 ms and with the relative threshold computes leaders from final facts.
 Run from the repository root:  python -m sim2.tests.test_v05   (or pytest: test_v05)"""
 import sys
 import time
@@ -219,6 +224,126 @@ def check_forwarding():
     return out[None] > 0.9 or out["hdr"] < 0.99 or out["full"] < 0.99
 
 
+def check_forward_timing():
+    """proposal_timing with forwarding on a hand-made network: the leader's copy to replica 3 is 5 s late,
+    every other link takes 10 ms. With "hdr", replica 3 gets the header forwarded by another replica at about
+    20 ms and must fetch the block (request 10 ms + answer 10 ms), so its block time is about 40 ms, not 20 ms
+    (the forwarded header's time) and not 5 s (its own late copy).
+    Bytes: leader n-1 blocks, n-1 honest forwarders x (n-1) headers, one fetched block."""
+    from sim2 import common as C
+
+    class FixedNet:
+        def __init__(self, n):
+            self.cfg = NetConfig(n=n, seed=0)
+
+        def delays(self, view, mtype):
+            d = np.full((self.cfg.n, self.cfg.n), 10.0)
+            if mtype == "prop":
+                d[0, 3] = 5000.0
+            np.fill_diagonal(d, 0.0)
+            return d
+
+    n = 7
+    cfg = RunConfig(n=n, views=20, seed=0, protocol="P2", prop_forward="hdr")
+    st = State(cfg)
+    net = FixedNet(n)
+    a, vt = C.proposal_timing(cfg, net, st, 5, 0, 0.0, 4)
+    blk = st.payload_time[5][3]
+    sz = net.cfg.sizes_bytes
+    expect = (n - 1) * sz["prop"] + (n - 1) * (n - 1) * sz["fwd"] + sz["prop"]
+    got = st.prop_bytes[5]
+    print(f"forwarding timing: replica 3 header {a[3]:.0f} ms, block {blk:.0f} ms; bytes {got:.0f} (expected {expect:.0f})")
+    return not (15 <= a[3] <= 25 and 35 <= blk <= 45 and abs(got - expect) < 1)
+
+
+def check_withhold_nr():
+    """Data withholding (header to all, block only to colluders) under header forwarding: with
+    nr_requires_data the honest replicas report NR=1 and AT excludes the colluding leaders."""
+    from sim2.experiments.dirTtru import N, cheapest_set, setup
+    cls, s, base, cost = setup(0, 1.0)
+    byz = cheapest_set(base, cost, 0.2)
+    out = {}
+    for nrd in (False, True):
+        rule = S.CusumExclusion(q=0.5, rho_bar=0.1, evidence="at", D=500, cap=0.5, Wq=500, cap_weights=base)
+        cfg = RunConfig(n=N, views=600, seed=0, protocol="P2", leader_rule=rule, byzantine=list(np.flatnonzero(byz)),
+                        adversary=A.DataWithhold(k=0), vote_weights=ttru.TtruWeights(base, epoch=100, rule=rule),
+                        at_share=2 / 3, prop_forward="hdr", nr_requires_data=nrd)
+        st = State(cfg)
+        engine_event.simulate(cfg, Network(NetConfig(n=N, seed=0, regions=3, jitter_max_ms=2.0)), st, 1, 600)
+        out[nrd] = len({k for e, k, u in st.rule_log if e == "exclude" and st.byz[k]}) / int(byz.sum())
+    print(f"data withholding under forwarding: colluders excluded, NR on header {out[False]:.2f}, NR on header+block {out[True]:.2f}")
+    return out[False] > 0.0 or out[True] < 0.9
+
+
+def check_slot_bounds():
+    """Synthetic reports: with a colluding leader the score is at least the fastest honest report (shield);
+    with an honest leader at most the slowest honest report (frame); the relative threshold tracks the median."""
+    rng = np.random.default_rng(5)
+    bad = 0
+    for trial in range(300):
+        n = int(rng.integers(7, 20))
+        w = rng.dirichlet(np.ones(n))
+        byz = np.zeros(n, bool)
+        for k in np.argsort(rng.random(n)):
+            if w[byz].sum() + w[k] < 1 / 3 - 1e-6:
+                byz[k] = True
+        if not byz.any() or byz.all():
+            continue
+        cfg = RunConfig(n=n, views=10, seed=trial, byzantine=list(np.flatnonzero(byz)), vote_weights=lambda st, v, w=w: w)
+        st = State(cfg)
+        st.know[3] = 0.0
+        e = rng.uniform(50, 500, n)
+        st.know[4] = e
+        hon = e[~byz]
+        for L in (int(np.flatnonzero(byz)[0]), int(np.flatnonzero(~byz)[0])):
+            for C in (int(np.flatnonzero(byz)[0]), int(np.flatnonzero(~byz)[0])):
+                st.leaders[4], st.leaders[6] = L, C
+                x = S.weighted_slot_score(st, 4)
+                if byz[L] and x < hon.min() - 1e-9 or (not byz[L]) and x > hon.max() + 1e-9:
+                    bad += 1
+    # every view ends by TC (2.5 s): the median of the window is far above tau / 3, but the relative
+    # threshold stays below tau, so these views remain bad facts
+    cfg = RunConfig(n=7, views=60, seed=0, slot_theta_rel=3.0, vote_weights=lambda st, v: np.full(7, 1 / 7))
+    st = State(cfg)
+    st.know[:] = np.arange(st.know.shape[0])[:, None] * 2500.0
+    st.leaders[:] = 1
+    st.tc_exists[:] = True
+    thr = S.slot_threshold(st, 50)
+    print(f"weighted slot score bounds on synthetic reports: {bad} violations; relative threshold with all views "
+          f"failed {thr:.0f} ms (tau {cfg.tau_ms:.0f})")
+    return bad != 0 or not thr < cfg.tau_ms or not S.bad_fact(st, 50, 50 + cfg.lag, "slot")
+
+
+def check_slot_relative():
+    """Slot evidence with theta = 200 ms and with the relative threshold (3 x median): leaders from final
+    facts, and on a wider network (8 regions, 120 ms per unit) the relative threshold flags far fewer honest
+    views than the absolute 200 ms."""
+    from sim2.experiments.dirTtru import N, cheapest_set, setup
+    cls, s, base, cost = setup(0, 1.0)
+    byz = cheapest_set(base, cost, 0.2)
+    stale = 0
+    flags = {}
+    for name, kw in (("abs200", dict(slot_theta_ms=200.0)), ("rel3", dict(slot_theta_rel=3.0))):
+        mk = lambda: S.CusumExclusion(q=0.5, rho_bar=0.1, evidence="at", soft_evidence="slot", soft_rho=0.7,  # noqa: E731
+                                      soft_q=0.9, D=500, cap=0.5, Wq=500, cap_weights=base)
+        r1 = mk()
+        net = NetConfig(n=N, seed=0, regions=8, region_c1_ms=120.0, jitter_max_ms=2.0)
+        cfg = RunConfig(n=N, views=600, seed=0, protocol="P2", leader_rule=r1, byzantine=list(np.flatnonzero(byz)),
+                        vote_weights=ttru.TtruWeights(base, epoch=100, rule=r1), at_share=2 / 3, **kw)
+        st = State(cfg)
+        engine_event.simulate(cfg, Network(net), st, 1, 600)
+        hl = [u for u in range(250, 580) if st.honest[st.leaders[u]]]
+        flags[name] = float(np.mean([S.bad_fact(st, u, u + cfg.lag, "slot") for u in hl]))
+        res = engine_event.run(cfg.__class__(**{**cfg.__dict__, "leader_rule": (r3 := mk()),
+                                               "vote_weights": ttru.TtruWeights(base, epoch=100, rule=r3)}), Network(net))
+        r2 = mk()
+        cfg2 = cfg.__class__(**{**cfg.__dict__, "leader_rule": r2, "vote_weights": ttru.TtruWeights(base, epoch=100, rule=r2)})
+        stale += S.verify_leaders(res, cfg2)
+    print(f"wider network, honest-led views flagged: absolute 200 ms {flags['abs200']:.3f}, relative 3x median "
+          f"{flags['rel3']:.3f}; leaders from stale facts {stale}")
+    return stale != 0 or flags["rel3"] > 0.05 or flags["rel3"] >= flags["abs200"]
+
+
 def check_tx_weighted():
     from sim2.experiments.dirTtru import N, cheapest_set, setup
     cls, s, base, cost = setup(1, 1.0)
@@ -238,7 +363,8 @@ def check_tx_weighted():
 
 def main():
     t0 = time.time()
-    bad = check_queue() + check_e3() + check_e3_positive() + check_monotone() + check_soft_stale() + check_slot() + check_forwarding() + check_tx_weighted()
+    bad = check_queue() + check_e3() + check_e3_positive() + check_monotone() + check_soft_stale() + check_slot() + check_forwarding() + \
+        check_forward_timing() + check_withhold_nr() + check_slot_bounds() + check_slot_relative() + check_tx_weighted()
     print(f"({time.time() - t0:.0f}s)")
     if bad:
         print(f"FAILED: {bad}")

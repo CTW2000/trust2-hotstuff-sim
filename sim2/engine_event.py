@@ -214,6 +214,10 @@ def simulate(cfg: RunConfig, net, st: State, start: int, end: int) -> None:
         extra = (ctype[w - 1, k], chq[w - 1, k], parent)
         a, vt = proposal_timing(cfg, net, st, w, k, t, parent)
         late = st.plan(w).prop_before_timeout_ms if byz[k] else None
+        if late is not None and cfg.prop_forward:
+            # the re-timing below would also move the copies forwarded by honest replicas (review v0.8
+            # code C5); timed release under forwarding is adversary.TimedRelease (prop_extra_ms)
+            raise NotImplementedError("prop_before_timeout_ms with prop_forward")
         for j in alive_idx:
             if j == k or not np.isfinite(a[j]):
                 continue

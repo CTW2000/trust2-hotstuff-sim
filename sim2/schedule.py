@@ -63,7 +63,7 @@ def bad_fact(st, u: int, v: int, evidence: str, tau: int = None) -> bool:
     if evidence == "noqc":
         return not bool(st.qc_exists[u])
     if evidence == "slot":
-        return weighted_slot_score(st, u) > st.cfg.slot_theta_ms
+        return weighted_slot_score(st, u) > slot_threshold(st, u)
     if evidence == "at":
         if st.cfg.vote_weights is not None:
             thr = W_QUORUM if st.cfg.at_share is None else st.cfg.at_share
@@ -496,7 +496,7 @@ def slot_score(st, u: int, lie: bool = True, excl: np.ndarray = None, shift_inde
 
 
 def weighted_slot_score(st, u: int, lie: bool = True) -> float:
-    """Weighted slot-duration score of view u (信任2.0_协议级验证 §3.6; weighted analogue of slot_score).
+    """Weighted slot-duration score of view u (信任2.0_协议级验证 §3.7; weighted analogue of slot_score).
 
     Replica j reports e_j = entry_j(u+1) - entry_j(u) (know[u, j] - know[u-1, j]). The next certificate
     carries reports of a set with voting share strictly above 2/3 (W_QUORUM) and the score is the
@@ -505,7 +505,7 @@ def weighted_slot_score(st, u: int, lie: bool = True) -> float:
     honest report in the certificate: colluders cannot pull it below the fastest honest report (shield)
     nor above the slowest (frame).
     Colluders lie (lie=True): they report 0 for a colluding leader and +inf for an honest one. A colluding
-    certificate assembler (leader of u+1) includes all colluder reports and the honest reports that suit
+    certificate assembler (leader of u+2) includes all colluder reports and the honest reports that suit
     it best (fastest to shield, slowest to frame); an honest assembler takes the colluder reports and the
     honest reports that arrive first. Without colluders (or lie=False) the first reports of all replicas
     are taken. A view ended by TC scores at least tau (as slot_score). Facts are read with the leader-rule
@@ -514,7 +514,9 @@ def weighted_slot_score(st, u: int, lie: bool = True) -> float:
     w = np.asarray(base_share(st, u), float)
     w = w / w.sum()
     alive = st.alive
-    L, C = st.leaders[u], (st.leaders[u + 1] if u + 1 < len(st.leaders) else -1)
+    # the reports of u are fixed when replicas enter u+1, so they ride in the certificate of u+1, assembled by
+    # the leader of u+2 (review v0.8 code S3); a view u+1 that ends by TC carries them in its timeouts
+    L, C = st.leaders[u], (st.leaders[u + 2] if u + 2 < len(st.leaders) else -1)
     leader_byz = bool(L >= 0 and st.byz[L])
     byz_ids = np.flatnonzero(st.byz & alive)
     lying = lie and byz_ids.size > 0
@@ -550,6 +552,28 @@ def weighted_slot_score(st, u: int, lie: bool = True) -> float:
     if st.tc_exists[u]:
         x = max(x, cfg.tau_ms)
     return x
+
+
+def slot_threshold(st, u: int) -> float:
+    """Threshold of the "slot" evidence for view u: cfg.slot_theta_ms, or, with cfg.slot_theta_rel, the larger
+    of it and slot_theta_rel times the median score of views u - slot_window .. u - 1 (scores cached on the
+    State; they are fixed facts by the time view u is read). Colluders lead a minority of views, so they move
+    the median only within the honest score distribution. The threshold stays below tau, so a view ended by
+    TC (score >= tau) is always a bad fact even when failures fill the window and lift the median."""
+    cfg = st.cfg
+    base = cfg.slot_theta_ms or 0.0
+    if cfg.slot_theta_rel is None:
+        return base
+    c = st.__dict__.setdefault("_slot_cache", {})
+    lo = max(1, u - cfg.slot_window)
+    vals = []
+    for x in range(lo, u):
+        if x not in c:
+            c[x] = weighted_slot_score(st, x)
+        vals.append(c[x])
+    if len(vals) < 20:
+        return base if base > 0 else float("inf")
+    return min(max(base, cfg.slot_theta_rel * float(np.median(vals))), 0.999 * cfg.tau_ms)
 
 
 class PerfTilt(LeaderRule):

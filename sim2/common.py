@@ -48,12 +48,21 @@ class RunConfig:
                                        # QC/TC need a share strictly above 2/3 (weighted_hit; equal shares reproduce
                                        # counting when n is not a multiple of 3); leaders are drawn in proportion
                                        # (Uniform, CusumExclusion); event engine only
-    prop_forward: Optional[str] = None  # proposal forwarding by honest replicas (信任2.0_协议级验证 §3.7):
-                                       # "full" = forward the whole proposal on first receipt; "hdr" = forward the
-                                       # signed header only, replicas without the block fetch it from an honest
-                                       # holder; None = off (default). Byte counts per view in st.prop_bytes
+    prop_forward: Optional[str] = None  # proposal forwarding by honest replicas (信任2.0_协议级验证 §3.8):
+                                       # "full" = forward the whole proposal (header, and the block if held) on first
+                                       # receipt; "hdr" = forward the signed header only, replicas without the block
+                                       # fetch it from honest holders (cascading); None = off (default).
+                                       # Byte counts per view in st.prop_bytes
+    uplink_serial: bool = False        # a sender's copies of the same proposal leave one after another (the r-th
+                                       # copy waits r * size / bandwidth), for the leader with or without forwarding;
+                                       # with prop_forward also for forwards, and a holder serves block requests one at
+                                       # a time. Default off (the golden outputs assume no uplink contention)
     slot_theta_ms: Optional[float] = None  # weighted slot-duration evidence "slot" (schedule.weighted_slot_score):
                                        # a view whose robust slot score exceeds this many ms is a soft bad fact
+    slot_theta_rel: Optional[float] = None  # relative threshold: the score must also exceed this multiple of the
+                                       # median score of the previous slot_window views (on-chain computable); the
+                                       # effective threshold is max(slot_theta_ms or 0, slot_theta_rel * median)
+    slot_window: int = 200
     at_share: Optional[float] = None   # weighted AT: accuse when the NR=1 timeout share is strictly above this
                                        # (None = 2/3, the quorum); any value above the tolerated Byzantine share
                                        # keeps framing impossible after GST
@@ -227,8 +236,19 @@ class State:
         return p
 
 
-def _relay(arr, D, relay):
-    """Arrival times when replicas in `relay` forward on first receipt (Dijkstra; n is small)."""
+def _serial(D_row, tx):
+    """Extra delay of each copy when one sender sends to all others one after another (nearest first):
+    the r-th copy (r = 0, 1, ...) waits r * tx. tx = 0 means no uplink contention."""
+    if tx <= 0:
+        return np.zeros_like(D_row)
+    extra = np.zeros_like(D_row)
+    extra[np.argsort(D_row, kind="stable")] = np.arange(D_row.size) * tx
+    return extra
+
+
+def _relay(arr, D, relay, tx=0.0):
+    """Arrival times when replicas in `relay` forward to all on first receipt (Dijkstra; n is small).
+    With tx > 0 a forwarder's copies leave one after another (_serial)."""
     arr = arr.copy()
     done = np.zeros(arr.size, bool)
     for _ in range(arr.size):
@@ -237,14 +257,16 @@ def _relay(arr, D, relay):
         if not np.isfinite(cand[j]):
             break
         done[j] = True
-        arr = np.minimum(arr, arr[j] + D[j])
+        arr = np.minimum(arr, arr[j] + D[j] + _serial(D[j], tx))
     return arr
 
 
-def _fetch_cascade(a, data, Dreq, Dresp, serve):
+def _fetch_cascade(a, data, Dreq, Dresp, serve, tx=0.0):
     """Block arrival when every honest replica that holds the block (directly or by fetching) serves
-    requests: k asks holder j once it has the header, data_k = min_j max(a_k + Dreq[k, j], data_j) + Dresp[j, k]
-    (Dijkstra on data times; n is small)."""
+    requests. Holders are taken in order of their block time; holder j serves, in order of request arrival,
+    every replica k it can improve: the request leaves k at its header time a_k and reaches j at
+    a_k + Dreq[k, j]; j answers at max(request, data_j, its previous answer + tx) and the block arrives
+    Dresp[j, k] later (tx = 0: no uplink contention). Dijkstra on block times; n is small."""
     data = data.copy()
     done = np.zeros(data.size, bool)
     for _ in range(data.size):
@@ -253,7 +275,16 @@ def _fetch_cascade(a, data, Dreq, Dresp, serve):
         if not np.isfinite(cand[j]):
             break
         done[j] = True
-        data = np.minimum(data, np.maximum(a + Dreq[:, j], data[j]) + Dresp[j])
+        req = a + Dreq[:, j]
+        free = data[j]
+        for k in np.argsort(req, kind="stable"):
+            if done[k] or k == j or not np.isfinite(req[k]):
+                continue
+            start = max(req[k], data[j], free)
+            arrive = start + Dresp[j, k]
+            if arrive < data[k]:
+                data[k] = arrive
+                free = start + tx
     return data
 
 
@@ -266,7 +297,8 @@ def proposal_timing(cfg, net, st, w: int, L: int, t: float, parent: int):
     Block data: a Byzantine leader may send the data only to plan.payload_targets; the others get
     the header and fetch the data from honest holders (request: type "vote", response: type
     "prop", both keyed w): fetch_k = min_h max(a_k + Dreq[k, h], data_h) + Dresp[h, k]. Byzantine
-    replicas do not serve data. Data obtained by fetching is not re-served (no cascade)."""
+    replicas do not serve data. Data obtained by fetching is not re-served (no cascade). With
+    cfg.prop_forward the timing comes from _forwarded_timing (forwarding and cascading fetch)."""
     n = cfg.n
     alive, byz = st.alive, st.byz
     D = net.delays(w, "prop")
@@ -280,18 +312,14 @@ def proposal_timing(cfg, net, st, w: int, L: int, t: float, parent: int):
             a = a + p.prop_extra_ms
         if p.payload_targets is not None:
             full = p.payload_targets.copy()
+    mode = cfg.prop_forward
+    if mode:
+        return _forwarded_timing(cfg, net, st, w, L, t, parent, a, full, D)
+    if cfg.uplink_serial:                           # the leader's copies leave one after another
+        a = a + _serial(D[L], net.cfg.sizes_bytes.get("prop", 0.0) * 8.0 / (net.cfg.bw_mbps * 1e3))
     a[L] = t
     full[L] = True
     a = np.where(alive, a, np.inf)
-    direct = np.isfinite(a)
-    mode = cfg.prop_forward
-    if mode:
-        relay = st.honest & alive
-        if mode == "hdr":
-            a = _relay(a, net.delays(w, "fwd"), relay)      # the signed header spreads through honest replicas
-            full = full & direct                            # forwarded-only replicas must fetch the block
-        else:
-            a = _relay(a, D, relay)                          # the whole proposal spreads through honest replicas
     data = np.where(full, a, np.inf)
     hdr_only = np.isfinite(a) & ~full
     if hdr_only.any():
@@ -302,19 +330,15 @@ def proposal_timing(cfg, net, st, w: int, L: int, t: float, parent: int):
             cand = np.maximum(a[ks][:, None] + Dreq[np.ix_(ks, holders)], data[holders][None, :]) \
                 + D[np.ix_(holders, ks)].T
             data[ks] = cand.min(axis=1)
-    if mode == "full":
-        data = _relay(data, D, st.honest & alive)
-    elif mode == "hdr":
-        data = _fetch_cascade(a, data, net.delays(w, "vote"), D, st.honest & alive)
     st.payload_time[w] = data
-    if True:                                        # proposal bytes sent for view w (leader + forwards + fetches)
-        sz = net.cfg.sizes_bytes
-        blk, hdr = sz.get("prop", 0.0), sz.get("fwd", 0.0)
-        n_direct = int(direct.sum()) - 1
-        n_fwd = int((np.isfinite(a) & st.honest & alive).sum()) if mode else 0
-        n_fetch = int((np.isfinite(a) & ~full & alive).sum()) if mode == "hdr" else 0
-        per = blk if mode == "full" else hdr
-        st.__dict__.setdefault("prop_bytes", {})[w] = n_direct * blk + n_fwd * (n - 1) * per + n_fetch * blk
+    sz = net.cfg.sizes_bytes                        # proposal bytes of view w: the leader's copies
+    n_blk = int((np.isfinite(data) & np.isfinite(a)).sum()) - 1
+    st.__dict__.setdefault("prop_bytes", {})[w] = n_blk * sz.get("prop", 0.0) + \
+        (int(np.isfinite(a).sum()) - 1 - n_blk) * sz.get("fwd", 0.0)
+    return _with_parent(cfg, net, st, w, parent, a, data)
+
+
+def _with_parent(cfg, net, st, w, parent, a, data):
     vt = np.maximum(a, data)
     if cfg.vote_needs_parent and parent >= 1:
         pdata = st.payload_time[parent]
@@ -330,6 +354,54 @@ def proposal_timing(cfg, net, st, w: int, L: int, t: float, parent: int):
                 pd[ks] = cand.min(axis=1)
         vt = np.maximum(vt, pd)
     return a, vt
+
+
+def _forwarded_timing(cfg, net, st, w, L, t, parent, a, full, D):
+    """proposal_timing with proposal forwarding (cfg.prop_forward; review v0.8 code C1, C2, C4).
+    a: arrival of the leader's copies (after the plan's targets and extra delays), full: who gets the block
+    from the leader. Honest replicas forward on first receipt ("hdr": the header; "full": the header and,
+    if they hold it, the block); replicas without the block fetch it from honest holders (cascading). A
+    replica's block time is its direct block arrival, a relayed block, or a fetch -- never the header time
+    of a forwarded copy. With cfg.uplink_serial a sender's copies leave one after another."""
+    n = cfg.n
+    alive = st.alive
+    sz = net.cfg.sizes_bytes
+    bw = net.cfg.bw_mbps * 1e3                      # bits per ms
+    tx_blk = sz.get("prop", 0.0) * 8.0 / bw if cfg.uplink_serial else 0.0
+    tx_hdr = sz.get("fwd", 0.0) * 8.0 / bw if cfg.uplink_serial else 0.0
+    if cfg.uplink_serial:                           # the leader's own copies leave one after another
+        a = a + _serial(D[L], tx_blk)
+    a[L] = t
+    full = full.copy()
+    full[L] = True
+    a0 = np.where(alive, a, np.inf)                 # direct header arrival
+    data0 = np.where(full, a0, np.inf)              # direct block arrival
+    serve = st.honest & alive                       # honest holders serve block requests (the leader too)
+    relay = serve.copy()
+    relay[L] = False                                # the leader's copies are its own sends; the others forward
+    Dfwd, Dreq = net.delays(w, "fwd"), net.delays(w, "vote")
+    if cfg.prop_forward == "full":
+        data_r = _relay(data0, D, relay, tx_blk)    # the block spreads with forwarded proposals
+        a = np.minimum(_relay(a0, Dfwd, relay, tx_hdr), data_r)
+    else:
+        data_r = data0
+        a = _relay(a0, Dfwd, relay, tx_hdr)         # the signed header spreads through honest replicas
+    data = _fetch_cascade(a, data_r, Dreq, D, serve, tx_blk)
+    st.payload_time[w] = data
+    # bytes: leader copies; forwards by honest replicas other than the leader (block if they forward a
+    # block, else header); one block per replica that got its block by fetching
+    lead_blk = int((np.isfinite(data0) & alive).sum()) - 1
+    lead_hdr = int((np.isfinite(a0) & alive).sum()) - 1 - lead_blk
+    fw = relay
+    if cfg.prop_forward == "full":
+        n_fwd_blk = int((fw & np.isfinite(data_r)).sum())
+        n_fwd_hdr = int((fw & np.isfinite(a) & ~np.isfinite(data_r)).sum())
+    else:
+        n_fwd_blk, n_fwd_hdr = 0, int((fw & np.isfinite(a)).sum())
+    n_fetch = int((np.isfinite(data) & (data < data_r - 1e-9) & alive).sum())   # block obtained by fetching
+    st.__dict__.setdefault("prop_bytes", {})[w] = (lead_blk + (n - 1) * n_fwd_blk + n_fetch) * sz.get("prop", 0.0) + \
+        (lead_hdr + (n - 1) * n_fwd_hdr) * sz.get("fwd", 0.0)
+    return _with_parent(cfg, net, st, w, parent, a, data)
 
 
 def held_qc(qc_know: np.ndarray, k: int, t: float, upto: int) -> int:

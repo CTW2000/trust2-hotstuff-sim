@@ -215,7 +215,7 @@ class PartialSend(Adversary):
 
 
 class AdaptivePartialSend(Adversary):
-    """Rule-aware targeted partial send (信任2.0_协议级验证 §3.3): a colluding leader knows the soft
+    """Rule-aware targeted partial send (信任2.0_协议级验证 §3.4): a colluding leader knows the soft
     "noqc" CUSUM of the leader rule (s_up, s_down, h) and runs its own copy over the outcomes of its
     led views (qc_exists, which it observes); it attacks (sends to the k heaviest honest replicas,
     colluders do not vote) only when one more failure keeps its copy below (1 - margin) * h.
@@ -253,6 +253,55 @@ class AdaptivePartialSend(Adversary):
         mask = st.byz.copy()
         mask[chosen] = True
         return ViewPlan(prop_targets=mask, silent_voters=frozenset(np.flatnonzero(st.byz).tolist()))
+
+
+def _timed_plan(st, w, k, margin, base_lat, tau):
+    """Proposal only to colluders and the k heaviest honest replicas R, released so that R receives it
+    about `margin` ms before its own timeout (the leader knows the base latencies); colluders do not vote."""
+    L = st.leader(w)
+    honest_idx = np.flatnonzero(st.honest)
+    if st.cfg.vote_weights is None:
+        sh = np.ones(honest_idx.size)
+    else:
+        sh = np.asarray(st.cfg.vote_weights(st, w), float)[honest_idx]
+    chosen = honest_idx[np.argsort(-sh, kind="stable")[:k]]
+    mask = st.byz.copy()
+    mask[chosen] = True
+    extra = np.zeros(st.cfg.n)
+    extra[chosen] = np.maximum(0.0, tau - margin - base_lat[L, chosen])
+    return ViewPlan(prop_targets=mask, prop_extra_ms=extra, silent_voters=frozenset(np.flatnonzero(st.byz).tolist()))
+
+
+class TimedRelease(Adversary):
+    """Timed release (review v0.8 结论与文档 #7): partial send to the k heaviest honest replicas R, timed to
+    reach R about `margin` ms before its timeout. With proposal forwarding the forwarded copies reach the
+    other replicas only after their timeouts, so the view still fails, and R (which holds the proposal)
+    keeps the NR=1 share below the AT threshold when its share exceeds 1 - beta - x."""
+    name = "timed_release"
+
+    def __init__(self, k: int, margin: float, base_lat, tau: float):
+        self.k, self.margin, self.base, self.tau = k, margin, base_lat, tau
+
+    def plan(self, w, st):
+        if not st.byz[st.leader(w)]:
+            return ViewPlan()
+        return _timed_plan(st, w, self.k, self.margin, self.base, self.tau)
+
+
+class AdaptiveTimedRelease(AdaptivePartialSend):
+    """Rule-aware timed release: attacks (timed release) only while its copy of the soft CUSUM stays
+    below (1 - margin) h, as AdaptivePartialSend."""
+    name = "adaptive_timed_release"
+
+    def __init__(self, k, s_up, s_down, h, release_margin, base_lat, tau, margin=0.0):
+        super().__init__(k, s_up, s_down, h, margin)
+        self.release_margin, self.base, self.tau = release_margin, base_lat, tau
+
+    def plan(self, w, st):
+        p = super().plan(w, st)
+        if p.prop_targets is None:
+            return p
+        return _timed_plan(st, w, self.k, self.release_margin, self.base, self.tau)
 
 
 class LieNRVote(Adversary):

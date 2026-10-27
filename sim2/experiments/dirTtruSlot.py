@@ -1,4 +1,4 @@
-"""Weighted slot-duration score as soft evidence against slow leaders and partial send (信任2.0_协议级验证 §3.6).
+"""Weighted slot-duration score as soft evidence against slow leaders and partial send (信任2.0_协议级验证 §3.7).
 
 Same population, colluders and weights as dirTtru (n = 31; colluders = cheapest set with base share target
 0.2 -> ~0.24 or 0.27 -> ~0.28, capped at 0.30). P2. Leader rule: CUSUM over AT (x = 2/3, rho_bar = 0.1,
