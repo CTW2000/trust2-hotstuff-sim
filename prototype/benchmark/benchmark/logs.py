@@ -7,6 +7,9 @@ from statistics import mean
 
 from benchmark.utils import Print
 
+# Parse with a few processes only: the lab server is shared (see run_local.py).
+PARSE_PROCS = 4
+
 
 class ParseError(Exception):
     pass
@@ -27,7 +30,7 @@ class LogParser:
 
         # Parse the clients logs.
         try:
-            with Pool() as p:
+            with Pool(PARSE_PROCS) as p:
                 results = p.map(self._parse_clients, clients)
         except (ValueError, IndexError) as e:
             raise ParseError(f'Failed to parse client logs: {e}')
@@ -37,7 +40,7 @@ class LogParser:
 
         # Parse the nodes logs.
         try:
-            with Pool() as p:
+            with Pool(PARSE_PROCS) as p:
                 results = p.map(self._parse_nodes, nodes)
         except (ValueError, IndexError) as e:
             raise ParseError(f'Failed to parse node logs: {e}')

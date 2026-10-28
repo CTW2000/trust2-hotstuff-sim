@@ -1,0 +1,4 @@
+# RocksDB 7.4 (pulled in by rocksdb = "0.19") relies on <cstdint> being included transitively, which
+# GCC 13+ no longer does; force-include it so the upstream dependency builds unchanged on GCC 15.
+[env]
+CXXFLAGS = "-include cstdint"
