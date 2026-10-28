@@ -13,11 +13,18 @@ weight is not redistributed); z = 0 for proven liars (G1, contradictions of view
 g1 is set. Soft exclusions ("exclude_soft") do not touch r at all (no cut, no frozen recovery).
 Log entries are read by their view field (<= B - lag), not by log position, because "g1" entries are
 logged with view v - lag and the log is not sorted by view.
+Graded G1 punishment (方案 v0.12 §3.3): with punish = punish.GradedPunishment, z and the base weights
+of every table come from it (suspension, eviction with CapNorm recomputed) instead of g1; formula A
+of v0.12 is base_weights(..., K=0) (punish builds its own base from stake). The punish object is a
+template: every State gets its own copy (punisher(st)), so verify_leaders can replay a run. bars(st, v)
+gives the replicas barred from leading by the punishment (for CusumExclusion.bars).
 Epoch hand-over (理论_可问责安全与纪元交接 定理 4): the simulator switches tables at fixed views and does
 not model forks; the protocol must let a new table take effect only after the last block of the old
 epoch is committed, otherwise the bound needs beta0 < (1 - 2 b_rep)/3 (cuts that never recover) or
 tighter (理论 定理 6).
 """
+import copy
+
 import numpy as np
 
 from . import schedule as S
@@ -87,8 +94,10 @@ def max_weight_set(w, cost, budget, grid=4000):
 class TtruWeights:
     """Callable (st, v) -> voting shares of view v (epoch tables, computed lazily and cached on st)."""
 
-    def __init__(self, base, epoch=100, r_min=0.7, b_rep=0.10, step=0.1, recover=0.02, rule=None, g1=False):
+    def __init__(self, base, epoch=100, r_min=0.7, b_rep=0.10, step=0.1, recover=0.02, rule=None, g1=False,
+                 punish=None):
         self.base = np.asarray(base, float)
+        self.punish = punish
         assert abs(self.base.sum() - 1.0) < 1e-9, "base weights must sum to 1 (b_rep is a share)"
         self.epoch, self.r_min, self.b_rep, self.step, self.recover = epoch, r_min, b_rep, step, recover
         self.rule, self.g1 = rule, g1
@@ -99,7 +108,7 @@ class TtruWeights:
             n = len(self.base)
             c[id(self)] = dict(tables=[self.base.copy()], r=np.ones(n), z=np.ones(n), seen=0,
                                rs=[np.ones(n)], excl=np.zeros(n, bool), liar=np.zeros(n, bool), liar_done=0,
-                               pend=[])
+                               pend=[], pun=copy.deepcopy(self.punish))
         return c[id(self)]
 
     def __call__(self, st, v):
@@ -129,15 +138,18 @@ class TtruWeights:
             r = np.where(convicted, np.maximum(self.r_min, r - self.step),
                          np.where(s["excl"], r, np.minimum(1.0, r + self.recover)))
             s["r"] = r
-            if self.g1:
+            base = self.base
+            if self.punish is not None:
+                s["z"], base = s["pun"].update(st, k, horizon)
+            elif self.g1:
                 for u in range(max(1, s["liar_done"] + 1), horizon + 1):
                     s["liar"] |= S.contradictions(st, u)
                 s["liar_done"] = max(s["liar_done"], horizon)
                 s["z"] = np.where(s["liar"], 0.0, 1.0)
-            cut = self.base * (1.0 - r)
+            cut = base * (1.0 - r)
             if cut.sum() > self.b_rep:
                 cut *= self.b_rep / cut.sum()
-            t = (self.base - cut) * s["z"]
+            t = (base - cut) * s["z"]
             s["tables"].append(t / t.sum())
             s["rs"].append(r.copy())
             s.setdefault("cuts", [np.zeros(n)]).append(cut.copy())
@@ -145,3 +157,13 @@ class TtruWeights:
 
     def table(self, st, e):
         return self._state(st)["tables"][e]
+
+    def bars(self, st, v):
+        self(st, v)
+        if self.punish is None:
+            return np.zeros(len(self.base), bool)
+        return self._state(st)["pun"].bars(max(0, (v - 1) // self.epoch))
+
+    def punisher(self, st):
+        """The graded-punishment state of this run (None without punish)."""
+        return self._state(st)["pun"]

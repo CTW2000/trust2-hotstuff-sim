@@ -327,14 +327,19 @@ class CusumExclusion(LeaderRule):
                  with the same cap, queue and expiry (soft evidence; logged as ("presence", ...)).
                  Checked every presence_every views once at least half the window has facts.
                  Note: presence convictions are logged as hard "exclude" (kept for the earlier
-                 experiments); do not combine presence_theta with T_tru reputation."""
+                 experiments); do not combine presence_theta with T_tru reputation.
+    double (方案 v0.12 §3.3, off by default): a hard exclusion of a replica with m earlier hard exclusions
+                 within double_lookback views lasts D * min(2**m, double_max) views.
+    bars:        optional callable (st, v) -> replicas barred from leading by another module (graded G1
+                 punishment, TtruWeights.bars); they are skipped by the draw and by blocked()."""
     name = "R5_cusum"
 
     def __init__(self, q: float = 0.5, rho_bar: float = 0.01, gamma: float = 1e4, D: int = 200,
                  cap: float = None, Wq: int = 1000, expiry: str = "view", evidence: str = "at",
                  g1: bool = False, presence_theta: float = None, presence_window: int = 300,
                  presence_every: int = 10, cap_weights=None, soft_evidence: str = None,
-                 soft_rho: float = 0.3, soft_q: float = 0.9):
+                 soft_rho: float = 0.3, soft_q: float = 0.9, double: bool = False, double_max: int = 8,
+                 double_lookback: int = 6400, bars=None):
         self.q, self.rho_bar, self.h = q, rho_bar, float(np.log(gamma))
         self.cap_weights = None if cap_weights is None else np.asarray(cap_weights, float)
         self.soft_evidence = soft_evidence
@@ -346,13 +351,14 @@ class CusumExclusion(LeaderRule):
         self.D, self.cap, self.Wq, self.expiry, self.evidence = D, cap, Wq, expiry, evidence
         self.g1, self.presence_theta = g1, presence_theta
         self.presence_window, self.presence_every = presence_window, presence_every
+        self.double, self.double_max, self.double_lookback, self.bars = double, double_max, double_lookback, bars
 
     def _state(self, st):
         c = st.__dict__.setdefault("_cusum_cache", {})
         if id(self) not in c:
             n = st.cfg.n
             c[id(self)] = dict(W=np.zeros(n), W2=np.zeros(n), until=np.full(n, -1.0), excluded=np.zeros(n, bool),
-                               queue=[], commits=0, done=0, g1=np.zeros(n, bool))
+                               queue=[], commits=0, done=0, g1=np.zeros(n, bool), hist=[[] for _ in range(n)])
         return c[id(self)]
 
     def _room(self, s, k, cap_n):
@@ -378,7 +384,12 @@ class CusumExclusion(LeaderRule):
 
     def _exclude(self, st, s, k, u, soft=False):
         s["excluded"][k] = True
-        s["until"][k] = (u + self.D) if self.expiry == "view" else (s["commits"] + self.D)
+        D = self.D
+        if self.double and not soft:
+            m = sum(1 for x in s["hist"][k] if x >= u - self.double_lookback)
+            D = self.D * min(2 ** m, self.double_max)
+            s["hist"][k].append(u)
+        s["until"][k] = (u + D) if self.expiry == "view" else (s["commits"] + D)
         s["W"][k] = 0.0
         s["W2"][k] = 0.0
         st.rule_log.append(("exclude_soft" if soft else "exclude", int(k), int(u)))
@@ -442,11 +453,16 @@ class CusumExclusion(LeaderRule):
     def blocked(self, st, v):
         """Replicas that may not lead view v: soft exclusions plus proven liars (G1)."""
         s = self._advance(st, v)
-        return s["excluded"] | s["g1"]
+        bar = s["excluded"] | s["g1"]
+        return bar | self.bars(st, v) if self.bars is not None else bar
 
     def leader(self, v, st):
         s = self._advance(st, v)
-        w = (~(s["excluded"] | s["g1"])).astype(float) * base_share(st, v)
+        bs = base_share(st, v)
+        bar = s["excluded"] | s["g1"]
+        if self.bars is not None:
+            bar = bar | self.bars(st, v)
+        w = (~bar).astype(float) * bs
         if w.sum() == 0:
             w = base_share(st, v)
         return _draw(st, v, w)
