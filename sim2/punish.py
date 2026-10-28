@@ -23,15 +23,19 @@ Effects (durations in epochs):
       not count against the AT exclusion cap);
   L2, L3  suspension (z = 0, also barred from leading) for sus[level] epochs from the epoch it takes
       effect; suspended base share <= l_max at all times, further suspensions wait in a strict FIFO
-      queue (an upgrade while queued updates the entry, an upgrade while suspended extends it);
+      queue (an upgrade while queued updates the entry, an upgrade while suspended extends it); a
+      queued entity is barred from leading meanwhile (outside the cap: G1 never falls on honest
+      replicas, and leading does not touch the weight table);
   L4  decided by governance `gov_delay` epochs later: a fork, a repeat offence or malicious evidence
       leads to eviction (removed from the set, CapNorm recomputed over the rest). If the recomputation
       is infeasible (licensed count x cap < licensed class total 1 - U) the entity cap is relaxed to the
       smallest feasible value (1 - U) / licensed count, a stand-in for the governance decision that keeps the
       class cap; flagged "infeasible" (cap_used records the cap). Without any licensed entity left the
-      old base is kept with the evicted entities at zero. recompute = "fork": only evictions of fork
-      culprits recompute CapNorm; other evictions (repeat offences) just zero the entity, like a
-      permanent suspension, so its weight is not handed to the uncapped entities of its class;
+      old base is kept with the evicted entities at zero. recompute = "fork" (default, 方案 v0.12 §3.3):
+      only evictions of fork culprits recompute CapNorm; other evictions (repeat offences, confirmed
+      malicious evidence) just zero the entity, like a permanent suspension, so its weight is not handed
+      to the uncapped entities of its class (a recomputation can give all of it to colluders);
+      recompute = "all" recomputes after every eviction (kept for comparison);
       evidence of a client fault (malicious = False, no fork) is downgraded to L2 and queued.
 Logs (entity, epoch) events in self.log: ("L1".."L4", i, k), ("queue", i, k), ("suspend", i, k),
 ("release", i, k), ("evict", i, k), ("downgrade", i, k).
@@ -44,7 +48,7 @@ from . import ttru
 
 class GradedPunishment:
     def __init__(self, cls, stake, cap, u_max, epoch=100, l_max=0.10, sus=(0, 0, 4, 32), lead_bar=1,
-                 win_chain=32, lookback=64, gov_delay=2, liveness=True, injected=(), forks=(), recompute="all"):
+                 win_chain=32, lookback=64, gov_delay=2, liveness=True, injected=(), forks=(), recompute="fork"):
         self.cls, self.stake = np.asarray(cls), np.asarray(stake, float)
         self.cap, self.u_max, self.epoch, self.l_max = cap, u_max, epoch, l_max
         self.sus, self.lead_bar, self.win_chain, self.lookback = sus, lead_bar, win_chain, lookback
@@ -216,7 +220,9 @@ class GradedPunishment:
         self.queue = keep
         susp = (self.sus_until > k) | self.evicted
         self.history.append((float(self.base[self.sus_until > k].sum()), len(self.queue)))
-        self.bar_hist.append((self.bar_until > k) | susp)
+        queued = np.zeros(len(self.cls), bool)
+        queued[[q[0] for q in self.queue]] = True
+        self.bar_hist.append((self.bar_until > k) | susp | queued)
         return np.where(susp, 0.0, 1.0), self.base.copy()
 
     def bars(self, k):

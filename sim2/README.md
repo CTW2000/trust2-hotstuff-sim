@@ -11,7 +11,7 @@
 | `common.py` | 配置 `RunConfig`、角色、共享状态 `State`、链与提交（`commit_times`，两链提交）；加权法定份额 `weighted_hit`（份额严格大于 2/3）；提案到达时间 `proposal_timing`，含提案转发（`RunConfig.prop_forward`："hdr" 转发提案头、缺块者级联取块，"full" 转发整个提案；`_forwarded_timing`）、上行串行发送（`uplink_serial`）、NR 含块（`nr_requires_data`）与每视图提案字节数 `st.prop_bytes` |
 | `schedule.py` | 带滞后的领导者规则与证据：<br>• R0 均匀，R1/R2 失败率剖面，R3 Carousel 式排除；<br>• **R5 `CusumExclusion`**：CUSUM 定罪、排除上限（可按权重，严格先进先出队列）、期满、G1 永久禁止、可选的排除期按再犯加倍（`double`）与外部禁令（`bars`）；可选第二条软证据 CUSUM（只取消领导资格）；<br>• 证据 `bad_fact`："失败提议者"、AT 指控、交易包含证言 `omit`、"无 QC" `noqc`、加权出块时长 `slot`；<br>• 槽位时长分数 `slot_score` 与加权版本 `weighted_slot_score`（证书由 u+2 的领导者组装）；门限 `slot_threshold`（绝对门限或近若干视图中位数的倍数，封顶在超时以下）；<br>• NR 自相矛盾 `liars`、E3 证据检查 `e3_violators`；<br>• `verify_leaders`：按最终事实事后重算领导者，检查是否用到了未定稿的事实 |
 | `ttru.py` | T_tru 权重：基础权重 CapNorm(质押 + π·K)（单实体上限、未认证类上限；K=0 即当前公式），按纪元生成权重表；信誉 r 只罚不奖、总降权受预算 B_rep 约束；G1 证实者 z=0，或接入分级处罚（`punish=`） |
-| `punish.py` | 分级 G1 处罚 `GradedPunishment`：安全类与活性类证据、关联份额（基础份额，签名窗口与上链窗口取大）、同窗口去重、再犯计数、L1 取消出块资格、L2/L3 暂停（同时暂停份额上限与先进先出队列）、L4 经治理确认后逐出并重算上限（不可行时放宽单实体上限）；安全类证据在权重层注入 |
+| `punish.py` | 分级 G1 处罚 `GradedPunishment`：安全类与活性类证据、关联份额（基础份额，签名窗口与上链窗口取大）、同窗口去重、再犯计数、L1 取消出块资格、L2/L3 暂停（同时暂停份额上限与先进先出队列）、排队中的实体先取消出块资格；L4 经治理确认后逐出，只有分叉罪犯被逐出时重算上限（不可行时放宽单实体上限），其他逐出只把权重记为 0；安全类证据在权重层注入 |
 | `txlayer.py` | 交易层与交易包含证言（G2）：转发、守卫窗口、到期判定（计数或加权门槛）、豁免、审查与陷害对手 |
 | `adversary.py` | 对手插件（每个视图一份 `ViewPlan`）：收集者陷害、扣票、沉默领导者、部分发送（可定向到最重的诚实节点）、了解规则的自适应部分发送、慢领导者、数据扣留、定时释放（`TimedRelease`、`AdaptiveTimedRelease`）、NR 谎报（含贪心说谎者）、组合等 |
 | `net.py` | 合成网络：区域与接入延迟、有界抖动、带宽、独立迟到（模型 P）、区域故障、GST 前的异步期 |
@@ -60,7 +60,7 @@ python -m sim2.tests.test_v012
 | `dirTtruG1.py` | G1 证据（NR 自相矛盾）闭环，按最重一级 z=0 执行 |
 | `dirTtruInc.py reliab / detect` | 加权交易包含证言的可靠性与审查检出 |
 | `dirTtruE3.py` | 诚实节点 E3 证据的硬检查（含 R3 开关与正例） |
-| `dirTtruV12.py frame / silent / chaos / budget / g1live / g1safe / deposit / all` | 新方案（公式 A、分级处罚、暂停上限、AT 加倍关 / 开）的重跑：陷害、沉默领导者、混乱期、预算界；活性类 G1 分级与旧规则对比；注入安全类 G1（孤立失误、重复失误、诱饵暂停、客户端缺陷、分叉）；保证金分配的静态统计 |
+| `dirTtruV12.py frame / silent / chaos / budget / g1live / g1safe / deposit / all` | 新方案（公式 A、分级处罚、暂停上限、AT 加倍关 / 开）的重跑：陷害、沉默领导者、混乱期、预算界；活性类 G1 分级与旧规则对比；注入安全类 G1（孤立失误、重复失误及其"逐出后重算"对照、诱饵暂停、客户端缺陷、分叉）；保证金分配的静态统计 |
 | `dirTtruReview.py frame / silent / chaos / budget / all` | 推荐协议的参数复核：每格 50 个人群、自助法 95% 区间与 Wilson 上界；陷害叠加迟到（两种网络地理）、沉默领导者、长混乱期、预算界 |
 | `ttru_perf.py` | 公用指标（提交比例、每秒提交块数）与混乱期网络 |
 

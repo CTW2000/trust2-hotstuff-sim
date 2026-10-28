@@ -1,6 +1,7 @@
 """Experiments for the v0.12 scheme (信任2.0_方案重构说明 v0.12): formula A base weights
 b = CapNorm(stake) (no license value), graded G1 punishment with the 10% cap on suspended base share,
-and the AT exclusion doubling (off / on). Same populations as dirTtru (n = 31: 10 licensed, 12
+and the AT exclusion doubling (off / on; off is the default). Evictions recompute CapNorm only for fork
+culprits; entities waiting in the suspension queue are barred from leading. Same populations as dirTtru (n = 31: 10 licensed, 12
 uncertified, 9 small; cap 0.10, u_max 0.25); colluders = the nodes of lowest stake per base weight until
 the target base share. Recommended protocol as in dirTtruReview: P2, AT share > 2/3, CUSUM q = 0.5,
 rho_bar = 0.1, D = 500, weight cap 0.5; r_min 0.7, step 0.1, recovery 0.02 per epoch of 100 views,
@@ -60,7 +61,7 @@ def setup(seed):
 
 
 def build(cls, s, base, double=False, graded=True, injected=(), forks=(), old_g1=False, rho_bar=0.1, evidence="at",
-          recompute="all"):
+          recompute="fork"):
     rule = S.CusumExclusion(q=0.5, evidence=evidence, rho_bar=rho_bar, D=D, cap=0.5, Wq=500, cap_weights=base,
                             double=double, g1=old_g1)
     pun = GradedPunishment(cls, s, CAP, UMAX, l_max=L_MAX, injected=injected, forks=forks,
@@ -229,7 +230,7 @@ def g1safe_job(args):
         for e in range(2, 36):
             if rng.random() < 0.10:
                 injected.append((int(rng.integers(N)), e, e, False))
-    elif scen in ("repeat", "repeat_nr"):
+    elif scen in ("repeat", "repeat_all"):
         i = int(rng.choice(hon))
         injected = [(i, 3, 3, False), (i, 8, 8, False), (i, 13, 13, False)]
     elif scen == "decoy":
@@ -257,7 +258,7 @@ def g1safe_job(args):
             cul.append(int(i))
             acc += base[i]
         forks = [(cul, 10)]
-    rule, vw = build(cls, s, base, injected=injected, forks=forks, recompute="fork" if scen == "repeat_nr" else "all")
+    rule, vw = build(cls, s, base, injected=injected, forks=forks, recompute="all" if scen == "repeat_all" else "fork")
     cfg = config(seed, rule, vw, byz, framing(), views)
     st = State(cfg)
     engine_event.simulate(cfg, Network(NetConfig(n=N, seed=seed, regions=3, jitter_max_ms=2.0, eps_late=0.05)),
@@ -336,9 +337,7 @@ def jobs_of(part):
     if part == "g1live":
         return g1live_job, [(g, nt, m, s) for g in (0.5, 1.0) for nt in G1NETS for m in ("old", "graded") for s in range(half)]
     if part == "g1safe":
-        return g1safe_job, [(sc, s) for sc in ("iso", "repeat", "repeat_nr", "decoy", "bug", "fork") for s in range(half)]
-    if part == "g1safe_nr":
-        return g1safe_job, [("repeat_nr", s) for s in range(half)]
+        return g1safe_job, [(sc, s) for sc in ("iso", "repeat", "repeat_all", "decoy", "bug", "fork") for s in range(half)]
     return deposit_job, [(nm, s) for nm in ("n31", "n100") for s in range(500)]
 
 
@@ -455,16 +454,14 @@ def report():
                              f"{m(g, 'byz_lead_late')} | {m(g, 'honest_accused', 4)} | {m(g, 'qc_rate')} | {m(g, 'commit')} |")
     gs = load("g1safe")
     if gs:
-        names = dict(iso="孤立失误（每纪元 10%）", repeat="同一实体三次失误（逐出后重算上限）",
-                     repeat_nr="同一实体三次失误（逐出后不重算）", decoy="诱饵暂停", bug="客户端缺陷（≥40% 权重）",
-                     fork="分叉（罪犯 > 1/3）")
-        extra = [r for r in load("g1safe_nr") if not any(x["scen"] == "repeat_nr" for x in gs)]
-        gs = gs + extra
+        names = dict(iso="孤立失误（每纪元 10%）", repeat="同一实体三次失误（逐出后不重算，现行规则）",
+                     repeat_all="同一实体三次失误（逐出后重算上限，对照）", decoy="诱饵暂停", bug="客户端缺陷（≥40% 权重）",
+                     fork="分叉（罪犯 > 1/3，重算上限）")
         L += ["\n## 注入安全类 G1（同伙同时陷害）\n",
               "| 场景 | 被注入份额 | 同时暂停份额最大 | 排队最长（纪元） | 定级 L2 / L3 / L4（实体数，均值） | 治理降级 | 被逐出（诚实） | "
               "CapNorm 不可行 | 同伙份额最大 / 界一 / 界二 | 未认证类份额最大 | 单实体份额最大 | QC 率：事件前 / 事件后 | 提交比例 |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
-        for sc in ("iso", "repeat", "repeat_nr", "decoy", "bug", "fork"):
+        for sc in ("iso", "repeat", "repeat_all", "decoy", "bug", "fork"):
             g = [r for r in gs if r["scen"] == sc]
             if not g:
                 continue
