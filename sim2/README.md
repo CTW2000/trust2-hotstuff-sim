@@ -51,7 +51,7 @@ python -m sim2.tests.test_v05
 | `dirTtruSlot.py run / plot` | 评估记录（不纳入推荐方案）：加权出块时长分数作为软证据（慢领导者、部分发送） |
 | `dirTtruFwd.py run / net / timed / plot` | 评估记录（不纳入推荐方案）：提案转发对部分发送、数据扣留、扣票 + 迟到、慢领导者的作用（两个基线）；出块时长门限在不同网络下的误判与 100 Mbps 下的代价；定时释放 |
 | `dirTtruRobust.py async / adaptive` | GST 前的混乱期（随机延迟、区域故障、对抗调度）；了解规则的自适应攻击者 |
-| `dirTtruG1.py` | G1 罚没（NR 自相矛盾 → z=0）闭环 |
+| `dirTtruG1.py` | G1 证据（NR 自相矛盾）闭环，按最重一级 z=0 执行 |
 | `dirTtruInc.py reliab / detect` | 加权交易包含证言的可靠性与审查检出 |
 | `dirTtruE3.py` | 诚实节点 E3 证据的硬检查（含 R3 开关与正例） |
 | `dirTtruReview.py frame / silent / chaos / budget / all` | 推荐协议的参数复核：每格 50 个人群、自助法 95% 区间与 Wilson 上界；陷害叠加迟到（两种网络地理）、沉默领导者、长混乱期、预算界 |
