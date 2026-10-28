@@ -54,6 +54,7 @@ python -m sim2.tests.test_v05
 | `dirTtruG1.py` | G1 罚没（NR 自相矛盾 → z=0）闭环 |
 | `dirTtruInc.py reliab / detect` | 加权交易包含证言的可靠性与审查检出 |
 | `dirTtruE3.py` | 诚实节点 E3 证据的硬检查（含 R3 开关与正例） |
+| `dirTtruReview.py frame / silent / chaos / budget / all` | 推荐协议的参数复核：每格 50 个人群、自助法 95% 区间与 Wilson 上界；陷害叠加迟到（两种网络地理）、沉默领导者、长混乱期、预算界 |
 | `ttru_perf.py` | 公用指标（提交比例、每秒提交块数）与混乱期网络 |
 
 并行度用环境变量 `SIM_PROCS`（默认 8），人群数用 `SIM_SEEDS`。例如：

@@ -31,6 +31,7 @@ $$T_i=\mathrm{CapNorm}(V_i)\cdot r_i\cdot z_i,\qquad V_i=s_i+\pi_iK_i$$
 |---|---|
 | `sim2/` | 协议级事件仿真器：HotStuff 两链提交、P1/P2 两种投票方式、加权计票、领导者规则与证据、对手模型、合成网络、交易层；测试与实验。详见 [`sim2/README.md`](sim2/README.md) |
 | `ttru/` | 静态经济学分析：凑齐 1/3 投票权的最低收买成本（精确背包）、K×π 区域图与持平点、处罚不可执行与代理问题、一次安全违背的罚没下界、跨纪元法定集合相交的穷举检验 |
+| `formal/` | 可问责安全定理（Jolteon 型两链 HotStuff，TC 进入投票规则）的有界模型检查：Python 显式状态穷举 `mc_jolteon.py` 与 TLA+ 规范 `JolteonAccountability.tla`（4 份 TLC 配置）；取证开销估算 `overhead.py` |
 | `sim/` | 早期阶段的两个抽象模型（`d4_sim.py`、`d4_finite_memory.py`），供 `sim2/experiments/m1_e2_collapse.py` 引用 |
 
 ## 环境
@@ -65,6 +66,36 @@ python -m sim2.tests.test_v05
 SIM_PROCS=8 python -m sim2.experiments.dirTtru at
 ```
 
+推荐参数的复核（每格 50 个人群，带 95% 区间）：
+
+```bash
+SIM_PROCS=8 python -m sim2.experiments.dirTtruReview all
+```
+
+有界模型检查（4 节点、2 个拜占庭、3 个视图，十几秒）：
+
+```bash
+python formal/mc_jolteon.py --views 3
+```
+
+去掉"签名视图单调"规则（R3）后找反例：
+
+```bash
+python formal/mc_jolteon.py --views 3 --no-r3
+```
+
+TLA+ 版本需要 Java 和 `tla2tools.jar`（本仓库不附带，请从 TLA+ 官方发布页 github.com/tlaplus/tlaplus/releases 自行下载，放到 `formal/tools/`）。在 `formal/` 目录下运行：
+
+```bash
+java -XX:+UseParallelGC -cp tools/tla2tools.jar tlc2.TLC -workers auto -config JolteonAccountability_base.cfg JolteonAccountability.tla
+```
+
+取证开销（证书大小与需要内嵌 TC 的块比例）：
+
+```bash
+python formal/overhead.py
+```
+
 静态经济学（结果写到 `ttru/results/`）：
 
 ```bash
@@ -78,12 +109,13 @@ python ttru/epoch_check.py
 ## 主要结果（仿真，合成人群）
 
 - **安全：** 拜占庭基础权重 β0 < (1−B_rep)/3 时，信誉无论怎样被操纵，坏人的投票份额都低于 1/3；需要配合纪元交接规则（新权重表在旧纪元最后一块被提交后才生效）。实现中预算界被精确达到（`dirTtru budget`），跨纪元条件经穷举确认是紧的（`ttru/epoch_check.py`）。
-- **抗陷害：** 用 AT 证据时，同伙陷害不会降低诚实节点的权重；用可被陷害的证据时，对手能把预算用满。
+- **抗陷害：** 用 AT 证据时，同伙陷害不会降低诚实节点的权重；用可被陷害的证据时，对手能把预算用满。推荐参数下，同伙谎报加 10%–30% 迟到、两种网络地理，600 次运行中诚实节点被定罪 0 次（每千个诚实领导视图 95% 上界 0.004，`dirTtruReview frame`）。GST 前的混乱期足够长、消息被对抗调度时，诚实节点被降权恰好用满预算，但不越过（`dirTtruReview chaos`）。
+- **可问责安全：** 两个冲突块都被提交时，一定能从链上数据找出基础权重超过 1/3 的罪犯，且不冤枉诚实节点；前提是签名视图单调（R3）且 TC 写进块里。4 节点、3 个视图的小模型上，Python 穷举与 TLC 都得到 123,904 个状态、无违规；去掉 R3 后两者找到同一条反例（`formal/`）。把 TC 写进块里，n=200 时攻击下每块平均多约 345 字节，最多占 250 kB 块的 0.55%（`formal/overhead.py`）。
 - **作恶成本：** 按可没收价值成比例分配权重时作恶成本最高；牌照处罚能执行、且每家可执行牌照价值超过持平点（31 节点约 0.043，100 节点约 0.023，全网质押 = 1）时，T_tru 比纯质押更难收买，比 1:1 投票难收买约 9–14 倍，且没有单个实体能凑齐 1/3（`ttru/ttru_region.py`）。
 - **活性（只给上界）：** 沉默领导者留下 AT 证据，会被排除；NR 位定义为"没拿到可用提案（头和块）"，所以只发头不发块的数据扣留也会被排除。定向部分发送、慢领导者、定时释放不留证据，它们不影响安全，吞吐约为正常的 1/(1+λ(τ/t₀−1))（λ 为坏人领导的视图占比，τ/t₀ 为超时与正常视图时长之比），实测 0.11–0.24。
   - 评估过、不采用：软证据（`dirTtruSoft`）、加权出块时长分数（`dirTtruSlot`）、提案转发（`dirTtruFwd`）。它们只挡住不了解规则的坏人；对了解全部规则的坏人只把底线抬高几个百分点（0.14–0.27），因为软证据为抗陷害须容忍约 80% 的坏视图，而每个坏视图耗掉接近一个超时。代码保留，选项默认关闭。
 
 ## 说明
 
-- 设计文档与证明不在本仓库中。
+- 设计文档与证明不在本仓库中。模型检查只覆盖小规模配置，不是对任意规模的证明。
 - 结果中的数字来自合成人群（Pareto 持股分布），用于比较方案，不代表任何真实网络。
