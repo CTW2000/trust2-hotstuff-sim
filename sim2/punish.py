@@ -26,8 +26,7 @@ Effects (durations in epochs):
       queue (an upgrade while queued updates the entry, an upgrade while suspended extends it); a
       queued entity is barred from leading meanwhile (outside the cap: G1 never falls on honest
       replicas, and leading does not touch the weight table);
-  L4  decided by governance `gov_delay` epochs later: a fork, a repeat offence or malicious evidence
-      leads to eviction (removed from the set, CapNorm recomputed over the rest). If the recomputation
+  L4  decided by governance `gov_delay` epochs later: a fork or malicious evidence leads to eviction (removed from the set, CapNorm recomputed over the rest). If the recomputation
       is infeasible (licensed count x cap < licensed class total 1 - U) the entity cap is relaxed to the
       smallest feasible value (1 - U) / licensed count, a stand-in for the governance decision that keeps the
       class cap; flagged "infeasible" (cap_used records the cap). Without any licensed entity left the
@@ -37,6 +36,10 @@ Effects (durations in epochs):
       to the uncapped entities of its class (a recomputation can give all of it to colluders);
       recompute = "all" recomputes after every eviction (kept for comparison);
       evidence of a client fault (malicious = False, no fork) is downgraded to L2 and queued.
+      an L4 reached only through repeats, without malicious evidence or a fork, is downgraded to L3 and
+      queued instead of evicted (方案 v0.12 §3.3, adopted 2026-10-28 after 验证 §4.7), so that evictions of
+      honest-but-faulty entities do not shrink the honest weight outside l_max; repeat_evict = True restores
+      the earlier rule (any repeat reaching L4 is evicted), used by the runs made before the adoption.
 Logs (entity, epoch) events in self.log: ("L1".."L4", i, k), ("queue", i, k), ("suspend", i, k),
 ("release", i, k), ("evict", i, k), ("downgrade", i, k).
 """
@@ -48,11 +51,13 @@ from . import ttru
 
 class GradedPunishment:
     def __init__(self, cls, stake, cap, u_max, epoch=100, l_max=0.10, sus=(0, 0, 4, 32), lead_bar=1,
-                 win_chain=32, lookback=64, gov_delay=2, liveness=True, injected=(), forks=(), recompute="fork"):
+                 win_chain=32, lookback=64, gov_delay=2, liveness=True, injected=(), forks=(), recompute="fork",
+                 repeat_evict=False):
         self.cls, self.stake = np.asarray(cls), np.asarray(stake, float)
         self.cap, self.u_max, self.epoch, self.l_max = cap, u_max, epoch, l_max
         self.sus, self.lead_bar, self.win_chain, self.lookback = sus, lead_bar, win_chain, lookback
         self.gov_delay, self.liveness, self.recompute = gov_delay, liveness, recompute
+        self.repeat_evict = repeat_evict
         self.injected = sorted(injected, key=lambda x: x[2])
         self.forks = sorted(forks, key=lambda x: x[1])
         n = len(self.cls)
@@ -197,8 +202,11 @@ class GradedPunishment:
             self.gov.remove(g)
             i, _, idx = g
             it = self.items[idx]
-            if it["fork"] or it["mal"] or it["k"] > 0:
+            if it["fork"] or it["mal"] or (it["k"] > 0 and self.repeat_evict):
                 self._evict(i, k, it["fork"])
+            elif it["k"] > 0:                           # repeat without malicious evidence: long suspension
+                self.log.append(("downgrade", i, k))
+                self._suspend_request(i, self.sus[3], k)
             else:
                 self.log.append(("downgrade", i, k))
                 self._suspend_request(i, self.sus[2], k)

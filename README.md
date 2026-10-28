@@ -1,10 +1,10 @@
 # T_tru 加权 BFT 仿真器（信任 2.0）
 
-**Trust 2.0 (T_tru) weighted voting for HotStuff-style BFT consensus: chain base weight with entity caps from certification × bounded reputation × graded suspension, driven by framing-resistant evidence. Event-level protocol simulator, bounded model checking, and cost-of-corruption analysis. Simulation only.**
+**Trust 2.0 (T_tru) weighted voting for HotStuff-style BFT consensus: chain base weight with entity caps from certification × bounded reputation × graded suspension, driven by framing-resistant evidence. Event-level protocol simulator, bounded model checking, cost-of-corruption analysis, and a prototype built on asonnino/hotstuff (in progress).**
 
 这个仓库是"信任 2.0"方案的仿真代码。方案面向许可链或联盟链中 HotStuff/PBFT 一类的 BFT 共识，让每个节点的投票权由各链原有的基础权重、机构认证（实体上限与类别上限）和信誉共同决定，作恶的处罚从共识机制本身入手、按证据分级，并研究这样做是否安全、作恶成本有多高。
 
-> 只运行抽象模型，不连接、不测量任何真实系统。
+> 仿真部分只运行抽象模型。`prototype/` 是在开源 asonnino/hotstuff 上实现的原型（开发中），只在单机上运行我们自己的节点，不连接、不测量任何现网系统。
 
 ## 方案要点
 
@@ -34,6 +34,7 @@ $$T_i=\mathrm{CapNorm}(w_i)\cdot r_i\cdot z_i$$
 | `sim2/` | 协议级事件仿真器：HotStuff 两链提交、P1/P2 两种投票方式、加权计票、领导者规则与证据、对手模型、合成网络、交易层；测试与实验。详见 [`sim2/README.md`](sim2/README.md) |
 | `ttru/` | 静态经济学分析（按早期公式 V = s + πK 计算，现为对比记录）：凑齐 1/3 投票权的最低收买成本（精确背包）、K×π 区域图与持平点、处罚不可执行与代理问题、一次安全违背的罚没下界、跨纪元法定集合相交的穷举检验 |
 | `formal/` | 可问责安全定理（Jolteon 型两链 HotStuff，TC 进入投票规则）的有界模型检查：Python 显式状态穷举 `mc_jolteon.py` 与 TLA+ 规范 `JolteonAccountability.tla`（4 份 TLC 配置）；取证开销估算 `overhead.py` |
+| `prototype/` | 原型（开发中）：在 [asonnino/hotstuff](https://github.com/asonnino/hotstuff)（Rust，带 TC 的两链 HotStuff，Apache-2.0）上加入本方案。来源见 `prototype/UPSTREAM.md`，设计与分期见 `prototype/DESIGN.md`，带资源限制的本地运行脚本 `prototype/benchmark/run_local.py` |
 | `sim/` | 早期阶段的两个抽象模型（`d4_sim.py`、`d4_finite_memory.py`），供 `sim2/experiments/m1_e2_collapse.py` 引用 |
 
 ## 环境
@@ -127,5 +128,5 @@ python ttru/epoch_check.py
 
 ## 说明
 
-- 设计文档与证明不在本仓库中。分级处罚在 `sim2/punish.py`（`dirTtruV12`）；早期的 `dirTtruG1` 按旧规则（被证实即 z = 0）执行。模型检查只覆盖小规模配置，不是对任意规模的证明。
+- 方案说明与证明不在本仓库中。分级处罚在 `sim2/punish.py`（`dirTtruV12`；长时程、参数敏感性与 n=100 见 `dirTtruV12b`）。只靠再犯升到 L4、没有恶意证据也没有分叉的，治理默认降为 L3 而不逐出（2026-10-28，`repeat_evict=False`）；早期的 `dirTtruG1` 按旧规则（被证实即 z = 0）执行。模型检查只覆盖小规模配置，不是对任意规模的证明。
 - 结果中的数字来自合成人群（Pareto 持股分布），用于比较方案，不代表任何真实网络。

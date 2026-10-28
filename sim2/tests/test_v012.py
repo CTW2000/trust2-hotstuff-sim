@@ -1,8 +1,9 @@
 """Checks for the v0.12 scheme (信任2.0_方案重构说明 v0.12 §3.3): formula A base weights, graded G1
 punishment (punish.GradedPunishment) and the AT exclusion doubling of CusumExclusion.
 - formula A: base_weights(..., K=0) respects the entity cap and the class cap u_max;
-- an isolated safety item gives L2 (4-epoch suspension), a repeat L3, a second repeat L4 and eviction after
-  the governance delay; a repeat-offence eviction only zeroes the entity (no CapNorm recomputation);
+- an isolated safety item gives L2 (4-epoch suspension), a repeat L3, a second repeat L4; with malicious
+  evidence the entity is evicted after the governance delay and only zeroed (no CapNorm recomputation);
+  without it governance downgrades to L3 and the entity is suspended for 32 epochs, not evicted;
 - items of one sign epoch above the cap give L3 to every entity of the group (late evidence upgrades);
 - a client fault above 1/3 (malicious = False, no fork) is downgraded to L2 by governance and suspended
   through the FIFO queue without the suspended base share ever exceeding l_max; queued entities are barred
@@ -68,6 +69,23 @@ def check_isolated_repeat_evict():
     assert all(abs(bases[-1][j] - p0.base[j]) < 1e-12 for j in range(len(cls)) if j != i)
     print("isolated -> L2 (4 epochs), repeat -> L3 (32), second repeat -> L4 and eviction; the evicted weight is "
           "zeroed, not redistributed by CapNorm")
+
+
+def check_repeat_downgrade():
+    cls, s = pop()
+    p0 = GradedPunishment(cls, s, CAP, UMAX, liveness=False)
+    i = int(np.argmin(p0.base))
+    inj = [(i, 1, 1, False), (i, 10, 10, False), (i, 50, 50, False)]
+    p = GradedPunishment(cls, s, CAP, UMAX, liveness=False, injected=inj, win_chain=4)
+    zs, bases = drive(p, 90)
+    ev = events(p, i)
+    assert ("L4", 51) in ev and ("downgrade", 53) in ev and ("suspend", 53) in ev and ("release", 85) in ev, ev
+    assert not p.evicted.any() and abs(bases[-1].sum() - 1) < 1e-9 and zs[-1][i] == 1
+    old = GradedPunishment(cls, s, CAP, UMAX, liveness=False, injected=inj, win_chain=4, repeat_evict=True)
+    drive(old, 60)
+    assert ("evict", 53) in events(old, i)
+    print("non-malicious second repeat: L4, governance downgrades to L3 (32 epochs), not evicted "
+          "(repeat_evict=True restores the eviction)")
 
 
 def check_correlated_upgrade():
@@ -189,6 +207,7 @@ def check_at_doubling():
 def main():
     check_formula_a()
     check_isolated_repeat_evict()
+    check_repeat_downgrade()
     check_correlated_upgrade()
     check_bug_queue()
     check_fork_infeasible()

@@ -65,7 +65,7 @@ def build(cls, s, base, double=False, graded=True, injected=(), forks=(), old_g1
     rule = S.CusumExclusion(q=0.5, evidence=evidence, rho_bar=rho_bar, D=D, cap=0.5, Wq=500, cap_weights=base,
                             double=double, g1=old_g1)
     pun = GradedPunishment(cls, s, CAP, UMAX, l_max=L_MAX, injected=injected, forks=forks,
-                           recompute=recompute) if graded else None
+                           recompute=recompute, repeat_evict=True) if graded else None   # rule of the v0.13 runs
     vw = ttru.TtruWeights(base, epoch=100, r_min=0.7, b_rep=B_REP, rule=rule, punish=pun, g1=old_g1)
     if graded:
         rule.bars = vw.bars
