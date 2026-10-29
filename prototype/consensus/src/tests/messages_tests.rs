@@ -236,3 +236,114 @@ fn block_accusations_are_bounded() {
     let enough: Vec<_> = (1..=MAX_ACCUSATIONS as Round).map(acc).collect();
     assert!(Block::new_from_key_with_accusations(qc(), enough, name, 100, &secret).verify(&committee()).is_ok());
 }
+
+// ---- G2: inclusion attestations (prototype/DESIGN.md §12.4) ------------------------------------------------
+
+fn otx(account: u64, nonce: u64, tag: u8) -> Otx {
+    Otx { account, nonce, data: [tag; 32] }
+}
+
+// Attestations of round `round` by the first three fixture keys, each listing the given observed transactions.
+fn attestations(round: Round, lists: &[Vec<Digest>]) -> Vec<Attestation> {
+    lists
+        .iter()
+        .zip(keys())
+        .map(|(list, (name, secret))| Attestation::new_from_key(round, list.clone(), name, &secret))
+        .collect()
+}
+
+fn omission(round: Round, block: Digest, x: &Otx, atts: &[Attestation]) -> OmitProof {
+    OmitProof {
+        round,
+        epoch: EPOCH,
+        block,
+        otx: x.clone(),
+        attestations: atts.iter().map(|a| (a.author, a.signature.clone(), a.otxs.clone())).collect(),
+    }
+}
+
+#[test]
+fn otx_ids_and_conflicts() {
+    let (a, b, c) = (otx(1, 7, 0), otx(1, 7, 1), otx(1, 8, 0));
+    assert_ne!(a.id(), b.id());
+    assert_eq!(a.key(), b.key()); // same account and nonce: conflicting
+    assert_ne!(a.key(), c.key());
+}
+
+#[test]
+fn attestation_signs_its_list() {
+    let x = otx(1, 1, 0).id();
+    let att = &attestations(4, &[vec![x.clone()]])[0];
+    assert!(att.verify(&committee()).is_ok());
+    let mut longer = att.clone();
+    longer.otxs.push(otx(2, 1, 0).id());
+    assert!(longer.verify(&committee()).is_err());
+    let mut other = att.clone();
+    other.epoch = EPOCH + 1;
+    assert!(other.verify(&committee()).is_err());
+}
+
+#[test]
+fn omission_proof_verification() {
+    let x = otx(1, 1, 0);
+    let y = otx(2, 1, 0);
+    let all = attestations(4, &[vec![x.id()], vec![x.id(), y.id()], vec![x.id()]]);
+    let proof = omission(4, block().digest(), &x, &all);
+    assert!(proof.verify(&committee()).is_ok());
+
+    // Every attestation must list x.
+    let some = attestations(4, &[vec![x.id()], vec![y.id()], vec![x.id()]]);
+    assert!(omission(4, block().digest(), &x, &some).verify(&committee()).is_err());
+    // More than 2/3 of the weight.
+    assert!(matches!(
+        omission(4, block().digest(), &x, &all[..2]).verify(&committee()),
+        Err(ConsensusError::OmissionRequiresQuorum(4))
+    ));
+    // The signed list is the one carried.
+    let mut tampered = proof.clone();
+    tampered.attestations[0].2.push(y.id());
+    assert!(tampered.verify(&committee()).is_err());
+}
+
+#[test]
+fn block_digest_covers_otxs_and_omissions() {
+    let (name, secret) = leader();
+    let x = otx(1, 1, 0);
+    let atts = attestations(2, &[vec![x.id()], vec![x.id()], vec![x.id()]]);
+    let plain = Block::new_from_key_full(qc(), None, vec![], vec![], vec![], name, 3, vec![], &secret);
+    let with_otx = Block::new_from_key_full(qc(), None, vec![], vec![x.clone()], vec![], name, 3, vec![], &secret);
+    let proof = omission(2, block().digest(), &x, &atts);
+    let with_omission = Block::new_from_key_full(qc(), None, vec![], vec![], vec![proof], name, 3, vec![], &secret);
+    assert_ne!(plain.digest(), with_otx.digest());
+    assert_ne!(plain.digest(), with_omission.digest());
+    assert!(with_otx.verify(&committee()).is_ok() && with_omission.verify(&committee()).is_ok());
+    let mut tampered = with_otx.clone();
+    tampered.otxs.clear();
+    assert!(tampered.verify(&committee()).is_err());
+}
+
+#[test]
+fn block_otxs_and_omissions_are_bounded() {
+    let (name, secret) = leader();
+    let malformed = |b: Block| matches!(b.verify(&committee()), Err(ConsensusError::MalformedBlock(_)));
+    let make = |otxs: Vec<Otx>, omissions: Vec<OmitProof>| {
+        Block::new_from_key_full(qc(), None, vec![], otxs, omissions, name, 5, vec![], &secret)
+    };
+
+    let full: Vec<_> = (0..MAX_OTXS as u64).map(|n| otx(9, n, 0)).collect();
+    assert!(make(full.clone(), vec![]).verify(&committee()).is_ok());
+    let mut over = full;
+    over.push(otx(9, 99, 0));
+    assert!(malformed(make(over, vec![])));
+    // At most one of two conflicting transactions.
+    assert!(malformed(make(vec![otx(1, 1, 0), otx(1, 1, 1)], vec![])));
+
+    let x = otx(1, 1, 0);
+    let atts = attestations(5, &[vec![x.id()], vec![x.id()], vec![x.id()]]);
+    // An omission of a round that is not before the block's.
+    assert!(malformed(make(vec![], vec![omission(5, block().digest(), &x, &atts)])));
+    // The same omission twice.
+    let atts = attestations(4, &[vec![x.id()], vec![x.id()], vec![x.id()]]);
+    let proof = omission(4, block().digest(), &x, &atts);
+    assert!(malformed(make(vec![], vec![proof.clone(), proof])));
+}

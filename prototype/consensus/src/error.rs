@@ -79,6 +79,12 @@ pub enum ConsensusError {
     #[error("Received an AT accusation for round {0} without a quorum")]
     AccusationRequiresQuorum(Round),
 
+    #[error("Received an omission proof for round {0} without a quorum")]
+    OmissionRequiresQuorum(Round),
+
+    #[error("Malformed omission proof for round {0}")]
+    MalformedOmission(Round),
+
     #[error("No weight table for epoch {0}")]
     UnknownEpoch(EpochNumber),
 }

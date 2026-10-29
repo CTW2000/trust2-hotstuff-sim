@@ -1,6 +1,6 @@
 use crate::config::{Committee, EpochNumber};
 use crate::consensus::Round;
-use crate::messages::{Accusation, Block, Timeout, Vote, QC, TC};
+use crate::messages::{Accusation, Attestation, Block, OmitProof, Otx, Timeout, Vote, QC, TC};
 use bytes::Bytes;
 use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
@@ -67,7 +67,7 @@ impl Block {
         payload: Vec<Digest>,
         secret: &SecretKey,
     ) -> Self {
-        Self::new_from_key_full(qc, tc, Vec::new(), author, round, payload, secret)
+        Self::new_from_key_full(qc, tc, Vec::new(), Vec::new(), Vec::new(), author, round, payload, secret)
     }
 
     pub fn new_from_key_with_accusations(
@@ -77,13 +77,16 @@ impl Block {
         round: Round,
         secret: &SecretKey,
     ) -> Self {
-        Self::new_from_key_full(qc, None, accusations, author, round, Vec::new(), secret)
+        Self::new_from_key_full(qc, None, accusations, Vec::new(), Vec::new(), author, round, Vec::new(), secret)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_from_key_full(
         qc: QC,
         tc: Option<TC>,
         accusations: Vec<Accusation>,
+        otxs: Vec<Otx>,
+        omissions: Vec<OmitProof>,
         author: PublicKey,
         round: Round,
         payload: Vec<Digest>,
@@ -93,6 +96,8 @@ impl Block {
             qc,
             tc,
             accusations,
+            otxs,
+            omissions,
             author,
             round,
             epoch: EPOCH,
@@ -244,4 +249,18 @@ pub fn listener(address: SocketAddr, expected: Option<Bytes>) -> JoinHandle<()> 
             _ => panic!("Failed to receive network message"),
         }
     })
+}
+
+impl Attestation {
+    pub fn new_from_key(round: Round, otxs: Vec<Digest>, author: PublicKey, secret: &SecretKey) -> Self {
+        let attestation = Self {
+            round,
+            epoch: EPOCH,
+            otxs,
+            author,
+            signature: Signature::default(),
+        };
+        let signature = Signature::new(&attestation.digest(), secret);
+        Self { signature, ..attestation }
+    }
 }

@@ -15,6 +15,10 @@ pub mod messages_tests;
 
 /// At most this many AT accusations per block.
 pub const MAX_ACCUSATIONS: usize = 32;
+/// At most this many observed transactions per block; a full block is exempt from omissions.
+pub const MAX_OTXS: usize = 16;
+/// At most this many omission proofs per block.
+pub const MAX_OMISSIONS: usize = 32;
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Block {
@@ -22,6 +26,9 @@ pub struct Block {
     pub tc: Option<TC>,
     /// G2: AT accusations of earlier rounds, put on the ledger by the proposer (DESIGN.md §12.2).
     pub accusations: Vec<Accusation>,
+    /// G2: observed transactions included by the proposer, and omission proofs of earlier rounds (§12.4).
+    pub otxs: Vec<Otx>,
+    pub omissions: Vec<OmitProof>,
     pub author: PublicKey,
     pub round: Round,
     pub epoch: EpochNumber,
@@ -35,6 +42,8 @@ impl Block {
         qc: QC,
         tc: Option<TC>,
         accusations: Vec<Accusation>,
+        otxs: Vec<Otx>,
+        omissions: Vec<OmitProof>,
         author: PublicKey,
         round: Round,
         epoch: EpochNumber,
@@ -45,6 +54,8 @@ impl Block {
             qc,
             tc,
             accusations,
+            otxs,
+            omissions,
             author,
             round,
             epoch,
@@ -83,6 +94,21 @@ impl Block {
             ConsensusError::MalformedBlock(self.digest())
         );
 
+        // At most MAX_OTXS observed transactions, no two conflicting; at most MAX_OMISSIONS omission proofs,
+        // distinct and of earlier rounds.
+        let mut keys = HashSet::new();
+        let mut omitted = HashSet::new();
+        ensure!(
+            self.otxs.len() <= MAX_OTXS
+                && self.otxs.iter().all(|x| keys.insert(x.key()))
+                && self.omissions.len() <= MAX_OMISSIONS
+                && self
+                    .omissions
+                    .iter()
+                    .all(|o| o.round < self.round && omitted.insert((o.epoch, o.round, o.otx.id()))),
+            ConsensusError::MalformedBlock(self.digest())
+        );
+
         // Check the signature. The embedded QC and TC may belong to the previous epoch (the first block of
         // an epoch carries the commit proof of the last one): the caller verifies them, and the accusations,
         // against the table of their own epoch (Core::verify_qc, Core::verify_tc, Core::verify_accusation).
@@ -114,6 +140,14 @@ impl Hash for Block {
         hasher.update((self.accusations.len() as u64).to_le_bytes());
         for accusation in &self.accusations {
             hasher.update(accusation.digest());
+        }
+        hasher.update((self.otxs.len() as u64).to_le_bytes());
+        for x in &self.otxs {
+            hasher.update(x.id());
+        }
+        hasher.update((self.omissions.len() as u64).to_le_bytes());
+        for omission in &self.omissions {
+            hasher.update(omission.digest());
         }
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
@@ -509,5 +543,157 @@ impl Hash for Accusation {
 impl fmt::Debug for Accusation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "AT({}, {}, {} signers)", self.epoch, self.round, self.votes.len())
+    }
+}
+
+/// An observed transaction (G2 inclusion attestations, DESIGN.md §12.4). Two with the same account and nonce
+/// conflict: at most one of them is valid.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct Otx {
+    pub account: u64,
+    pub nonce: u64,
+    pub data: [u8; 32],
+}
+
+impl Otx {
+    pub fn id(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(self.account.to_le_bytes());
+        hasher.update(self.nonce.to_le_bytes());
+        hasher.update(self.data);
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+
+    pub fn key(&self) -> (u64, u64) {
+        (self.account, self.nonce)
+    }
+}
+
+/// The message signed by an inclusion attestation: (tag, epoch, round, observed transactions).
+pub fn attestation_digest(epoch: EpochNumber, round: Round, otxs: &[Digest]) -> Digest {
+    let mut hasher = Sha512::new();
+    hasher.update(b"ATT");
+    hasher.update(epoch.to_le_bytes());
+    hasher.update(round.to_le_bytes());
+    for x in otxs {
+        hasher.update(x);
+    }
+    Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+}
+
+/// ATT_i(e, v, S_i): the observed transactions that i held for at least Δ_g, and saw in no certified block,
+/// when it entered round v. Broadcast by i directly (not through the leader), only if the list is not empty.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Attestation {
+    pub round: Round,
+    pub epoch: EpochNumber,
+    pub otxs: Vec<Digest>,
+    pub author: PublicKey,
+    pub signature: Signature,
+}
+
+impl Attestation {
+    pub async fn new(
+        round: Round,
+        epoch: EpochNumber,
+        otxs: Vec<Digest>,
+        author: PublicKey,
+        mut signature_service: SignatureService,
+    ) -> Self {
+        let attestation = Self {
+            round,
+            epoch,
+            otxs,
+            author,
+            signature: Signature::default(),
+        };
+        let signature = signature_service.request_signature(attestation.digest()).await;
+        Self { signature, ..attestation }
+    }
+
+    pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+        ensure!(
+            committee.stake(&self.author) > 0,
+            ConsensusError::UnknownAuthority(self.author)
+        );
+        check_epoch(self.epoch, committee)?;
+        self.signature.verify(&self.digest(), &self.author)?;
+        Ok(())
+    }
+}
+
+impl Hash for Attestation {
+    fn digest(&self) -> Digest {
+        attestation_digest(self.epoch, self.round, &self.otxs)
+    }
+}
+
+impl fmt::Debug for Attestation {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ATT({}, {}, {}, {} otxs)", self.author, self.epoch, self.round, self.otxs.len())
+    }
+}
+
+/// An omission proof (G2, DESIGN.md §12.4): attestations of round `round` from signers holding more than 2/3
+/// of the weight of the table of `epoch` all list `otx`, and the certified block `block` of that round left
+/// it out. Whether the block is on the chain, leaves `otx` out and is not exempt is checked on the ledger.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct OmitProof {
+    pub round: Round,
+    pub epoch: EpochNumber,
+    pub block: Digest,
+    pub otx: Otx,
+    /// Signer, signature and the list it signed.
+    pub attestations: Vec<(PublicKey, Signature, Vec<Digest>)>,
+}
+
+impl OmitProof {
+    pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+        check_epoch(self.epoch, committee)?;
+
+        let id = self.otx.id();
+        let mut weight = 0;
+        let mut used = HashSet::new();
+        for (name, _, list) in &self.attestations {
+            ensure!(used.insert(*name), ConsensusError::AuthorityReuse(*name));
+            let voting_rights = committee.stake(name);
+            ensure!(voting_rights > 0, ConsensusError::UnknownAuthority(*name));
+            ensure!(list.contains(&id), ConsensusError::MalformedOmission(self.round));
+            weight += voting_rights;
+        }
+        ensure!(
+            weight >= committee.quorum_threshold(),
+            ConsensusError::OmissionRequiresQuorum(self.round)
+        );
+
+        for (author, signature, list) in &self.attestations {
+            signature.verify(&attestation_digest(self.epoch, self.round, list), author)?;
+        }
+        Ok(())
+    }
+}
+
+impl Hash for OmitProof {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(self.epoch.to_le_bytes());
+        hasher.update(self.round.to_le_bytes());
+        hasher.update(&self.block);
+        hasher.update(self.otx.id());
+        for (author, signature, list) in &self.attestations {
+            hasher.update(author.0);
+            hasher.update(signature.flatten());
+            hasher.update((list.len() as u64).to_le_bytes());
+            for x in list {
+                hasher.update(x);
+            }
+        }
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for OmitProof {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "OMIT({}, {}, {}, {} signers)", self.epoch, self.round, self.otx.id(), self.attestations.len())
     }
 }

@@ -81,6 +81,8 @@ impl Proposer {
             qc,
             tc,
             accusations,
+            /* otxs */ Vec::new(),
+            /* omissions */ Vec::new(),
             self.name,
             round,
             self.committee.epoch,
