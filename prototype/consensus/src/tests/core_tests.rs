@@ -137,7 +137,7 @@ async fn generate_proposal() {
 
     // Ensure the core sends a new block.
     match rx_proposer.recv().await.unwrap() {
-        ProposerMessage::Make(round, qc, tc, _) => {
+        ProposerMessage::Make(round, qc, tc, _, _) => {
             assert_eq!(round, 2);
             assert_eq!(qc, hight_qc);
             assert!(tc.is_none());
@@ -196,4 +196,27 @@ async fn local_timeout_round() {
         .map(|(_, address)| listener(address, Some(Bytes::from(expected.clone()))))
         .collect();
     assert!(try_join_all(handles).await.is_ok());
+}
+
+#[tokio::test]
+async fn nr_timeouts_make_an_accusation() {
+    // G2: NR = 1 timeouts of a round from more than 2/3 of the weight go to the proposer as an AT accusation.
+    let (leader1, leader2) = (leader_keys(1).0, leader_keys(2).0);
+    let (name, secret) = keys()
+        .into_iter()
+        .find(|(k, _)| *k != leader1 && *k != leader2)
+        .unwrap();
+    let store_path = ".db_test_nr_timeouts_make_an_accusation";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee(), store_path);
+    for (key, secret) in keys().iter().filter(|(k, _)| *k != name) {
+        let timeout = Timeout::new_from_key(QC::genesis(), 1, true, *key, secret);
+        tx_core.send(ConsensusMessage::Timeout(timeout)).await.unwrap();
+    }
+    match rx_proposer.recv().await.unwrap() {
+        ProposerMessage::Accuse(accusation) => {
+            assert_eq!((accusation.epoch, accusation.round, accusation.votes.len()), (EPOCH, 1, 3));
+            assert!(accusation.verify(&committee()).is_ok());
+        }
+        message => panic!("Unexpected message {:?}", message),
+    }
 }

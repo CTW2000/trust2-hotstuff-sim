@@ -8,6 +8,11 @@ pub type LeaderElector = RRLeaderElector;
 /// in an epoch have no weight in its table; members excluded by the G2 leader rule still vote but do not
 /// lead).
 pub fn leader(committee: &Committee, round: Round) -> PublicKey {
+    if let Some((first, leader)) = committee.handover {
+        if round == first {
+            return leader;
+        }
+    }
     let mut keys: Vec<_> = committee
         .authorities
         .iter()

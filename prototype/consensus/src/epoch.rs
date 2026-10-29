@@ -110,6 +110,7 @@ impl Epochs {
                 })
                 .collect(),
             epoch,
+            handover: None,
         }
     }
 
@@ -157,6 +158,7 @@ impl Epochs {
     /// was made in, if any); then the next table is computed.
     pub fn enter_next(&mut self, terminal: &Block) {
         let horizon = (terminal.round + 1).saturating_sub(self.reputation.config().lag);
+        let before = self.reputation.r_ppm().to_vec();
         let (tables, first_rounds, members) = (&self.tables, &self.first_rounds, &self.members);
         let events = self.reputation.advance(horizon, |round, accused_in| {
             let epoch = accused_in.or_else(|| {
@@ -174,12 +176,20 @@ impl Epochs {
             };
             info!("G2: {} {} at round {}", self.members[*k].0, what, round);
         }
+        for (k, (old, new)) in before.iter().zip(self.reputation.r_ppm()).enumerate() {
+            if old != new {
+                info!("G2: reputation of {} is {} ppm", self.members[k].0, new);
+            }
+        }
 
+        // The child of the terminal block still belongs to this epoch (the commit proof certifies it, at the
+        // adjacent round); the next epoch starts after it, and its first round keeps the old leader.
         let next = self.current + 1;
-        let table = self.make_table(next);
+        let first = terminal.round + 2;
+        let mut table = self.make_table(next);
+        table.handover = Some((first, leader(self.current(), first)));
         self.tables.insert(next, table);
-        // The child of the terminal block still belongs to this epoch; the next one starts after it.
-        self.first_rounds.insert(next, terminal.round + 2);
+        self.first_rounds.insert(next, first);
         self.current = next;
         self.start = terminal.round;
         while self.tables.len() > KEEP {

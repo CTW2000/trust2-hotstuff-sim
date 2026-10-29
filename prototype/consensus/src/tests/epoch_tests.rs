@@ -130,3 +130,25 @@ fn silent_leader_loses_leadership_and_reputation() {
     assert_eq!(table.stake(&silent), (225_000_000_000u64 / 975_000) as Stake);
     assert!((0..100).all(|u| leader(table, u) != silent));
 }
+
+#[test]
+fn first_round_of_an_epoch_keeps_the_previous_leader() {
+    // The votes for the commit proof of the last epoch (for the child of its terminal block) went to the
+    // leader the old table gives the next round; that round, the first of the new epoch, stays with it even
+    // when the new table changes who may lead (DESIGN.md §12.2).
+    let mut epochs = Epochs::new(&committee(), config(10));
+    let silent = leader(epochs.current(), 1);
+    for k in 1..=3 {
+        let table = epochs.current().clone();
+        let accused: Vec<Round> = (10 * k - 9..=10 * k).filter(|u| leader(&table, *u) == silent).collect();
+        epochs.record(&accusing(table.epoch, 10 * k, &accused));
+        epochs.enter_next(&block(table.epoch, 10 * k));
+    }
+    let new = epochs.current().clone();
+    let old = epochs.get(new.epoch - 1).unwrap().clone();
+    assert!(old.authorities[&silent].leader && !new.authorities[&silent].leader);
+    // The schedules differ after the first round (the old one has four leaders, the new one three) ...
+    assert!((33..60).any(|u| leader(&old, u) != leader(&new, u)));
+    // ... but the first round of the new epoch, 32, keeps the old leader.
+    assert_eq!(leader(&new, 32), leader(&old, 32));
+}

@@ -1,11 +1,11 @@
-use crate::aggregator::Aggregator;
+use crate::aggregator::{Accuser, Aggregator};
 use crate::config::Committee;
 use crate::consensus::{ConsensusMessage, Round};
 use crate::epoch::{EpochConfig, Epochs};
 use crate::error::{ConsensusError, ConsensusResult};
 use crate::leader::leader;
 use crate::mempool::MempoolDriver;
-use crate::messages::{Block, Timeout, Vote, QC, TC};
+use crate::messages::{Accusation, Block, Timeout, Vote, QC, TC};
 use crate::proposer::ProposerMessage;
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
@@ -48,6 +48,8 @@ pub struct Core {
     last_timeout: Option<Timeout>,
     timer: Timer,
     aggregator: Aggregator,
+    // G2: NR = 1 timeouts gathered into AT accusations, which go to the proposer for the ledger.
+    accuser: Accuser,
     network: SimpleSender,
     // Messages of later epochs, and those to handle again after entering a new epoch.
     deferred: Vec<ConsensusMessage>,
@@ -94,6 +96,7 @@ impl Core {
                 last_timeout: None,
                 timer: Timer::new(timeout_delay),
                 aggregator: Aggregator::new(),
+                accuser: Accuser::new(),
                 network: SimpleSender::new(),
                 deferred: Vec::new(),
                 replay: VecDeque::new(),
@@ -139,6 +142,37 @@ impl Core {
         self.verify_qc(&tc.high_qc)
     }
 
+    /// G2: add a verified timeout to the accuser; a new accusation goes to the proposer.
+    async fn accuse(&mut self, timeout: &Timeout, committee: &Committee) {
+        if let Some(accusation) = self.accuser.add(timeout, committee) {
+            self.propose_accusation(accusation).await;
+        }
+    }
+
+    /// G2: a verified TC whose NR = 1 reports alone exceed 2/3 is an accusation of its round.
+    async fn accuse_from_tc(&mut self, tc: &TC) {
+        if tc.round <= self.epochs.done() {
+            return;
+        }
+        let accusation = match self.epochs.get(tc.epoch) {
+            Some(committee) => Accusation::from_tc(tc, committee),
+            None => None,
+        };
+        if let Some(accusation) = accusation {
+            if self.accuser.note(&accusation) {
+                self.propose_accusation(accusation).await;
+            }
+        }
+    }
+
+    async fn propose_accusation(&mut self, accusation: Accusation) {
+        debug!("Assembled {:?}", accusation);
+        self.tx_proposer
+            .send(ProposerMessage::Accuse(accusation))
+            .await
+            .expect("Failed to send message to proposer");
+    }
+
     fn defer(&mut self, message: ConsensusMessage) {
         if self.deferred.len() < MAX_DEFERRED {
             self.deferred.push(message);
@@ -180,6 +214,7 @@ impl Core {
         self.replay.extend(now);
         self.deferred = later;
         self.requested.clear();
+        self.accuser.cleanup(self.epochs.done() + 1);
     }
 
     fn increase_last_voted_round(&mut self, target: Round) {
@@ -237,6 +272,16 @@ impl Core {
 
         // Send all the newly committed blocks to the node's application layer.
         while let Some(block) = to_commit.pop_front() {
+            // G2: the accusations on the ledger, up to and including the terminal block, decide the next table.
+            if !block.accusations.is_empty() {
+                self.epochs.record(&block);
+                let keys = block.accusations.iter().map(|a| (a.epoch, a.round)).collect();
+                self.tx_proposer
+                    .send(ProposerMessage::Accused(keys))
+                    .await
+                    .expect("Failed to send message to proposer");
+            }
+
             // H1/H3: committing the terminal block of the epoch moves us to the next epoch.
             if self.epochs.is_terminal(&block) {
                 self.enter_epoch(&block);
@@ -346,6 +391,12 @@ impl Core {
     async fn handle_timeout(&mut self, timeout: &Timeout) -> ConsensusResult<()> {
         debug!("Processing {:?}", timeout);
         if timeout.round < self.round {
+            // G2: a late NR = 1 timeout still counts towards an accusation of its round.
+            if timeout.nr && timeout.round > self.epochs.done() {
+                let committee = self.committee().clone();
+                timeout.verify(&committee)?;
+                self.accuse(timeout, &committee).await;
+            }
             return Ok(());
         }
 
@@ -353,6 +404,7 @@ impl Core {
         let committee = self.committee().clone();
         timeout.verify(&committee)?;
         self.verify_qc(&timeout.high_qc)?;
+        self.accuse(timeout, &committee).await;
 
         // Process the QC embedded in the timeout.
         self.process_qc(&timeout.high_qc).await;
@@ -424,7 +476,7 @@ impl Core {
     async fn generate_proposal(&mut self, tc: Option<TC>) {
         let committee = self.committee().clone();
         self.tx_proposer
-            .send(ProposerMessage::Make(self.round, self.high_qc.clone(), tc, committee))
+            .send(ProposerMessage::Make(self.round, self.high_qc.clone(), tc, committee, self.epochs.done()))
             .await
             .expect("Failed to send message to proposer");
     }
@@ -585,12 +637,16 @@ impl Core {
         if let Some(ref tc) = block.tc {
             self.verify_tc(tc)?;
         }
+        for accusation in &block.accusations {
+            accusation.verify(self.table(accusation.epoch)?)?;
+        }
 
         // Process the QC. This may allow us to advance round.
         self.process_qc(&block.qc).await;
 
         // Process the TC (if any). This may also allow us to advance round. R6: adopt the QC it carries.
         if let Some(ref tc) = block.tc {
+            self.accuse_from_tc(tc).await;
             self.process_qc(&tc.high_qc).await;
             self.advance_round(tc.round).await;
         }
@@ -608,6 +664,7 @@ impl Core {
 
     async fn handle_tc(&mut self, tc: TC) -> ConsensusResult<()> {
         self.verify_tc(&tc)?;
+        self.accuse_from_tc(&tc).await;
         if tc.round < self.round {
             return Ok(());
         }

@@ -1,3 +1,4 @@
+use crate::consensus::Round;
 use crypto::PublicKey;
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -78,6 +79,10 @@ fn default_true() -> bool {
 pub struct Committee {
     pub authorities: HashMap<PublicKey, Authority>,
     pub epoch: EpochNumber,
+    /// The first round of the epoch and the leader the previous table gave it, which keeps it: the votes for
+    /// the commit proof of the last epoch went there (DESIGN.md §12.2). Set by the weight table.
+    #[serde(skip)]
+    pub handover: Option<(Round, PublicKey)>,
 }
 
 impl std::fmt::Debug for Committee {
@@ -102,6 +107,7 @@ impl Committee {
                 })
                 .collect(),
             epoch,
+            handover: None,
         }
     }
 

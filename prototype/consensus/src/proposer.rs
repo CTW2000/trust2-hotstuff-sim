@@ -1,20 +1,25 @@
-use crate::config::{Committee, Stake};
+use crate::config::{Committee, EpochNumber, Stake};
 use crate::consensus::{ConsensusMessage, Round};
-use crate::messages::{Block, QC, TC};
+use crate::messages::{Accusation, Block, MAX_ACCUSATIONS, QC, TC};
 use bytes::Bytes;
 use crypto::{Digest, PublicKey, SignatureService};
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
 use log::{debug, info};
 use network::{CancelHandler, ReliableSender};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 #[derive(Debug)]
 pub enum ProposerMessage {
-    /// Make a block for the round, with the weight table of the current epoch.
-    Make(Round, QC, Option<TC>, Committee),
+    /// Make a block for the round, with the weight table of the current epoch; accusations of rounds up to
+    /// the last field are processed already and dropped.
+    Make(Round, QC, Option<TC>, Committee, Round),
     Cleanup(Vec<Digest>),
+    /// G2: an AT accusation to put on the ledger.
+    Accuse(Accusation),
+    /// G2: accusations committed on the ledger, no longer to propose.
+    Accused(Vec<(EpochNumber, Round)>),
 }
 
 pub struct Proposer {
@@ -25,6 +30,7 @@ pub struct Proposer {
     rx_message: Receiver<ProposerMessage>,
     tx_loopback: Sender<Block>,
     buffer: HashSet<Digest>,
+    accusations: BTreeMap<(EpochNumber, Round), Accusation>,
     network: ReliableSender,
 }
 
@@ -46,6 +52,7 @@ impl Proposer {
                 rx_message,
                 tx_loopback,
                 buffer: HashSet::new(),
+                accusations: BTreeMap::new(),
                 network: ReliableSender::new(),
             }
             .run()
@@ -60,11 +67,20 @@ impl Proposer {
     }
 
     async fn make_block(&mut self, round: Round, qc: QC, tc: Option<TC>) {
+        // Accusations wait here until they are committed (or processed); the oldest go first.
+        let accusations: Vec<_> = self
+            .accusations
+            .values()
+            .filter(|a| a.round < round)
+            .take(MAX_ACCUSATIONS)
+            .cloned()
+            .collect();
+
         // Generate a new block.
         let block = Block::new(
             qc,
             tc,
-            /* accusations */ Vec::new(),
+            accusations,
             self.name,
             round,
             self.committee.epoch,
@@ -133,13 +149,22 @@ impl Proposer {
                     //}
                 },
                 Some(message) = self.rx_message.recv() => match message {
-                    ProposerMessage::Make(round, qc, tc, committee) => {
+                    ProposerMessage::Make(round, qc, tc, committee, done) => {
                         self.committee = committee;
+                        self.accusations.retain(|(_, r), _| *r > done);
                         self.make_block(round, qc, tc).await
                     }
                     ProposerMessage::Cleanup(digests) => {
                         for x in &digests {
                             self.buffer.remove(x);
+                        }
+                    }
+                    ProposerMessage::Accuse(accusation) => {
+                        self.accusations.insert((accusation.epoch, accusation.round), accusation);
+                    }
+                    ProposerMessage::Accused(keys) => {
+                        for key in &keys {
+                            self.accusations.remove(key);
                         }
                     }
                 }
