@@ -119,9 +119,10 @@ struct Connection {
     receiver: Receiver<InnerMessage>,
     /// The initial delay to wait before re-attempting a connection (in ms).
     retry_delay: u64,
-    /// Buffer keeping all messages that need to be re-transmitted, with the time each is due (synthetic link
-    /// delay, see delay.rs).
-    buffer: VecDeque<(Bytes, oneshot::Sender<Bytes>, Instant)>,
+    /// Buffer keeping all messages that need to be re-transmitted, in the order they are due (synthetic link
+    /// delay, see delay.rs), and whether each is already on its way: a message waiting for its synthetic delay
+    /// stands for bytes already on the wire, so a cancellation (the caller got its quorum of ACKs) does not stop it.
+    buffer: VecDeque<(Bytes, oneshot::Sender<Bytes>, Instant, bool)>,
 }
 
 impl Connection {
@@ -174,7 +175,7 @@ impl Connection {
                             // The caller is responsible to cleanup the buffer through the cancel handlers.
                             Some(InnerMessage{data, cancel_handler}) = self.receiver.recv() => {
                                 self.enqueue(data, cancel_handler);
-                                self.buffer.retain(|(_, handler, _)| !handler.is_closed());
+                                self.buffer.retain(|(_, handler, _, _)| !handler.is_closed());
                             }
                         }
                     }
@@ -184,8 +185,9 @@ impl Connection {
     }
 
     fn enqueue(&mut self, data: Bytes, handler: oneshot::Sender<Bytes>) {
-        let at = delay::due(&self.address, data.len(), self.buffer.back().map(|(_, _, at)| *at));
-        self.buffer.push_back((data, handler, at));
+        let at = delay::due(&self.address, data.len());
+        let index = delay::position(&self.buffer, at, |(_, _, due, _)| *due);
+        self.buffer.insert(index, (data, handler, at, delay::enabled()));
     }
 
     /// Transmit messages once we have established a connection.
@@ -197,16 +199,16 @@ impl Connection {
         let (mut writer, mut reader) = Framed::new(stream, LengthDelimitedCodec::new()).split();
         let error = 'connection: loop {
             // Try to send all messages of the buffer that are due.
-            while let Some((_, handler, at)) = self.buffer.front() {
-                // Skip messages that have been cancelled.
-                if handler.is_closed() {
+            while let Some((_, handler, at, on_its_way)) = self.buffer.front() {
+                // Skip messages that have been cancelled, unless they are already on their way.
+                if handler.is_closed() && !*on_its_way {
                     self.buffer.pop_front();
                     continue;
                 }
                 if *at > Instant::now() {
                     break;
                 }
-                let (data, handler, _) = self.buffer.pop_front().unwrap();
+                let (data, handler, _, _) = self.buffer.pop_front().unwrap();
 
                 // Try to send the message.
                 match writer.send(data.clone()).await {
@@ -217,7 +219,7 @@ impl Connection {
                     }
                     Err(e) => {
                         // We failed to send the message, we put it back into the buffer.
-                        self.buffer.push_front((data, handler, Instant::now()));
+                        self.buffer.push_front((data, handler, Instant::now(), false));
                         break 'connection NetworkError::FailedToSendMessage(self.address, e);
                     }
                 }
@@ -225,7 +227,7 @@ impl Connection {
 
             // Check if there are any new messages to send, if the next one is due, or if we get an ACK for messages we
             // already sent.
-            let next = self.buffer.front().map_or_else(|| Instant::now() + Duration::from_secs(3600), |(_, _, at)| *at);
+            let next = self.buffer.front().map_or_else(|| Instant::now() + Duration::from_secs(3600), |(_, _, at, _)| *at);
             tokio::select! {
                 Some(InnerMessage{data, cancel_handler}) = self.receiver.recv() => {
                     // Add the message to the buffer of messages to send.
@@ -256,7 +258,7 @@ impl Connection {
         // If we reach this code, it means something went wrong. Put the messages for which we didn't receive an ACK
         // back into the sending buffer, we will try to send them again once we manage to establish a new connection.
         while let Some((data, handler)) = pending_replies.pop_back() {
-            self.buffer.push_front((data, handler, Instant::now()));
+            self.buffer.push_front((data, handler, Instant::now(), false));
         }
         error
     }

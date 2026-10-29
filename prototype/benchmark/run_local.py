@@ -79,7 +79,8 @@ def delays_file(args, committee):
     path = os.path.abspath(".delays.json")
     with open(path, "w") as fh:
         json.dump(dict(addresses=addresses, base_ms=net["base_ms"], jitter_ms=net["jitter_ms"],
-                       bandwidth_mbps=net["bandwidth_mbps"]), fh)
+                       bandwidth_mbps=net["bandwidth_mbps"], late_p=args.late_p, late_ms=args.late_ms,
+                       late_to=committee.consensus[:args.nodes]), fh)
     return path
 
 
@@ -173,6 +174,8 @@ def main():
     ap.add_argument("--nodes", type=int, default=4)
     ap.add_argument("--build", choices=sorted(BUILDS), default="trust2", help="Trust 2.0 or the upstream baseline")
     ap.add_argument("--net", choices=["none", "base", "wide"], default="none", help="synthetic link delays")
+    ap.add_argument("--late-p", type=float, default=0.0, help="probability that a message is late (model P)")
+    ap.add_argument("--late-ms", type=float, default=5000.0, help="extra delay of a late message")
     ap.add_argument("--faults", type=int, default=0)
     ap.add_argument("--clients", type=int, default=4)
     ap.add_argument("--rate", type=int, default=50_000)

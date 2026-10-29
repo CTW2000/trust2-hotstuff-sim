@@ -136,18 +136,21 @@ def x2():
 
 
 def x3():
-    """Attacks at n = 31 on the base network; the baseline only where it can run the same faults."""
+    """Attacks at n = 31 on the base network, epochs of 50 rounds; the baseline only where it runs the same faults.
+    Framing: colluders withhold votes and claim NR = 1, on top of 10% late messages (model P, 5 s), against a
+    control with the late messages alone."""
     scenarios = [
         ("silent", dict(faults=3), ("baseline", "trust2")),
-        ("framers", dict(frame=9), ("baseline", "trust2")),
+        ("late", dict(late_p=0.1), ("baseline", "trust2")),
+        ("framers+late", dict(frame=7, late_p=0.1), ("trust2",)),
         ("liars", dict(lie_nr=3), ("trust2",)),
         ("equivocators", dict(equivocate=3), ("trust2",)),
     ]
     for rep in (1, 2):
         for name, faults, builds in scenarios:
             for build in builds:
-                config = dict(scenario=name, build=build, nodes=31, net="base", epoch_length=100, rep=rep, **faults)
-                run("x3", config, 60)
+                config = dict(scenario=name, build=build, nodes=31, net="base", epoch_length=50, rep=rep, **faults)
+                run("x3", config, 90)
 
 
 def p3():
@@ -169,7 +172,7 @@ def report():
             continue
         metrics = [k for k in rows[0] if k not in ("scenario", "build", "nodes", "net", "epoch_length", "rep",
                                                    "faults", "frame", "lie_nr", "equivocate", "otx_rate",
-                                                   "attest_guard", "censor", "censor_adjacent")]
+                                                   "attest_guard", "censor", "censor_adjacent", "late_p")]
         keys = [k for k in rows[0] if k not in metrics and k != "rep"]
         groups = defaultdict(list)
         for r in rows:
@@ -188,9 +191,33 @@ def report():
                 else:
                     cells.append(f"{median(values):g} [{min(values):g}–{max(values):g}]")
             lines.append("| " + " | ".join(cells) + " |")
+        if os.path.basename(path) == "x2.csv":
+            lines += compare_x2(rows)
         with open(path[:-4] + ".md", "w") as fh:
             fh.write("\n".join(lines) + "\n")
         print(f"{path[:-4]}.md: {len(groups)} rows")
+
+
+def compare_x2(rows):
+    """Trust 2.0 against the baseline per committee size and network: medians and the relative change."""
+    cell = defaultdict(lambda: defaultdict(list))
+    for r in rows:
+        for m in ("consensus_tps", "consensus_latency_ms", "e2e_latency_ms", "timeouts"):
+            cell[(int(r["nodes"]), r["net"])][(r["build"], m)].append(float(r[m]))
+    lines = ["", "## Trust 2.0 against the baseline", "",
+             "| n | network | consensus latency (ms): baseline / Trust 2.0 | change | end-to-end latency (ms) | change | "
+             "throughput (tx/s) | timeouts |", "|---|---|---|---|---|---|---|---|"]
+    for (n, net) in sorted(cell, key=lambda k: (k[0], ["none", "base", "wide"].index(k[1]))):
+        c = cell[(n, net)]
+        get = lambda b, m: median(c[(b, m)]) if c[(b, m)] else float("nan")
+        row = [str(n), net]
+        for m in ("consensus_latency_ms", "e2e_latency_ms"):
+            b, t = get("baseline", m), get("trust2", m)
+            row += [f"{b:g} / {t:g}", f"{(t - b) / b * 100:+.0f}%" if b else ""]
+        row.append(f"{get('baseline', 'consensus_tps'):,.0f} / {get('trust2', 'consensus_tps'):,.0f}")
+        row.append(f"{get('baseline', 'timeouts'):g} / {get('trust2', 'timeouts'):g}")
+        lines.append("| " + " | ".join(row) + " |")
+    return lines
 
 
 if __name__ == "__main__":

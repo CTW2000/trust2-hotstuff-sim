@@ -117,16 +117,17 @@ impl Connection {
         };
         info!("Outgoing connection established with {}", self.address);
 
-        // Transmit messages once we have established a connection. Messages wait in `queue` until their synthetic
-        // link delay has passed (no delay unless configured, see delay.rs).
+        // Transmit messages once we have established a connection. Messages wait in `queue`, in the order they are
+        // due, until their synthetic link delay has passed (no delay unless configured, see delay.rs).
         let mut queue: VecDeque<(Instant, Bytes)> = VecDeque::new();
         loop {
             let next = queue.front().map_or_else(|| Instant::now() + Duration::from_secs(3600), |(at, _)| *at);
             // Check if there are any new messages to send or if we get an ACK for messages we already sent.
             tokio::select! {
                 Some(data) = self.receiver.recv() => {
-                    let at = delay::due(&self.address, data.len(), queue.back().map(|(at, _)| *at));
-                    queue.push_back((at, data));
+                    let at = delay::due(&self.address, data.len());
+                    let index = delay::position(&queue, at, |(due, _)| *due);
+                    queue.insert(index, (at, data));
                 },
                 () = sleep_until(next), if !queue.is_empty() => {
                     let (_, data) = queue.pop_front().unwrap();
