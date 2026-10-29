@@ -6,6 +6,7 @@ mod consensus;
 mod core;
 mod epoch;
 mod helper;
+mod inclusion;
 mod leader;
 mod mempool;
 mod messages;
