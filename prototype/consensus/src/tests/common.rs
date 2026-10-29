@@ -1,6 +1,6 @@
-use crate::config::Committee;
+use crate::config::{Committee, EpochNumber};
 use crate::consensus::Round;
-use crate::messages::{Block, Timeout, Vote, QC};
+use crate::messages::{Block, Timeout, Vote, QC, TC};
 use bytes::Bytes;
 use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
@@ -12,6 +12,9 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+// Epoch of the fixture committee.
+pub const EPOCH: EpochNumber = 100;
 
 // Fixture.
 pub fn keys() -> Vec<(PublicKey, SecretKey)> {
@@ -31,7 +34,7 @@ pub fn committee() -> Committee {
                 (name, stake, address)
             })
             .collect(),
-        /* epoch */ 100,
+        EPOCH,
     )
 }
 
@@ -53,11 +56,23 @@ impl Block {
         payload: Vec<Digest>,
         secret: &SecretKey,
     ) -> Self {
+        Self::new_from_key_with_tc(qc, None, author, round, payload, secret)
+    }
+
+    pub fn new_from_key_with_tc(
+        qc: QC,
+        tc: Option<TC>,
+        author: PublicKey,
+        round: Round,
+        payload: Vec<Digest>,
+        secret: &SecretKey,
+    ) -> Self {
         let block = Block {
             qc,
-            tc: None,
+            tc,
             author,
             round,
+            epoch: EPOCH,
             payload,
             signature: Signature::default(),
         };
@@ -77,6 +92,7 @@ impl Vote {
         let vote = Self {
             hash,
             round,
+            epoch: EPOCH,
             author,
             signature: Signature::default(),
         };
@@ -92,10 +108,18 @@ impl PartialEq for Vote {
 }
 
 impl Timeout {
-    pub fn new_from_key(high_qc: QC, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
+    pub fn new_from_key(
+        high_qc: QC,
+        round: Round,
+        nr: bool,
+        author: PublicKey,
+        secret: &SecretKey,
+    ) -> Self {
         let timeout = Self {
             high_qc,
             round,
+            epoch: EPOCH,
+            nr,
             author,
             signature: Signature::default(),
         };
@@ -130,6 +154,7 @@ pub fn qc() -> QC {
     let qc = QC {
         hash: Digest::default(),
         round: 1,
+        epoch: EPOCH,
         votes: Vec::new(),
     };
     let digest = qc.digest();
@@ -163,6 +188,7 @@ pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
             let qc = QC {
                 hash: block.digest(),
                 round: block.round,
+                epoch: EPOCH,
                 votes: Vec::new(),
             };
             let digest = qc.digest();

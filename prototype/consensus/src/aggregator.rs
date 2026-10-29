@@ -87,6 +87,7 @@ impl QCMaker {
             return Ok(Some(QC {
                 hash: vote.hash.clone(),
                 round: vote.round,
+                epoch: vote.epoch,
                 votes: self.votes.clone(),
             }));
         }
@@ -96,8 +97,9 @@ impl QCMaker {
 
 struct TCMaker {
     weight: Stake,
-    votes: Vec<(PublicKey, Signature, Round)>,
+    votes: Vec<(PublicKey, Signature, Round, bool)>,
     used: HashSet<PublicKey>,
+    high_qc: QC,
 }
 
 impl TCMaker {
@@ -106,6 +108,7 @@ impl TCMaker {
             weight: 0,
             votes: Vec::new(),
             used: HashSet::new(),
+            high_qc: QC::genesis(),
         }
     }
 
@@ -123,15 +126,24 @@ impl TCMaker {
             ConsensusError::AuthorityReuse(author)
         );
 
-        // Add the timeout to the accumulator.
-        self.votes
-            .push((author, timeout.signature, timeout.high_qc.round));
+        // Add the timeout to the accumulator; keep the highest QC (R2: the TC carries it).
+        self.votes.push((
+            author,
+            timeout.signature,
+            timeout.high_qc.round,
+            timeout.nr,
+        ));
+        if timeout.high_qc.round > self.high_qc.round {
+            self.high_qc = timeout.high_qc.clone();
+        }
         self.weight += committee.stake(&author);
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures TC is only created once.
             return Ok(Some(TC {
                 round: timeout.round,
+                epoch: timeout.epoch,
                 votes: self.votes.clone(),
+                high_qc: self.high_qc.clone(),
             }));
         }
         Ok(None)

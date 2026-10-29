@@ -65,6 +65,7 @@ impl Proposer {
             tc,
             self.name,
             round,
+            self.committee.epoch,
             /* payload */ self.buffer.drain().collect(),
             self.signature_service.clone(),
         )

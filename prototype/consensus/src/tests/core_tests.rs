@@ -1,5 +1,5 @@
 use super::*;
-use crate::common::{chain, committee, committee_with_base_port, keys, listener};
+use crate::common::{chain, committee, committee_with_base_port, keys, listener, EPOCH};
 use crypto::SecretKey;
 use futures::future::try_join_all;
 use std::fs;
@@ -111,6 +111,7 @@ async fn generate_proposal() {
     let hight_qc = QC {
         hash,
         round: block.round,
+        epoch: EPOCH,
         votes: votes
             .iter()
             .cloned()
@@ -174,7 +175,8 @@ async fn local_timeout_round() {
 
     // Make the timeout vote we expect to send.
     let (public_key, secret_key) = leader_keys(3);
-    let timeout = Timeout::new_from_key(QC::genesis(), 1, public_key, &secret_key);
+    // The node never received a proposal for round 1, so it reports NR (N6).
+    let timeout = Timeout::new_from_key(QC::genesis(), 1, true, public_key, &secret_key);
     let expected = bincode::serialize(&ConsensusMessage::Timeout(timeout)).unwrap();
 
     // Run a core instance.

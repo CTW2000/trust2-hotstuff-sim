@@ -39,6 +39,10 @@ pub struct Core {
     last_voted_round: Round,
     last_committed_round: Round,
     high_qc: QC,
+    // N6: highest round for which we hold a usable proposal (the leader's signed block and its payload).
+    ready_round: Round,
+    // R3: the timeout we signed for the current round, resent if the timer fires again in that round.
+    last_timeout: Option<Timeout>,
     timer: Timer,
     aggregator: Aggregator,
     network: SimpleSender,
@@ -77,6 +81,8 @@ impl Core {
                 last_voted_round: 0,
                 last_committed_round: 0,
                 high_qc: QC::genesis(),
+                ready_round: 0,
+                last_timeout: None,
                 timer: Timer::new(timeout_delay),
                 aggregator: Aggregator::new(committee),
                 network: SimpleSender::new(),
@@ -168,15 +174,25 @@ impl Core {
         // Increase the last voted round.
         self.increase_last_voted_round(self.round);
 
-        // Make a timeout message.
-        let timeout = Timeout::new(
-            self.high_qc.clone(),
-            self.round,
-            self.name,
-            self.signature_service.clone(),
-        )
-        .await;
-        debug!("Created {:?}", timeout);
+        // Make a timeout message. R3: sign at most one timeout per round; if the timer fires again in the
+        // same round, resend the one we already signed. N6: NR when no usable proposal arrived this round.
+        let timeout = match &self.last_timeout {
+            Some(timeout) if timeout.round == self.round => timeout.clone(),
+            _ => {
+                let timeout = Timeout::new(
+                    self.high_qc.clone(),
+                    self.round,
+                    self.committee.epoch,
+                    /* nr */ self.ready_round < self.round,
+                    self.name,
+                    self.signature_service.clone(),
+                )
+                .await;
+                debug!("Created {:?}", timeout);
+                self.last_timeout = Some(timeout.clone());
+                timeout
+            }
+        };
 
         // Reset the timer.
         self.timer.reset();
@@ -310,6 +326,9 @@ impl Core {
     async fn process_block(&mut self, block: &Block) -> ConsensusResult<()> {
         debug!("Processing {:?}", block);
 
+        // We only get here once the block's payload is available (N6: the proposal is usable).
+        self.ready_round = max(self.ready_round, block.round);
+
         // Let's see if we have the last three ancestors of the block, that is:
         //      b0 <- |qc0; b1| <- |qc1; block|
         // If we don't, the synchronizer asks for them to other nodes. It will
@@ -381,8 +400,9 @@ impl Core {
         // Process the QC. This may allow us to advance round.
         self.process_qc(&block.qc).await;
 
-        // Process the TC (if any). This may also allow us to advance round.
+        // Process the TC (if any). This may also allow us to advance round. R6: adopt the QC it carries.
         if let Some(ref tc) = block.tc {
+            self.process_qc(&tc.high_qc).await;
             self.advance_round(tc.round).await;
         }
 
@@ -402,6 +422,7 @@ impl Core {
         if tc.round < self.round {
             return Ok(());
         }
+        self.process_qc(&tc.high_qc).await;
         self.advance_round(tc.round).await;
         if self.name == self.leader_elector.get_leader(self.round) {
             self.generate_proposal(Some(tc)).await;

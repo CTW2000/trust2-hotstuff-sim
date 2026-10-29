@@ -1,3 +1,4 @@
+use crate::config::EpochNumber;
 use crate::consensus::Round;
 use crypto::{CryptoError, Digest, PublicKey};
 use store::StoreError;
@@ -62,4 +63,16 @@ pub enum ConsensusError {
 
     #[error("Invalid payload")]
     InvalidPayload,
+
+    #[error("Message of epoch {received}, expected epoch {expected}")]
+    WrongEpoch {
+        expected: EpochNumber,
+        received: EpochNumber,
+    },
+
+    #[error("Malformed timeout from {0}")]
+    MalformedTimeout(PublicKey),
+
+    #[error("Malformed TC for round {0}")]
+    MalformedTC(Round),
 }

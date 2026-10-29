@@ -1,5 +1,6 @@
 use super::*;
 use crate::common::{committee, keys, qc, vote};
+use crate::messages::Timeout;
 
 #[test]
 fn add_vote() {
@@ -53,4 +54,22 @@ fn cleanup() {
     aggregator.cleanup(&2);
     assert!(aggregator.votes_aggregators.is_empty());
     assert!(aggregator.timeouts_aggregators.is_empty());
+}
+
+#[test]
+fn make_tc_keeps_highest_qc_and_nr() {
+    // R2: the TC carries the highest QC of its timeouts and every signer's NR report.
+    let mut aggregator = Aggregator::new(committee());
+    let mut keys = keys();
+    let reports = [(QC::genesis(), true), (qc(), false), (QC::genesis(), true)];
+    let mut result = None;
+    for (high_qc, nr) in reports.iter() {
+        let (name, secret) = keys.pop().unwrap();
+        let timeout = Timeout::new_from_key(high_qc.clone(), 2, *nr, name, &secret);
+        result = aggregator.add_timeout(timeout).unwrap();
+    }
+    let tc = result.expect("three timeouts make a TC");
+    assert_eq!(tc.high_qc, qc());
+    assert_eq!(tc.nr_weight(&committee()), 2);
+    assert!(tc.verify(&committee()).is_ok());
 }
