@@ -76,6 +76,9 @@ pub enum ConsensusError {
     #[error("Malformed TC for round {0}")]
     MalformedTC(Round),
 
+    #[error("Received an AT accusation for round {0} without a quorum")]
+    AccusationRequiresQuorum(Round),
+
     #[error("No weight table for epoch {0}")]
     UnknownEpoch(EpochNumber),
 }

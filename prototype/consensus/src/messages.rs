@@ -13,10 +13,15 @@ use std::fmt;
 #[path = "tests/messages_tests.rs"]
 pub mod messages_tests;
 
+/// At most this many AT accusations per block.
+pub const MAX_ACCUSATIONS: usize = 32;
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Block {
     pub qc: QC,
     pub tc: Option<TC>,
+    /// G2: AT accusations of earlier rounds, put on the ledger by the proposer (DESIGN.md §12.2).
+    pub accusations: Vec<Accusation>,
     pub author: PublicKey,
     pub round: Round,
     pub epoch: EpochNumber,
@@ -29,6 +34,7 @@ impl Block {
     pub async fn new(
         qc: QC,
         tc: Option<TC>,
+        accusations: Vec<Accusation>,
         author: PublicKey,
         round: Round,
         epoch: EpochNumber,
@@ -38,6 +44,7 @@ impl Block {
         let block = Self {
             qc,
             tc,
+            accusations,
             author,
             round,
             epoch,
@@ -65,9 +72,20 @@ impl Block {
         );
         check_epoch(self.epoch, committee)?;
 
+        // At most MAX_ACCUSATIONS accusations, of distinct earlier rounds.
+        let mut rounds = HashSet::new();
+        ensure!(
+            self.accusations.len() <= MAX_ACCUSATIONS
+                && self
+                    .accusations
+                    .iter()
+                    .all(|a| a.round < self.round && rounds.insert((a.epoch, a.round))),
+            ConsensusError::MalformedBlock(self.digest())
+        );
+
         // Check the signature. The embedded QC and TC may belong to the previous epoch (the first block of
-        // an epoch carries the commit proof of the last one): the caller verifies them against the table of
-        // their own epoch (Core::verify_qc, Core::verify_tc).
+        // an epoch carries the commit proof of the last one): the caller verifies them, and the accusations,
+        // against the table of their own epoch (Core::verify_qc, Core::verify_tc, Core::verify_accusation).
         self.signature.verify(&self.digest(), &self.author)?;
         Ok(())
     }
@@ -92,6 +110,10 @@ impl Hash for Block {
                 hasher.update([1u8]);
                 hasher.update(tc.digest());
             }
+        }
+        hasher.update((self.accusations.len() as u64).to_le_bytes());
+        for accusation in &self.accusations {
+            hasher.update(accusation.digest());
         }
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
@@ -417,5 +439,75 @@ impl fmt::Debug for TC {
             self.high_qc_rounds(),
             nr
         )
+    }
+}
+
+/// An AT accusation (G2, DESIGN.md §12.2): timeouts of `round` that report no usable proposal (NR = 1), from
+/// signers holding more than 2/3 of the weight of the table of `epoch`. Anyone holding such timeouts can
+/// assemble it; the proposer puts it on the ledger.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Accusation {
+    pub round: Round,
+    pub epoch: EpochNumber,
+    /// Signer, its timeout signature (on NR = 1) and the high-QC round it signed.
+    pub votes: Vec<(PublicKey, Signature, Round)>,
+}
+
+impl Accusation {
+    /// The NR = 1 reports of a TC, if they alone are above the threshold.
+    pub fn from_tc(tc: &TC, committee: &Committee) -> Option<Self> {
+        if tc.nr_weight(committee) < committee.quorum_threshold() {
+            return None;
+        }
+        let votes = tc
+            .votes
+            .iter()
+            .filter(|(_, _, _, nr)| *nr)
+            .map(|(name, signature, high_qc_round, _)| (*name, signature.clone(), *high_qc_round))
+            .collect();
+        Some(Self { round: tc.round, epoch: tc.epoch, votes })
+    }
+
+    pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+        check_epoch(self.epoch, committee)?;
+
+        let mut weight = 0;
+        let mut used = HashSet::new();
+        for (name, _, _) in &self.votes {
+            ensure!(used.insert(*name), ConsensusError::AuthorityReuse(*name));
+            let voting_rights = committee.stake(name);
+            ensure!(voting_rights > 0, ConsensusError::UnknownAuthority(*name));
+            weight += voting_rights;
+        }
+        ensure!(
+            weight >= committee.quorum_threshold(),
+            ConsensusError::AccusationRequiresQuorum(self.round)
+        );
+
+        for (author, signature, high_qc_round) in &self.votes {
+            let digest = timeout_digest(self.epoch, self.round, *high_qc_round, true);
+            signature.verify(&digest, author)?;
+        }
+        Ok(())
+    }
+}
+
+impl Hash for Accusation {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(self.epoch.to_le_bytes());
+        hasher.update(self.round.to_le_bytes());
+        for (author, signature, high_qc_round) in &self.votes {
+            hasher.update(author.0);
+            hasher.update(signature.flatten());
+            hasher.update(high_qc_round.to_le_bytes());
+        }
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for Accusation {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "AT({}, {}, {} signers)", self.epoch, self.round, self.votes.len())
     }
 }

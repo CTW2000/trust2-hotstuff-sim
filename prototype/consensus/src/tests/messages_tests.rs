@@ -164,3 +164,75 @@ fn verify_tc_with_reports() {
         _ => panic!("TC without its highest QC accepted"),
     }
 }
+
+// ---- G2: AT accusations (prototype/DESIGN.md §12) ---------------------------------------------------------
+
+// The accusation in a TC of the first three fixture keys (all with the genesis QC) with these NR reports.
+fn accusation(round: Round, nrs: &[bool]) -> Option<Accusation> {
+    let reports: Vec<_> = nrs.iter().map(|nr| (QC::genesis(), *nr)).collect();
+    Accusation::from_tc(&tc(round, &reports), &committee())
+}
+
+#[test]
+fn accusation_from_tc_needs_nr_quorum() {
+    // Three of four equal weights are above 2/3: all three signers must report NR = 1.
+    let acc = accusation(2, &[true, true, true]).expect("NR quorum");
+    assert_eq!((acc.round, acc.epoch, acc.votes.len()), (2, EPOCH, 3));
+    assert!(acc.verify(&committee()).is_ok());
+    assert!(accusation(2, &[true, true, false]).is_none());
+}
+
+#[test]
+fn accusation_verification() {
+    let acc = accusation(2, &[true, true, true]).unwrap();
+
+    let mut short = acc.clone();
+    short.votes.pop();
+    assert!(matches!(short.verify(&committee()), Err(ConsensusError::AccusationRequiresQuorum(2))));
+
+    // A timeout signed with NR = 0 does not count as a report of NR = 1.
+    let (name, secret) = keys().remove(0);
+    let nr0 = Timeout::new_from_key(QC::genesis(), 2, false, name, &secret);
+    let mut lying = acc.clone();
+    lying.votes[0] = (name, nr0.signature, 0);
+    assert!(lying.verify(&committee()).is_err());
+
+    let mut reuse = acc.clone();
+    reuse.votes[2] = reuse.votes[0].clone();
+    assert!(reuse.verify(&committee()).is_err());
+
+    let mut other = acc.clone();
+    other.epoch = EPOCH + 1;
+    assert!(other.verify(&committee()).is_err());
+}
+
+#[test]
+fn block_digest_covers_accusations() {
+    let (name, secret) = leader();
+    let acc = accusation(2, &[true, true, true]).unwrap();
+    let with = Block::new_from_key_with_accusations(qc(), vec![acc], name, 3, &secret);
+    let without = Block::new_from_key_with_accusations(qc(), vec![], name, 3, &secret);
+    assert_ne!(with.digest(), without.digest());
+    assert!(with.verify(&committee()).is_ok());
+
+    let mut tampered = with.clone();
+    tampered.accusations.clear();
+    assert!(tampered.verify(&committee()).is_err());
+}
+
+#[test]
+fn block_accusations_are_bounded() {
+    let (name, secret) = leader();
+    let acc = |round| accusation(round, &[true, true, true]).unwrap();
+    let malformed = |b: Block| matches!(b.verify(&committee()), Err(ConsensusError::MalformedBlock(_)));
+
+    // The same round twice.
+    assert!(malformed(Block::new_from_key_with_accusations(qc(), vec![acc(2), acc(2)], name, 5, &secret)));
+    // A round that is not before the block's.
+    assert!(malformed(Block::new_from_key_with_accusations(qc(), vec![acc(5)], name, 5, &secret)));
+    // Too many.
+    let many: Vec<_> = (1..=MAX_ACCUSATIONS as Round + 1).map(acc).collect();
+    assert!(malformed(Block::new_from_key_with_accusations(qc(), many, name, 100, &secret)));
+    let enough: Vec<_> = (1..=MAX_ACCUSATIONS as Round).map(acc).collect();
+    assert!(Block::new_from_key_with_accusations(qc(), enough, name, 100, &secret).verify(&committee()).is_ok());
+}

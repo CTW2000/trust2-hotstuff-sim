@@ -1,10 +1,10 @@
-use crate::config::{Committee, Stake};
+use crate::config::{Committee, EpochNumber, Stake};
 use crate::consensus::Round;
 use crate::error::{ConsensusError, ConsensusResult};
-use crate::messages::{Timeout, Vote, QC, TC};
+use crate::messages::{Accusation, Timeout, Vote, QC, TC};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[cfg(test)]
 #[path = "tests/aggregator_tests.rs"]
@@ -55,6 +55,58 @@ impl Aggregator {
     pub fn cleanup(&mut self, round: &Round) {
         self.votes_aggregators.retain(|k, _| k >= round);
         self.timeouts_aggregators.retain(|k, _| k >= round);
+    }
+}
+
+/// G2: collects the NR = 1 timeouts of each round, also those that arrive after the round is over, into
+/// AT accusations (one per round). Timeouts are verified by the caller.
+pub struct Accuser {
+    makers: BTreeMap<(EpochNumber, Round), (Stake, Vec<(PublicKey, Signature, Round)>)>,
+    made: BTreeSet<(EpochNumber, Round)>,
+}
+
+impl Accuser {
+    pub fn new() -> Self {
+        Self {
+            makers: BTreeMap::new(),
+            made: BTreeSet::new(),
+        }
+    }
+
+    pub fn add(&mut self, timeout: &Timeout, committee: &Committee) -> Option<Accusation> {
+        let key = (timeout.epoch, timeout.round);
+        if !timeout.nr || self.made.contains(&key) {
+            return None;
+        }
+        let (weight, votes) = self.makers.entry(key).or_insert_with(|| (0, Vec::new()));
+        if votes.iter().any(|(name, _, _)| *name == timeout.author) {
+            return None;
+        }
+        votes.push((timeout.author, timeout.signature.clone(), timeout.high_qc.round));
+        *weight += committee.stake(&timeout.author);
+        if *weight < committee.quorum_threshold() {
+            return None;
+        }
+        let (_, votes) = self.makers.remove(&key).unwrap();
+        self.made.insert(key);
+        Some(Accusation {
+            round: timeout.round,
+            epoch: timeout.epoch,
+            votes,
+        })
+    }
+
+    /// An accusation obtained otherwise (from a TC): returns whether its round had none yet.
+    pub fn note(&mut self, accusation: &Accusation) -> bool {
+        let key = (accusation.epoch, accusation.round);
+        self.makers.remove(&key);
+        self.made.insert(key)
+    }
+
+    /// Forget the rounds before `round`.
+    pub fn cleanup(&mut self, round: Round) {
+        self.makers.retain(|(_, r), _| *r >= round);
+        self.made.retain(|(_, r)| *r >= round);
     }
 }
 

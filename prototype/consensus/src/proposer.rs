@@ -64,6 +64,7 @@ impl Proposer {
         let block = Block::new(
             qc,
             tc,
+            /* accusations */ Vec::new(),
             self.name,
             round,
             self.committee.epoch,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::common::{committee, keys, qc, vote};
-use crate::messages::Timeout;
+use crate::messages::{Accusation, Timeout};
 
 #[test]
 fn add_vote() {
@@ -72,4 +72,29 @@ fn make_tc_keeps_highest_qc_and_nr() {
     assert_eq!(tc.high_qc, qc());
     assert_eq!(tc.nr_weight(&committee()), 2);
     assert!(tc.verify(&committee()).is_ok());
+}
+
+#[test]
+fn accuser_makes_one_accusation_from_nr_timeouts() {
+    // G2: NR = 1 timeouts above 2/3 of the weight make one AT accusation; NR = 0 ones do not count.
+    let mut accuser = Accuser::new();
+    let keys = keys();
+    let timeout = |i: usize, nr: bool| Timeout::new_from_key(QC::genesis(), 2, nr, keys[i].0, &keys[i].1);
+    assert!(accuser.add(&timeout(0, true), &committee()).is_none());
+    assert!(accuser.add(&timeout(1, false), &committee()).is_none());
+    assert!(accuser.add(&timeout(0, true), &committee()).is_none()); // the same signer again
+    assert!(accuser.add(&timeout(2, true), &committee()).is_none());
+    let accusation = accuser.add(&timeout(3, true), &committee()).expect("three NR = 1 reports");
+    assert_eq!((accusation.round, accusation.votes.len()), (2, 3));
+    assert!(accusation.verify(&committee()).is_ok());
+
+    // Once made (here or from a TC), the round gives no second accusation.
+    assert!(accuser.add(&timeout(1, true), &committee()).is_none());
+    let other = Accusation { round: 3, ..accusation.clone() };
+    assert!(accuser.note(&other));
+    assert!(!accuser.note(&other));
+
+    // Rounds before the cleanup round are forgotten.
+    accuser.cleanup(3);
+    assert!(accuser.makers.is_empty() && accuser.made.iter().all(|(_, r)| *r >= 3));
 }

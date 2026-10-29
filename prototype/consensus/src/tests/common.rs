@@ -1,6 +1,6 @@
 use crate::config::{Committee, EpochNumber};
 use crate::consensus::Round;
-use crate::messages::{Block, Timeout, Vote, QC, TC};
+use crate::messages::{Accusation, Block, Timeout, Vote, QC, TC};
 use bytes::Bytes;
 use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
@@ -67,9 +67,32 @@ impl Block {
         payload: Vec<Digest>,
         secret: &SecretKey,
     ) -> Self {
+        Self::new_from_key_full(qc, tc, Vec::new(), author, round, payload, secret)
+    }
+
+    pub fn new_from_key_with_accusations(
+        qc: QC,
+        accusations: Vec<Accusation>,
+        author: PublicKey,
+        round: Round,
+        secret: &SecretKey,
+    ) -> Self {
+        Self::new_from_key_full(qc, None, accusations, author, round, Vec::new(), secret)
+    }
+
+    pub fn new_from_key_full(
+        qc: QC,
+        tc: Option<TC>,
+        accusations: Vec<Accusation>,
+        author: PublicKey,
+        round: Round,
+        payload: Vec<Digest>,
+        secret: &SecretKey,
+    ) -> Self {
         let block = Block {
             qc,
             tc,
+            accusations,
             author,
             round,
             epoch: EPOCH,
