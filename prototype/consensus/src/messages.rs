@@ -783,8 +783,19 @@ impl Evidence {
 
     pub fn verify(&self) -> ConsensusResult<()> {
         let vote = self.vote();
-        let malformed = ConsensusError::MalformedEvidence(vote.author);
-        let holds = match self {
+        ensure!(self.holds(), ConsensusError::MalformedEvidence(vote.author));
+        vote.signature.verify(&vote.digest(), &vote.author)?;
+        match self {
+            Evidence::DoubleVote(_, other) => other.signature.verify(&other.digest(), &other.author)?,
+            Evidence::Regression(_, _, timeout) | Evidence::NrContradiction(_, timeout) => timeout.verify()?,
+            Evidence::InvalidBlock(..) => (),
+        }
+        Ok(())
+    }
+
+    /// Whether the messages contradict each other as claimed (signatures aside).
+    pub fn holds(&self) -> bool {
+        match self {
             Evidence::DoubleVote(a, b) => {
                 a.author == b.author && a.epoch == b.epoch && a.round == b.round && a.hash != b.hash
             }
@@ -813,15 +824,7 @@ impl Evidence {
                     && timeout.round == vote.round
                     && timeout.nr
             }
-        };
-        ensure!(holds, malformed);
-        vote.signature.verify(&vote.digest(), &vote.author)?;
-        match self {
-            Evidence::DoubleVote(_, other) => other.signature.verify(&other.digest(), &other.author)?,
-            Evidence::Regression(_, _, timeout) | Evidence::NrContradiction(_, timeout) => timeout.verify()?,
-            Evidence::InvalidBlock(..) => (),
         }
-        Ok(())
     }
 }
 

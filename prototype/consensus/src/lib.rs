@@ -5,6 +5,7 @@ mod config;
 mod consensus;
 mod core;
 mod epoch;
+mod evidence;
 mod helper;
 mod inclusion;
 mod leader;
