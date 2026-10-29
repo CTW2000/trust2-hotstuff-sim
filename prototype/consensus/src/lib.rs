@@ -10,6 +10,7 @@ mod leader;
 mod mempool;
 mod messages;
 mod proposer;
+mod reputation;
 mod synchronizer;
 mod timer;
 pub mod ttru;

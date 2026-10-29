@@ -83,7 +83,7 @@ impl Epochs {
     /// W_e = F(ledger up to G_{e-1}). P2: no evidence yet, so r = 1 and z = 1 for everyone.
     fn make_table(&self, epoch: EpochNumber) -> Committee {
         let n = self.members.len();
-        let stakes = ttru::table(&self.base, &vec![1_000_000; n], &vec![true; n]);
+        let stakes = ttru::table(&self.base, &vec![1_000_000; n], &vec![true; n], ttru::ONE);
         Committee {
             authorities: self
                 .members

@@ -55,7 +55,7 @@ fn table_rounds_and_suspends() {
     let case = &cases()[0];
     let b = base_weights(&classes(case), &case.weights, from_ppm(case.cap_ppm), from_ppm(case.u_max_ppm));
     let n = b.len();
-    let full = table(&b, &vec![1_000_000; n], &vec![true; n]);
+    let full = table(&b, &vec![1_000_000; n], &vec![true; n], ONE);
     let total: u64 = full.iter().sum();
     assert!(STAKE_TOTAL as u64 - total < n as u64);
     for (x, y) in full.iter().zip(&b) {
@@ -65,7 +65,7 @@ fn table_rounds_and_suspends() {
     // A suspended entity gets no stake; the others' relative shares are unchanged (no CapNorm recomputation).
     let mut z = vec![true; n];
     z[0] = false;
-    let t = table(&b, &vec![1_000_000; n], &z);
+    let t = table(&b, &vec![1_000_000; n], &z, ONE);
     assert_eq!(t[0], 0);
     let scale = 1.0 / (1.0 - as_f64(b[0]));
     assert!((t[1] as f64 - as_f64(b[1]) * 1e6 * scale).abs() <= 1.0);
@@ -73,7 +73,7 @@ fn table_rounds_and_suspends() {
     // Reputation 0.7 scales an entity's table weight before normalization.
     let mut r = vec![1_000_000; n];
     r[1] = 700_000;
-    let t = table(&b, &r, &vec![true; n]);
+    let t = table(&b, &r, &vec![true; n], ONE);
     assert!((t[1] as f64 / full[1] as f64 - 0.7 / (1.0 - 0.3 * as_f64(b[1]))).abs() < 1e-3);
 }
 

@@ -99,14 +99,27 @@ pub fn base_weights(classes: &[Class], w: &[u64], cap: u128, u_max: u128) -> Vec
 
 /// The weight table of an epoch: T_i = base_i · r_i · z_i, normalized to integer stakes summing to about
 /// STAKE_TOTAL (floor rounding). `r_ppm` is the reputation in ppm (r_min ≤ r ≤ 1), `z` the suspension
-/// switch (false while suspended or evicted).
-pub fn table(base: &[u128], r_ppm: &[u64], z: &[bool]) -> Vec<u64> {
+/// switch (false while suspended or evicted). The cut weight Σ base_i (1 - r_i) is at most `b_rep` (fixed
+/// point): beyond it every cut shrinks in proportion, and cut weight is not redistributed (as TtruWeights
+/// in sim2/ttru.py).
+pub fn table(base: &[u128], r_ppm: &[u64], z: &[bool], b_rep: u128) -> Vec<u64> {
     assert!(base.len() == r_ppm.len() && base.len() == z.len());
-    let t: Vec<u128> = base
+    let mut cut: Vec<u128> = base
         .iter()
         .zip(r_ppm)
+        .map(|(b, r)| b * (PPM - *r as u128) / PPM)
+        .collect();
+    let total_cut: u128 = cut.iter().sum();
+    if total_cut > b_rep {
+        for c in cut.iter_mut() {
+            *c = *c * b_rep / total_cut; // at most 10^18 · 10^18, within u128
+        }
+    }
+    let t: Vec<u128> = base
+        .iter()
+        .zip(&cut)
         .zip(z)
-        .map(|((b, r), z)| if *z { b * (*r as u128) / PPM } else { 0 })
+        .map(|((b, c), z)| if *z { b - c } else { 0 })
         .collect();
     let sum: u128 = t.iter().sum();
     t.iter()
