@@ -19,6 +19,8 @@ pub const MAX_ACCUSATIONS: usize = 32;
 pub const MAX_OTXS: usize = 16;
 /// At most this many omission proofs per block.
 pub const MAX_OMISSIONS: usize = 32;
+/// At most this many pieces of G1 evidence per block.
+pub const MAX_EVIDENCE: usize = 16;
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Block {
@@ -29,6 +31,8 @@ pub struct Block {
     /// G2: observed transactions included by the proposer, and omission proofs of earlier rounds (§12.4).
     pub otxs: Vec<Otx>,
     pub omissions: Vec<OmitProof>,
+    /// G1 evidence (DESIGN.md §13).
+    pub evidence: Vec<Evidence>,
     pub author: PublicKey,
     pub round: Round,
     pub epoch: EpochNumber,
@@ -44,6 +48,7 @@ impl Block {
         accusations: Vec<Accusation>,
         otxs: Vec<Otx>,
         omissions: Vec<OmitProof>,
+        evidence: Vec<Evidence>,
         author: PublicKey,
         round: Round,
         epoch: EpochNumber,
@@ -56,6 +61,7 @@ impl Block {
             accusations,
             otxs,
             omissions,
+            evidence,
             author,
             round,
             epoch,
@@ -105,7 +111,8 @@ impl Block {
                 && self
                     .omissions
                     .iter()
-                    .all(|o| o.round < self.round && omitted.insert((o.epoch, o.round, o.otx.id()))),
+                    .all(|o| o.round < self.round && omitted.insert((o.epoch, o.round, o.otx.id())))
+                && self.evidence.len() <= MAX_EVIDENCE,
             ConsensusError::MalformedBlock(self.digest())
         );
 
@@ -148,6 +155,10 @@ impl Hash for Block {
         hasher.update((self.omissions.len() as u64).to_le_bytes());
         for omission in &self.omissions {
             hasher.update(omission.digest());
+        }
+        hasher.update((self.evidence.len() as u64).to_le_bytes());
+        for evidence in &self.evidence {
+            hasher.update(evidence.digest());
         }
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
@@ -695,5 +706,166 @@ impl Hash for OmitProof {
 impl fmt::Debug for OmitProof {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "OMIT({}, {}, {}, {} signers)", self.epoch, self.round, self.otx.id(), self.attestations.len())
+    }
+}
+
+/// A timeout as a piece of evidence: what its author signed (rule R1), without the QC itself.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct SignedTimeout {
+    pub author: PublicKey,
+    pub signature: Signature,
+    pub epoch: EpochNumber,
+    pub round: Round,
+    pub high_qc_round: Round,
+    pub nr: bool,
+}
+
+impl SignedTimeout {
+    fn verify(&self) -> ConsensusResult<()> {
+        let digest = timeout_digest(self.epoch, self.round, self.high_qc_round, self.nr);
+        self.signature.verify(&digest, &self.author)?;
+        Ok(())
+    }
+}
+
+impl From<&Timeout> for SignedTimeout {
+    fn from(timeout: &Timeout) -> Self {
+        Self {
+            author: timeout.author,
+            signature: timeout.signature.clone(),
+            epoch: timeout.epoch,
+            round: timeout.round,
+            high_qc_round: timeout.high_qc.round,
+            nr: timeout.nr,
+        }
+    }
+}
+
+/// G1 evidence (DESIGN.md §13.1; theory §2.3, NR extension 1.1): transferable proofs made of the culprit's own
+/// signatures, which honest nodes never produce (rules R1-R6).
+#[derive(Clone, Serialize, Deserialize)]
+pub enum Evidence {
+    /// E1: two votes of one signer for the same (epoch, round) and different blocks.
+    DoubleVote(Vote, Vote),
+    /// E2: a vote for a block that breaks the voting rule: its round is neither the one after its QC nor
+    /// justified by its TC (structural check; the certificates' signatures are not needed).
+    InvalidBlock(Vote, Block),
+    /// E3: a vote at round v1 for a block certifying round j, and a timeout of the same signer at a round
+    /// v2 >= v1 reporting a high QC below j.
+    Regression(Vote, Block, SignedTimeout),
+    /// NR self-contradiction: a vote and an NR = 1 timeout of one signer for the same (epoch, round).
+    NrContradiction(Vote, SignedTimeout),
+}
+
+impl Evidence {
+    fn vote(&self) -> &Vote {
+        match self {
+            Evidence::DoubleVote(vote, _)
+            | Evidence::InvalidBlock(vote, _)
+            | Evidence::Regression(vote, _, _)
+            | Evidence::NrContradiction(vote, _) => vote,
+        }
+    }
+
+    pub fn culprit(&self) -> PublicKey {
+        self.vote().author
+    }
+
+    /// The epoch the culprit signed in.
+    pub fn epoch(&self) -> EpochNumber {
+        self.vote().epoch
+    }
+
+    /// E1-E3 are safety evidence, the NR self-contradiction liveness evidence.
+    pub fn is_safety(&self) -> bool {
+        !matches!(self, Evidence::NrContradiction(..))
+    }
+
+    pub fn verify(&self) -> ConsensusResult<()> {
+        let vote = self.vote();
+        let malformed = ConsensusError::MalformedEvidence(vote.author);
+        let holds = match self {
+            Evidence::DoubleVote(a, b) => {
+                a.author == b.author && a.epoch == b.epoch && a.round == b.round && a.hash != b.hash
+            }
+            Evidence::InvalidBlock(vote, block) => {
+                let adjacent = block.qc.round + 1 == block.round;
+                let justified = block.tc.as_ref().map_or(false, |tc| {
+                    tc.round + 1 == block.round
+                        && block.qc.round >= tc.high_qc_rounds().into_iter().max().unwrap_or(0)
+                });
+                vote.hash == block.digest()
+                    && vote.round == block.round
+                    && vote.epoch == block.epoch
+                    && (block.qc.round >= block.round || !(adjacent || justified))
+            }
+            Evidence::Regression(vote, block, timeout) => {
+                vote.hash == block.digest()
+                    && vote.round == block.round
+                    && timeout.author == vote.author
+                    && timeout.epoch == vote.epoch
+                    && timeout.round >= vote.round
+                    && timeout.high_qc_round < block.qc.round
+            }
+            Evidence::NrContradiction(vote, timeout) => {
+                timeout.author == vote.author
+                    && timeout.epoch == vote.epoch
+                    && timeout.round == vote.round
+                    && timeout.nr
+            }
+        };
+        ensure!(holds, malformed);
+        vote.signature.verify(&vote.digest(), &vote.author)?;
+        match self {
+            Evidence::DoubleVote(_, other) => other.signature.verify(&other.digest(), &other.author)?,
+            Evidence::Regression(_, _, timeout) | Evidence::NrContradiction(_, timeout) => timeout.verify()?,
+            Evidence::InvalidBlock(..) => (),
+        }
+        Ok(())
+    }
+}
+
+impl Hash for Evidence {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        let vote = self.vote();
+        hasher.update(vote.author.0);
+        hasher.update(vote.signature.flatten());
+        hasher.update(vote.digest());
+        match self {
+            Evidence::DoubleVote(_, other) => {
+                hasher.update([1u8]);
+                hasher.update(other.signature.flatten());
+                hasher.update(other.digest());
+            }
+            Evidence::InvalidBlock(_, block) => {
+                hasher.update([2u8]);
+                hasher.update(block.digest());
+            }
+            Evidence::Regression(_, block, timeout) => {
+                hasher.update([3u8]);
+                hasher.update(block.digest());
+                hasher.update(timeout.signature.flatten());
+                hasher.update(timeout_digest(timeout.epoch, timeout.round, timeout.high_qc_round, timeout.nr));
+            }
+            Evidence::NrContradiction(_, timeout) => {
+                hasher.update([4u8]);
+                hasher.update(timeout.signature.flatten());
+                hasher.update(timeout_digest(timeout.epoch, timeout.round, timeout.high_qc_round, timeout.nr));
+            }
+        }
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for Evidence {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let what = match self {
+            Evidence::DoubleVote(..) => "E1",
+            Evidence::InvalidBlock(..) => "E2",
+            Evidence::Regression(..) => "E3",
+            Evidence::NrContradiction(..) => "NR",
+        };
+        write!(f, "{}({}, {}, {})", what, self.culprit(), self.epoch(), self.vote().round)
     }
 }

@@ -1,6 +1,6 @@
 use crate::config::{Committee, EpochNumber};
 use crate::consensus::Round;
-use crate::messages::{Accusation, Attestation, Block, OmitProof, Otx, Timeout, Vote, QC, TC};
+use crate::messages::{Accusation, Attestation, Block, Evidence, OmitProof, Otx, Timeout, Vote, QC, TC};
 use bytes::Bytes;
 use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
@@ -98,6 +98,7 @@ impl Block {
             accusations,
             otxs,
             omissions,
+            evidence: Vec::new(),
             author,
             round,
             epoch: EPOCH,
@@ -249,6 +250,20 @@ pub fn listener(address: SocketAddr, expected: Option<Bytes>) -> JoinHandle<()> 
             _ => panic!("Failed to receive network message"),
         }
     })
+}
+
+impl Block {
+    pub fn new_from_key_evidence(
+        qc: QC,
+        evidence: Vec<Evidence>,
+        author: PublicKey,
+        round: Round,
+        secret: &SecretKey,
+    ) -> Self {
+        let block = Self { evidence, ..Block::new_from_key(qc, author, round, Vec::new(), secret) };
+        let signature = Signature::new(&block.digest(), secret);
+        Self { signature, ..block }
+    }
 }
 
 impl Attestation {

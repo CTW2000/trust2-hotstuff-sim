@@ -347,3 +347,96 @@ fn block_otxs_and_omissions_are_bounded() {
     let proof = omission(4, block().digest(), &x, &atts);
     assert!(malformed(make(vec![], vec![proof.clone(), proof])));
 }
+
+// ---- G1 evidence (prototype/DESIGN.md §13) ------------------------------------------------------------------
+
+fn qc_of(round: Round) -> QC {
+    QC { hash: Digest([round as u8; 32]), round, epoch: EPOCH, votes: Vec::new() }
+}
+
+fn signed_timeout(round: Round, high_qc_round: Round, nr: bool, key: &(PublicKey, SecretKey)) -> SignedTimeout {
+    let timeout = Timeout::new_from_key(qc_of(high_qc_round), round, nr, key.0, &key.1);
+    SignedTimeout::from(&timeout)
+}
+
+#[test]
+fn double_vote_evidence() {
+    let key = keys().remove(0);
+    let a = Vote::new_from_key(Digest([1; 32]), 5, key.0, &key.1);
+    let b = Vote::new_from_key(Digest([2; 32]), 5, key.0, &key.1);
+    let evidence = Evidence::DoubleVote(a.clone(), b.clone());
+    assert!(evidence.verify().is_ok());
+    assert_eq!((evidence.culprit(), evidence.epoch(), evidence.is_safety()), (key.0, EPOCH, true));
+
+    assert!(Evidence::DoubleVote(a.clone(), a.clone()).verify().is_err()); // the same block
+    let other_round = Vote::new_from_key(Digest([2; 32]), 6, key.0, &key.1);
+    assert!(Evidence::DoubleVote(a.clone(), other_round).verify().is_err());
+    let other = keys().remove(1);
+    let someone_else = Vote::new_from_key(Digest([2; 32]), 5, other.0, &other.1);
+    assert!(Evidence::DoubleVote(a.clone(), someone_else).verify().is_err());
+    let mut forged = b;
+    forged.signature = a.signature.clone();
+    assert!(Evidence::DoubleVote(a, forged).verify().is_err());
+}
+
+#[test]
+fn invalid_block_evidence() {
+    let (leader_key, voter) = (leader(), keys().remove(0));
+    // Round 5 extends a QC of round 1 without a TC: no honest node votes for it.
+    let bad = Block::new_from_key(qc_of(1), leader_key.0, 5, Vec::new(), &leader_key.1);
+    let vote = Vote::new_from_key(bad.digest(), 5, voter.0, &voter.1);
+    assert!(Evidence::InvalidBlock(vote, bad.clone()).verify().is_ok());
+
+    // A block of the next round after its QC is valid; a vote for another block proves nothing.
+    let good = Block::new_from_key(qc_of(4), leader_key.0, 5, Vec::new(), &leader_key.1);
+    let vote = Vote::new_from_key(good.digest(), 5, voter.0, &voter.1);
+    assert!(Evidence::InvalidBlock(vote.clone(), good).verify().is_err());
+    assert!(Evidence::InvalidBlock(vote, bad).verify().is_err());
+}
+
+#[test]
+fn regression_evidence() {
+    let (leader_key, voter) = (leader(), keys().remove(0));
+    // A vote at round 3 for a block certifying round 2, then a timeout at round >= 3 reporting hq 1 < 2.
+    let block = Block::new_from_key(qc_of(2), leader_key.0, 3, Vec::new(), &leader_key.1);
+    let vote = Vote::new_from_key(block.digest(), 3, voter.0, &voter.1);
+    let e3 = |timeout| Evidence::Regression(vote.clone(), block.clone(), timeout);
+    assert!(e3(signed_timeout(4, 1, false, &voter)).verify().is_ok());
+    assert!(e3(signed_timeout(3, 1, false, &voter)).verify().is_ok()); // the same round
+    assert!(e3(signed_timeout(4, 2, false, &voter)).verify().is_err()); // hq not below j
+    assert!(e3(signed_timeout(2, 1, false, &voter)).verify().is_err()); // the timeout is earlier
+    assert!(e3(signed_timeout(4, 1, false, &leader_key)).verify().is_err()); // someone else's timeout
+}
+
+#[test]
+fn nr_contradiction_evidence() {
+    let voter = keys().remove(0);
+    let vote = Vote::new_from_key(Digest([1; 32]), 5, voter.0, &voter.1);
+    let evidence = Evidence::NrContradiction(vote.clone(), signed_timeout(5, 4, true, &voter));
+    assert!(evidence.verify().is_ok());
+    assert!(!evidence.is_safety());
+    assert!(Evidence::NrContradiction(vote.clone(), signed_timeout(5, 4, false, &voter)).verify().is_err());
+    assert!(Evidence::NrContradiction(vote.clone(), signed_timeout(6, 4, true, &voter)).verify().is_err());
+    let mut flipped = signed_timeout(5, 4, false, &voter);
+    flipped.nr = true; // NR is in the signed message
+    assert!(Evidence::NrContradiction(vote, flipped).verify().is_err());
+}
+
+#[test]
+fn block_digest_covers_evidence() {
+    let (name, secret) = leader();
+    let voter = keys().remove(0);
+    let a = Vote::new_from_key(Digest([1; 32]), 5, voter.0, &voter.1);
+    let b = Vote::new_from_key(Digest([2; 32]), 5, voter.0, &voter.1);
+    let evidence = vec![Evidence::DoubleVote(a, b)];
+    let with = Block::new_from_key_evidence(qc(), evidence.clone(), name, 6, &secret);
+    let without = Block::new_from_key_evidence(qc(), vec![], name, 6, &secret);
+    assert_ne!(with.digest(), without.digest());
+    assert!(with.verify(&committee()).is_ok());
+    let mut tampered = with.clone();
+    tampered.evidence.clear();
+    assert!(tampered.verify(&committee()).is_err());
+    let many = vec![evidence[0].clone(); MAX_EVIDENCE + 1];
+    let over = Block::new_from_key_evidence(qc(), many, name, 6, &secret);
+    assert!(matches!(over.verify(&committee()), Err(ConsensusError::MalformedBlock(_))));
+}
