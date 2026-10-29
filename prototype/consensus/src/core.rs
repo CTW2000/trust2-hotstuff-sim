@@ -42,6 +42,10 @@ pub struct Faults {
     pub equivocate: bool,
     /// After every vote, also broadcast an NR = 1 timeout of the same round (NR self-contradiction).
     pub lie_nr: bool,
+    /// As leader, extend an older QC without a TC (a block that breaks the voting rule) and vote for it (E2).
+    pub invalid_block: bool,
+    /// After every vote, also broadcast a timeout of the same round with an older high QC (E3).
+    pub regress: bool,
 }
 
 pub struct Core {
@@ -59,6 +63,8 @@ pub struct Core {
     last_voted_round: Round,
     last_committed_round: Round,
     high_qc: QC,
+    // The high QC before the current one (used only by the experiment switches).
+    prev_high_qc: QC,
     // N6: highest round for which we hold a usable proposal (the leader's signed block and its payload).
     ready_round: Round,
     // R3: the timeout we signed for the current round, resent if the timer fires again in that round.
@@ -118,6 +124,7 @@ impl Core {
                 last_voted_round: 0,
                 last_committed_round: 0,
                 high_qc: QC::genesis(),
+                prev_high_qc: QC::genesis(),
                 ready_round: 0,
                 last_timeout: None,
                 timer: Timer::new(timeout_delay),
@@ -440,7 +447,7 @@ impl Core {
 
     fn update_high_qc(&mut self, qc: &QC) {
         if qc.round > self.high_qc.round {
-            self.high_qc = qc.clone();
+            self.prev_high_qc = std::mem::replace(&mut self.high_qc, qc.clone());
         }
     }
 
@@ -620,10 +627,16 @@ impl Core {
     #[async_recursion]
     async fn generate_proposal(&mut self, tc: Option<TC>) {
         let committee = self.committee().clone();
+        // Experiment switch: extend an older QC without a TC, a block no honest node votes for (E2).
+        let older = self.prev_high_qc.clone();
+        let (qc, tc) = match self.faults.invalid_block && older != QC::genesis() && older.round + 1 < self.round {
+            true => (older, None),
+            false => (self.high_qc.clone(), tc),
+        };
         self.tx_proposer
             .send(ProposerMessage::Make {
                 round: self.round,
-                qc: self.high_qc.clone(),
+                qc,
                 tc,
                 committee,
                 done: self.epochs.done(),
@@ -654,6 +667,31 @@ impl Core {
             block.round,
             block.epoch,
             /* nr */ true,
+            self.name,
+            self.signature_service.clone(),
+        )
+        .await;
+        let addresses = self
+            .committee()
+            .broadcast_addresses(&self.name)
+            .into_iter()
+            .map(|(_, x)| x)
+            .collect();
+        let message = bincode::serialize(&ConsensusMessage::Timeout(timeout)).expect("Failed to serialize timeout");
+        self.network.broadcast(addresses, Bytes::from(message)).await;
+    }
+
+    /// Experiment switch: after voting for a block certifying round j, a timeout of the same round reporting an
+    /// older high QC (below j) (E3).
+    async fn regress(&mut self, block: &Block) {
+        if self.prev_high_qc.round >= block.qc.round {
+            return;
+        }
+        let timeout = Timeout::new(
+            self.prev_high_qc.clone(),
+            block.round,
+            block.epoch,
+            /* nr */ false,
             self.name,
             self.signature_service.clone(),
         )
@@ -782,13 +820,24 @@ impl Core {
         }
 
         // See if we can vote for this block.
-        if let Some(vote) = self.make_vote(block).await {
+        let vote = match self.make_vote(block).await {
+            Some(vote) => Some(vote),
+            // Experiment switch: vote for our own invalid block anyway (E2).
+            None if self.faults.invalid_block && block.author == self.name && block.round == self.round => {
+                Some(Vote::new(block, self.name, self.signature_service.clone()).await)
+            }
+            None => None,
+        };
+        if let Some(vote) = vote {
             debug!("Created {:?}", vote);
             if self.faults.lie_nr {
                 self.lie_about_nr(block).await;
             }
             if self.faults.equivocate {
                 self.vote_twice(&vote).await;
+            }
+            if self.faults.regress {
+                self.regress(block).await;
             }
             let next_leader = leader(self.committee(), self.round + 1);
             if next_leader == self.name {

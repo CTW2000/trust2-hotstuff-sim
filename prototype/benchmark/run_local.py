@@ -88,11 +88,14 @@ def run(args):
     for i, addr in enumerate(committee.front[:clients]):
         cmd = f"{client} {addr} --size {args.tx_size} --rate {rate_share} --timeout {args.timeout_delay}"
         procs.append(launch(cmd, PathMaker.client_log_file(i)))
-    # Experiment switches, from the last booted node backwards: censors, then equivocators, then NR liars.
+    # Experiment switches, from the last booted node backwards: censors, equivocators, NR liars, invalid-block
+    # leaders, then high-QC regressors.
     # Censors may instead lead consecutive rounds (round robin follows the public keys' byte order).
     switches = {}
     tail = list(range(up - 1, -1, -1))
-    for flag, count in (("--censor", args.censor), ("--equivocate", args.equivocate), ("--lie-nr", args.lie_nr)):
+    roles = (("--censor", args.censor), ("--equivocate", args.equivocate), ("--lie-nr", args.lie_nr),
+             ("--invalid-block", args.invalid_block), ("--regress", args.regress))
+    for flag, count in roles:
         for i in tail[:count]:
             switches.setdefault(i, []).append(flag)
         tail = tail[count:]
@@ -158,6 +161,8 @@ def main():
     ap.add_argument("--censor-adjacent", action="store_true", help="censors lead consecutive rounds")
     ap.add_argument("--equivocate", type=int, default=0, help="number of booted nodes that vote twice (E1)")
     ap.add_argument("--lie-nr", type=int, default=0, help="number of booted nodes that lie about NR")
+    ap.add_argument("--invalid-block", type=int, default=0, help="number of booted nodes that propose invalid blocks (E2)")
+    ap.add_argument("--regress", type=int, default=0, help="number of booted nodes that regress their high QC (E3)")
     ap.add_argument("--l-max-ppm", type=int, default=100_000, help="G1 suspension cap L_max in ppm")
     ap.add_argument("--governance-malicious", action="store_true", help="G1: an L4 without a fork evicts")
     ap.add_argument("--entity-cap-ppm", type=int, default=1_000_000)

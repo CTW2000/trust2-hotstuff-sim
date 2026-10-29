@@ -39,6 +39,12 @@ pub struct Parameters {
     /// Experiment switch: after every vote, also sign an NR = 1 timeout of the same round (NR contradiction).
     #[serde(default)]
     pub lie_nr: bool,
+    /// Experiment switch: as leader, propose blocks that break the voting rule and vote for them (E2).
+    #[serde(default)]
+    pub invalid_block: bool,
+    /// Experiment switch: after every vote, also sign a timeout of the same round with an older high QC (E3).
+    #[serde(default)]
+    pub regress: bool,
 }
 
 fn default_attest_guard() -> u64 {
@@ -71,6 +77,8 @@ impl Default for Parameters {
             censor: false,
             equivocate: false,
             lie_nr: false,
+            invalid_block: false,
+            regress: false,
         }
     }
 }
@@ -91,6 +99,12 @@ impl Parameters {
         }
         if self.lie_nr {
             info!("Lying about NR after every vote (experiment)");
+        }
+        if self.invalid_block {
+            info!("Proposing and voting for invalid blocks (experiment)");
+        }
+        if self.regress {
+            info!("Regressing the high QC after every vote (experiment)");
         }
         info!(
             "Entity cap set to {} ppm, uncertified class cap to {} ppm",

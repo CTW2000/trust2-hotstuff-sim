@@ -108,7 +108,12 @@ impl Consensus {
             committee.clone(),
             epoch_config,
             Inclusion::new(Duration::from_millis(parameters.attest_guard), parameters.censor),
-            Faults { equivocate: parameters.equivocate, lie_nr: parameters.lie_nr },
+            Faults {
+                equivocate: parameters.equivocate,
+                lie_nr: parameters.lie_nr,
+                invalid_block: parameters.invalid_block,
+                regress: parameters.regress,
+            },
             signature_service.clone(),
             store.clone(),
             mempool_driver,

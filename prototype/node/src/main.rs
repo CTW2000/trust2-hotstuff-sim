@@ -55,6 +55,12 @@ enum Command {
         /// Experiment switch: lie about NR after every vote (DESIGN.md §13.3).
         #[clap(long)]
         lie_nr: bool,
+        /// Experiment switch: propose and vote for invalid blocks (E2, DESIGN.md §13.3).
+        #[clap(long)]
+        invalid_block: bool,
+        /// Experiment switch: regress the high QC after every vote (E3, DESIGN.md §13.3).
+        #[clap(long)]
+        regress: bool,
     },
     /// Deploy a local testbed with the specified number of nodes.
     Deploy {
@@ -93,8 +99,16 @@ async fn main() {
             censor,
             equivocate,
             lie_nr,
-        } => match Node::new(&committee, &keys, &store, parameters, Experiment { censor, equivocate, lie_nr })
-            .await
+            invalid_block,
+            regress,
+        } => match Node::new(
+            &committee,
+            &keys,
+            &store,
+            parameters,
+            Experiment { censor, equivocate, lie_nr, invalid_block, regress },
+        )
+        .await
         {
             Ok(mut node) => {
                 tokio::spawn(async move {

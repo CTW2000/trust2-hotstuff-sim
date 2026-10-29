@@ -7,7 +7,8 @@ import sys
 from collections import Counter, defaultdict
 from glob import glob
 
-ROLES = (("Voting twice", "equivocator"), ("Lying about NR", "NR liar"), ("Censoring", "censor"))
+ROLES = (("Voting twice", "equivocator"), ("Lying about NR", "NR liar"), ("Censoring", "censor"),
+         ("Proposing and voting for invalid blocks", "invalid block"), ("Regressing the high QC", "regressor"))
 
 if __name__ == "__main__":
     logs = sys.argv[1]
