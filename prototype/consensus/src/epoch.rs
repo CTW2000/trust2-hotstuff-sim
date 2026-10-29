@@ -5,8 +5,9 @@
 //!   looks at the block, so it is a function of the chain prefix.
 //! - The table of epoch e+1 is a deterministic function of the ledger up to G_e: the AT accusations on it
 //!   drive the G2 leader rule and the reputations (reputation.rs, DESIGN.md §12.2), which give each
-//!   member's stake (CapNorm of the base weights times r, within the budget) and whether it may lead.
-//!   Suspensions (z, G1) come with P4.
+//!   member's stake (CapNorm of the base weights times r, within the budget) and whether it may lead; the G1
+//!   evidence on it drives the graded punishment (punish.rs, DESIGN.md §13): suspension (z = 0), bars from
+//!   leading, eviction.
 //! - H3: a node enters epoch e+1 when it first holds a commit proof of G_e (Core::commit); from then on it
 //!   signs no message of an older epoch. The tables of the last few epochs are kept to verify old blocks
 //!   received through synchronization.
@@ -15,6 +16,7 @@ use crate::config::{Authority, Committee, EpochNumber, Stake};
 use crate::consensus::Round;
 use crate::leader::leader;
 use crate::messages::{Block, OmitProof, MAX_OTXS};
+use crate::punish::{G1Event, Kind, PunishConfig, Punishment};
 use crate::reputation::{Event, G2Config, Reputation};
 use crate::ttru::{self, Class};
 use crypto::Hash as _;
@@ -35,6 +37,11 @@ pub struct EpochConfig {
     pub length: Round,
     pub entity_cap_ppm: u64,
     pub class_cap_ppm: u64,
+    /// G1: at most this much base weight suspended at once (ppm).
+    pub l_max_ppm: u64,
+    /// G1 governance stand-in: an L4 without a fork counts as confirmed malicious (evicted) rather than as a
+    /// client fault (downgraded).
+    pub governance_malicious: bool,
 }
 
 pub struct Epochs {
@@ -43,6 +50,8 @@ pub struct Epochs {
     members: Vec<(PublicKey, Authority)>,
     /// G2 state from the ledger, by member index; holds the CapNorm base weights.
     reputation: Reputation,
+    /// G1 graded punishment from the ledger; its base shares change only when a fork culprit is evicted.
+    punishment: Punishment,
     current: EpochNumber,
     /// s_e: round of the terminal block of the previous epoch.
     start: Round,
@@ -81,16 +90,18 @@ impl Epochs {
             })
             .collect();
         let weights: Vec<u64> = members.iter().map(|(_, a)| a.stake as u64).collect();
-        let base = ttru::base_weights(
-            &classes,
-            &weights,
-            ttru::from_ppm(config.entity_cap_ppm),
-            ttru::from_ppm(config.class_cap_ppm),
-        );
+        let (cap, u_max) = (ttru::from_ppm(config.entity_cap_ppm), ttru::from_ppm(config.class_cap_ppm));
+        let base = ttru::base_weights(&classes, &weights, cap, u_max);
+        let punish_config = PunishConfig {
+            l_max: ttru::from_ppm(config.l_max_ppm),
+            ..PunishConfig::default()
+        };
+        let punishment = Punishment::new(classes, weights, cap, u_max, punish_config);
         let mut epochs = Self {
             config,
             members,
             reputation: Reputation::new(base, G2Config::default()),
+            punishment,
             current: roster.epoch,
             start: 0,
             tables: BTreeMap::new(),
@@ -105,22 +116,23 @@ impl Epochs {
         epochs
     }
 
-    /// W_e = F(ledger up to G_{e-1}): stakes from the reputations within the budget, leadership from the G2
-    /// exclusions. P3: no suspensions yet (z = 1).
+    /// W_e = F(ledger up to G_{e-1}): stakes from the base shares (G1), reputations within the budget (G2) and
+    /// suspensions (z, G1); leadership barred by the G2 exclusions and by G1 (L1, suspended, queued, evicted).
     fn make_table(&self, epoch: EpochNumber) -> Committee {
-        let n = self.members.len();
-        let stakes = self.reputation.stakes(&vec![true; n]);
+        let z = self.punishment.z();
+        let stakes = self.reputation.stakes_on(self.punishment.base(), &z);
         let excluded = self.reputation.excluded();
+        let bars = self.punishment.bars();
         Committee {
             authorities: self
                 .members
                 .iter()
+                .enumerate()
                 .zip(stakes)
-                .zip(excluded)
-                .map(|(((name, a), stake), excluded)| {
+                .map(|((i, (name, a)), stake)| {
                     let authority = Authority {
                         stake: stake as Stake,
-                        leader: !excluded,
+                        leader: !excluded[i] && !bars[i],
                         ..a.clone()
                     };
                     (*name, authority)
@@ -142,6 +154,14 @@ impl Epochs {
                 let author = self.committed[&omission.round].author;
                 info!("G2: omission of {} at round {} by {}", omission.otx.id(), omission.round, author);
                 self.reputation.record(omission.round, omission.epoch);
+            }
+        }
+        for evidence in &block.evidence {
+            if let Ok(i) = self.members.binary_search_by_key(&evidence.culprit(), |(n, _)| *n) {
+                info!("G1: {:?} on the ledger", evidence);
+                let kind = if evidence.is_safety() { Kind::Safety } else { Kind::Liveness };
+                let malicious = self.config.governance_malicious;
+                self.punishment.record(i, kind, evidence.epoch(), block.epoch, malicious, false);
             }
         }
         for x in &block.otxs {
@@ -240,12 +260,29 @@ impl Epochs {
             }
         }
 
-        // The child of the terminal block still belongs to this epoch (the commit proof certifies it, at the
-        // adjacent round); the next epoch starts after it, and its first round keeps the old leader.
+        // G1: the graded punishment for the next table.
         let next = self.current + 1;
+        for event in self.punishment.update(next) {
+            let (what, i, k) = match *event {
+                G1Event::Level(l, i, k) => (format!("level L{}", l), i, k),
+                G1Event::Queue(i, k) => ("queued for suspension".to_string(), i, k),
+                G1Event::Suspend(i, k) => ("suspended".to_string(), i, k),
+                G1Event::Release(i, k) => ("released".to_string(), i, k),
+                G1Event::Evict(i, k) => ("evicted".to_string(), i, k),
+                G1Event::Downgrade(i, k) => ("downgraded by governance".to_string(), i, k),
+            };
+            info!("G1: {} {} at epoch {}", self.members[i].0, what, k);
+        }
+
+        // The child of the terminal block still belongs to this epoch (the commit proof certifies it, at the
+        // adjacent round); the next epoch starts after it, and its first round keeps the old leader unless
+        // the new table takes its weight away.
         let first = terminal.round + 2;
         let mut table = self.make_table(next);
-        table.handover = Some((first, leader(self.current(), first)));
+        let old_leader = leader(self.current(), first);
+        if table.stake(&old_leader) > 0 {
+            table.handover = Some((first, old_leader));
+        }
         self.tables.insert(next, table);
         self.first_rounds.insert(next, first);
         self.current = next;

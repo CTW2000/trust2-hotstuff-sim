@@ -247,6 +247,11 @@ impl Reputation {
 
     /// Integer stakes of the next table: T = base · r · z within the budget (`ttru::table`).
     pub fn stakes(&self, z: &[bool]) -> Vec<u64> {
-        ttru::table(&self.base, &self.r_ppm, z, self.config.b_rep)
+        self.stakes_on(&self.base, z)
+    }
+
+    /// The same on other base shares (G1 recomputes them when it evicts a fork culprit).
+    pub fn stakes_on(&self, base: &[u128], z: &[bool]) -> Vec<u64> {
+        ttru::table(base, &self.r_ppm, z, self.config.b_rep)
     }
 }

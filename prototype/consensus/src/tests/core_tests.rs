@@ -45,6 +45,8 @@ fn core(
         length: 100,
         entity_cap_ppm: 1_000_000,
         class_cap_ppm: 1_000_000,
+        l_max_ppm: 100_000,
+        governance_malicious: false,
     };
     Core::spawn(
         name,

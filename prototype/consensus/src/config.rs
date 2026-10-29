@@ -21,6 +21,12 @@ pub struct Parameters {
     /// Cap on the uncertified class, in ppm (1_000_000: no cap).
     #[serde(default = "default_ppm")]
     pub class_cap_ppm: u64,
+    /// G1: at most this much base weight suspended at once, in ppm (L_max).
+    #[serde(default = "default_l_max_ppm")]
+    pub l_max_ppm: u64,
+    /// G1 governance stand-in: an L4 without a fork counts as confirmed malicious (evicted).
+    #[serde(default)]
+    pub governance_malicious: bool,
     /// G2 inclusion attestations: observed transactions held at least this long (ms) are attested (Δ_g).
     #[serde(default = "default_attest_guard")]
     pub attest_guard: u64,
@@ -31,6 +37,10 @@ pub struct Parameters {
 
 fn default_attest_guard() -> u64 {
     500
+}
+
+fn default_l_max_ppm() -> u64 {
+    100_000
 }
 
 fn default_epoch_length() -> u64 {
@@ -49,6 +59,8 @@ impl Default for Parameters {
             epoch_length: default_epoch_length(),
             entity_cap_ppm: default_ppm(),
             class_cap_ppm: default_ppm(),
+            l_max_ppm: default_l_max_ppm(),
+            governance_malicious: false,
             attest_guard: default_attest_guard(),
             censor: false,
         }
@@ -61,6 +73,7 @@ impl Parameters {
         info!("Timeout delay set to {} rounds", self.timeout_delay);
         info!("Sync retry delay set to {} ms", self.sync_retry_delay);
         info!("Epoch length set to {} rounds", self.epoch_length);
+        info!("Suspension cap L_max set to {} ppm", self.l_max_ppm);
         info!("Attestation guard set to {} ms", self.attest_guard);
         if self.censor {
             info!("Censoring the observed transactions of victim accounts (experiment)");

@@ -100,6 +100,8 @@ impl Consensus {
             length: parameters.epoch_length,
             entity_cap_ppm: parameters.entity_cap_ppm,
             class_cap_ppm: parameters.class_cap_ppm,
+            l_max_ppm: parameters.l_max_ppm,
+            governance_malicious: parameters.governance_malicious,
         };
         Core::spawn(
             name,

@@ -1,13 +1,15 @@
 use super::*;
-use crate::common::{committee, EPOCH};
+use crate::common::{committee, keys, EPOCH};
 use crate::leader::leader;
-use crate::messages::{Accusation, OmitProof, Otx};
+use crate::messages::{Accusation, Evidence, OmitProof, Otx, SignedTimeout, Timeout, Vote, QC};
 
 fn config(length: Round) -> EpochConfig {
     EpochConfig {
         length,
         entity_cap_ppm: 1_000_000,
         class_cap_ppm: 1_000_000,
+        l_max_ppm: 100_000,
+        governance_malicious: false,
     }
 }
 
@@ -183,4 +185,39 @@ fn omission_proofs_are_checked_on_the_ledger() {
     assert!(!counts(vec![], Some(with_otxs(5, vec![rival.clone()])), None), "conflicting transaction in it");
     assert!(!counts(vec![with_otxs(3, vec![x.clone()])], Some(b5.clone()), None), "included earlier");
     assert!(!counts(vec![with_otxs(4, vec![rival])], Some(b5), None), "conflict included earlier");
+}
+
+#[test]
+fn g1_evidence_suspends_or_bars_at_an_epoch_change() {
+    // P4 (DESIGN.md §13): a double vote on the ledger suspends its signer for 4 epochs (z = 0: no stake, no
+    // leading) once L_max leaves room; an NR self-contradiction bars from leading for one epoch.
+    let mut epochs = Epochs::new(&committee(), EpochConfig { l_max_ppm: 300_000, ..config(10) });
+    let (cheat, liar) = (keys().remove(0), keys().remove(1));
+    let vote = |hash: u8, round, key: &(PublicKey, crypto::SecretKey)| {
+        Vote::new_from_key(Digest([hash; 32]), round, key.0, &key.1)
+    };
+    let e1 = Evidence::DoubleVote(vote(1, 5, &cheat), vote(2, 5, &cheat));
+    let nr = Evidence::NrContradiction(
+        vote(1, 6, &liar),
+        SignedTimeout::from(&Timeout::new_from_key(QC::genesis(), 6, true, liar.0, &liar.1)),
+    );
+    let carrying = Block { epoch: EPOCH, round: 8, evidence: vec![e1, nr], ..Block::default() };
+    epochs.record(&carrying);
+
+    epochs.enter_next(&block(EPOCH, 10));
+    let table = epochs.current().clone();
+    assert_eq!(table.stake(&cheat.0), 0);
+    assert!(!table.authorities[&cheat.0].leader);
+    assert!(table.stake(&liar.0) > 0 && !table.authorities[&liar.0].leader);
+    assert!((0..100).all(|u| { let l = leader(&table, u); l != cheat.0 && l != liar.0 }));
+
+    // The bar lasts one epoch, the suspension four.
+    epochs.enter_next(&block(EPOCH + 1, 20));
+    assert!(epochs.current().authorities[&liar.0].leader);
+    assert_eq!(epochs.current().stake(&cheat.0), 0);
+    for k in 3..=5 {
+        epochs.enter_next(&block(EPOCH + k - 1, 10 * k as Round));
+    }
+    assert_eq!(epochs.current().stake(&cheat.0), 250_000);
+    assert!(epochs.current().authorities[&cheat.0].leader);
 }
