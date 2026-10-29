@@ -21,6 +21,16 @@ pub struct Parameters {
     /// Cap on the uncertified class, in ppm (1_000_000: no cap).
     #[serde(default = "default_ppm")]
     pub class_cap_ppm: u64,
+    /// G2 inclusion attestations: observed transactions held at least this long (ms) are attested (Δ_g).
+    #[serde(default = "default_attest_guard")]
+    pub attest_guard: u64,
+    /// Experiment switch, not part of the protocol: censor the observed transactions of victim accounts.
+    #[serde(default)]
+    pub censor: bool,
+}
+
+fn default_attest_guard() -> u64 {
+    500
 }
 
 fn default_epoch_length() -> u64 {
@@ -39,6 +49,8 @@ impl Default for Parameters {
             epoch_length: default_epoch_length(),
             entity_cap_ppm: default_ppm(),
             class_cap_ppm: default_ppm(),
+            attest_guard: default_attest_guard(),
+            censor: false,
         }
     }
 }
@@ -49,6 +61,10 @@ impl Parameters {
         info!("Timeout delay set to {} rounds", self.timeout_delay);
         info!("Sync retry delay set to {} ms", self.sync_retry_delay);
         info!("Epoch length set to {} rounds", self.epoch_length);
+        info!("Attestation guard set to {} ms", self.attest_guard);
+        if self.censor {
+            info!("Censoring the observed transactions of victim accounts (experiment)");
+        }
         info!(
             "Entity cap set to {} ppm, uncertified class cap to {} ppm",
             self.entity_cap_ppm, self.class_cap_ppm

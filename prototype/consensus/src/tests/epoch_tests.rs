@@ -1,7 +1,7 @@
 use super::*;
 use crate::common::{committee, EPOCH};
 use crate::leader::leader;
-use crate::messages::Accusation;
+use crate::messages::{Accusation, OmitProof, Otx};
 
 fn config(length: Round) -> EpochConfig {
     EpochConfig {
@@ -151,4 +151,36 @@ fn first_round_of_an_epoch_keeps_the_previous_leader() {
     assert!((33..60).any(|u| leader(&old, u) != leader(&new, u)));
     // ... but the first round of the new epoch, 32, keeps the old leader.
     assert_eq!(leader(&new, 32), leader(&old, 32));
+}
+
+fn with_otxs(round: Round, otxs: Vec<Otx>) -> Block {
+    Block { epoch: EPOCH, round, otxs, ..Block::default() }
+}
+
+#[test]
+fn omission_proofs_are_checked_on_the_ledger() {
+    // G2 (DESIGN.md §12.4): an omission proof of round 5 counts only if the committed block of round 5 is the
+    // one it names and leaves the transaction out without an exemption, and it was not included earlier.
+    let otx = |account, nonce, tag| Otx { account, nonce, data: [tag; 32] };
+    let (x, rival) = (otx(1, 1, 0), otx(1, 1, 1));
+    let counts = |earlier: Vec<Block>, b5: Option<Block>, named: Option<Digest>| -> bool {
+        let mut epochs = Epochs::new(&committee(), config(100));
+        for b in earlier.iter().chain(b5.iter()) {
+            epochs.record(b);
+        }
+        let block = named.or_else(|| b5.as_ref().map(|b| b.digest())).unwrap_or_default();
+        let proof = OmitProof { round: 5, epoch: EPOCH, block, otx: x.clone(), attestations: Vec::new() };
+        epochs.record(&Block { epoch: EPOCH, round: 7, omissions: vec![proof], ..Block::default() });
+        epochs.reputation.facts().contains_key(&5)
+    };
+    let b5 = with_otxs(5, vec![otx(2, 1, 0)]);
+    assert!(counts(vec![], Some(b5.clone()), None));
+    assert!(!counts(vec![], Some(b5.clone()), Some(Digest::default())), "another block");
+    assert!(!counts(vec![], None, Some(b5.digest())), "no committed block of the round");
+    assert!(!counts(vec![], Some(with_otxs(5, vec![x.clone()])), None), "included");
+    let full: Vec<_> = (0..MAX_OTXS as u64).map(|n| otx(9, n, 0)).collect();
+    assert!(!counts(vec![], Some(with_otxs(5, full)), None), "full block");
+    assert!(!counts(vec![], Some(with_otxs(5, vec![rival.clone()])), None), "conflicting transaction in it");
+    assert!(!counts(vec![with_otxs(3, vec![x.clone()])], Some(b5.clone()), None), "included earlier");
+    assert!(!counts(vec![with_otxs(4, vec![rival])], Some(b5), None), "conflict included earlier");
 }

@@ -3,9 +3,10 @@ use crate::config::Committee;
 use crate::consensus::{ConsensusMessage, Round};
 use crate::epoch::{EpochConfig, Epochs};
 use crate::error::{ConsensusError, ConsensusResult};
+use crate::inclusion::Inclusion;
 use crate::leader::leader;
 use crate::mempool::MempoolDriver;
-use crate::messages::{Accusation, Block, Timeout, Vote, QC, TC};
+use crate::messages::{Accusation, Attestation, Block, OmitProof, Otx, Timeout, Vote, QC, TC};
 use crate::proposer::ProposerMessage;
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
@@ -19,6 +20,7 @@ use std::cmp::max;
 use std::collections::{HashSet, VecDeque};
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
+use std::time::Instant;
 
 #[cfg(test)]
 #[path = "tests/core_tests.rs"]
@@ -50,6 +52,10 @@ pub struct Core {
     aggregator: Aggregator,
     // G2: NR = 1 timeouts gathered into AT accusations, which go to the proposer for the ledger.
     accuser: Accuser,
+    // G2: observed transactions, attestations and omission proofs; the highest QC round whose block we hold
+    // and have marked certified.
+    inclusion: Inclusion,
+    last_certified: Round,
     network: SimpleSender,
     // Messages of later epochs, and those to handle again after entering a new epoch.
     deferred: Vec<ConsensusMessage>,
@@ -66,6 +72,7 @@ impl Core {
         name: PublicKey,
         committee: Committee,
         epoch_config: EpochConfig,
+        inclusion: Inclusion,
         signature_service: SignatureService,
         store: Store,
         mempool_driver: MempoolDriver,
@@ -97,6 +104,8 @@ impl Core {
                 timer: Timer::new(timeout_delay),
                 aggregator: Aggregator::new(),
                 accuser: Accuser::new(),
+                inclusion,
+                last_certified: 0,
                 network: SimpleSender::new(),
                 deferred: Vec::new(),
                 replay: VecDeque::new(),
@@ -165,6 +174,76 @@ impl Core {
         }
     }
 
+    /// G2: an observed transaction from a client or a node; forwarded to everyone on first receipt.
+    async fn handle_otx(&mut self, otx: Otx) -> ConsensusResult<()> {
+        if self.inclusion.receive(otx.clone(), Instant::now()) {
+            let addresses = self
+                .committee()
+                .broadcast_addresses(&self.name)
+                .into_iter()
+                .map(|(_, x)| x)
+                .collect();
+            let message = bincode::serialize(&ConsensusMessage::Otx(otx))
+                .expect("Failed to serialize observed transaction");
+            self.network.broadcast(addresses, Bytes::from(message)).await;
+        }
+        Ok(())
+    }
+
+    /// G2: on entering a round, attest the observed transactions held for at least the guard.
+    async fn attest_round(&mut self) {
+        let otxs = self.inclusion.to_attest(Instant::now());
+        if otxs.is_empty() {
+            return;
+        }
+        let attestation = Attestation::new(
+            self.round,
+            self.epochs.epoch(),
+            otxs,
+            self.name,
+            self.signature_service.clone(),
+        )
+        .await;
+        debug!("Created {:?}", attestation);
+        let addresses = self
+            .committee()
+            .broadcast_addresses(&self.name)
+            .into_iter()
+            .map(|(_, x)| x)
+            .collect();
+        let message = bincode::serialize(&ConsensusMessage::Attest(attestation.clone()))
+            .expect("Failed to serialize attestation");
+        self.network.broadcast(addresses, Bytes::from(message)).await;
+        let proofs = self.inclusion.attest(attestation, self.epochs.current());
+        self.propose_omissions(proofs).await;
+    }
+
+    async fn handle_attestation(&mut self, attestation: Attestation) -> ConsensusResult<()> {
+        attestation.verify(self.committee())?;
+        let proofs = self.inclusion.attest(attestation, self.epochs.current());
+        self.propose_omissions(proofs).await;
+        Ok(())
+    }
+
+    /// G2: a block we hold is certified; an omission it makes provable goes to the proposer.
+    async fn certify(&mut self, block: &Block) {
+        let proofs = match self.epochs.get(block.epoch) {
+            Some(committee) => self.inclusion.certify(block, committee),
+            None => return,
+        };
+        self.propose_omissions(proofs).await;
+    }
+
+    async fn propose_omissions(&mut self, proofs: Vec<OmitProof>) {
+        for proof in proofs {
+            debug!("Assembled {:?}", proof);
+            self.tx_proposer
+                .send(ProposerMessage::Omit(proof))
+                .await
+                .expect("Failed to send message to proposer");
+        }
+    }
+
     async fn propose_accusation(&mut self, accusation: Accusation) {
         debug!("Assembled {:?}", accusation);
         self.tx_proposer
@@ -215,6 +294,7 @@ impl Core {
         self.deferred = later;
         self.requested.clear();
         self.accuser.cleanup(self.epochs.done() + 1);
+        self.inclusion.cleanup(self.epochs.done() + 1);
     }
 
     fn increase_last_voted_round(&mut self, target: Round) {
@@ -272,12 +352,19 @@ impl Core {
 
         // Send all the newly committed blocks to the node's application layer.
         while let Some(block) = to_commit.pop_front() {
-            // G2: the accusations on the ledger, up to and including the terminal block, decide the next table.
+            // G2: the evidence on the ledger, up to and including the terminal block, decides the next table.
+            self.epochs.record(&block);
             if !block.accusations.is_empty() {
-                self.epochs.record(&block);
                 let keys = block.accusations.iter().map(|a| (a.epoch, a.round)).collect();
                 self.tx_proposer
                     .send(ProposerMessage::Accused(keys))
+                    .await
+                    .expect("Failed to send message to proposer");
+            }
+            if !block.omissions.is_empty() {
+                let keys = block.omissions.iter().map(|o| (o.epoch, o.round, o.otx.id())).collect();
+                self.tx_proposer
+                    .send(ProposerMessage::Omitted(keys))
                     .await
                     .expect("Failed to send message to proposer");
             }
@@ -287,6 +374,10 @@ impl Core {
                 self.enter_epoch(&block);
             }
 
+            for x in &block.otxs {
+                // NOTE: This log entry is used to measure the inclusion delay of observed transactions.
+                info!("Committed {} -> observed transaction {}", block, x.id());
+            }
             if !block.payload.is_empty() {
                 info!("Committed {}", block);
 
@@ -453,6 +544,8 @@ impl Core {
 
         // Cleanup the vote aggregator.
         self.aggregator.cleanup(&self.round);
+
+        self.attest_round().await;
     }
 
     /// Near the end of an epoch our high QC may be the commit proof of the terminal block, which we can
@@ -476,7 +569,14 @@ impl Core {
     async fn generate_proposal(&mut self, tc: Option<TC>) {
         let committee = self.committee().clone();
         self.tx_proposer
-            .send(ProposerMessage::Make(self.round, self.high_qc.clone(), tc, committee, self.epochs.done()))
+            .send(ProposerMessage::Make {
+                round: self.round,
+                qc: self.high_qc.clone(),
+                tc,
+                committee,
+                done: self.epochs.done(),
+                otxs: self.inclusion.select(),
+            })
             .await
             .expect("Failed to send message to proposer");
     }
@@ -497,6 +597,13 @@ impl Core {
 
     #[async_recursion]
     async fn process_qc(&mut self, qc: &QC) {
+        // G2: the block it certifies, if we hold it, before we attest in the next round.
+        if qc.round > self.last_certified {
+            if let Ok(Some(block)) = self.read_block(&qc.hash).await {
+                self.last_certified = qc.round;
+                self.certify(&block).await;
+            }
+        }
         self.advance_round(qc.round).await;
         self.update_high_qc(qc);
         if let Err(e) = self.try_commit_via_qc(qc).await {
@@ -546,6 +653,9 @@ impl Core {
 
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
+
+        // G2: the block's QC certifies its parent.
+        self.certify(&b1).await;
 
         // A block fetched by synchronization may complete the commit proof we already hold (for instance
         // the child of the terminal block when we catch up with a later epoch).
@@ -640,6 +750,9 @@ impl Core {
         for accusation in &block.accusations {
             accusation.verify(self.table(accusation.epoch)?)?;
         }
+        for omission in &block.omissions {
+            omission.verify(self.table(omission.epoch)?)?;
+        }
 
         // Process the QC. This may allow us to advance round.
         self.process_qc(&block.qc).await;
@@ -679,6 +792,11 @@ impl Core {
     /// Votes, timeouts and TCs of the current epoch are handled; those of a later epoch wait (their QC is
     /// processed first, it may move us there); those of an older epoch are dropped (H3).
     async fn handle_message(&mut self, message: ConsensusMessage) -> ConsensusResult<()> {
+        // Observed transactions carry no epoch.
+        let message = match message {
+            ConsensusMessage::Otx(otx) => return self.handle_otx(otx).await,
+            message => message,
+        };
         let epoch = epoch_of(&message);
         if epoch > self.epochs.epoch() {
             match &message {
@@ -704,6 +822,7 @@ impl Core {
             ConsensusMessage::Vote(vote) => self.handle_vote(&vote).await,
             ConsensusMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
             ConsensusMessage::TC(tc) => self.handle_tc(tc).await,
+            ConsensusMessage::Attest(attestation) => self.handle_attestation(attestation).await,
             _ => panic!("Unexpected protocol message"),
         }
     }
@@ -750,6 +869,7 @@ fn epoch_of(message: &ConsensusMessage) -> u128 {
         ConsensusMessage::Vote(vote) => vote.epoch,
         ConsensusMessage::Timeout(timeout) => timeout.epoch,
         ConsensusMessage::TC(tc) => tc.epoch,
-        ConsensusMessage::SyncRequest(..) => 0,
+        ConsensusMessage::Attest(attestation) => attestation.epoch,
+        ConsensusMessage::SyncRequest(..) | ConsensusMessage::Otx(..) => 0,
     }
 }

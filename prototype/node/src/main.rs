@@ -46,6 +46,9 @@ enum Command {
         /// The path where to create the data store.
         #[clap(short, long, value_parser, value_name = "PATH")]
         store: String,
+        /// Experiment switch: censor the observed transactions of victim accounts (DESIGN.md §12.4).
+        #[clap(long)]
+        censor: bool,
     },
     /// Deploy a local testbed with the specified number of nodes.
     Deploy {
@@ -81,7 +84,8 @@ async fn main() {
             committee,
             parameters,
             store,
-        } => match Node::new(&committee, &keys, &store, parameters).await {
+            censor,
+        } => match Node::new(&committee, &keys, &store, parameters, censor).await {
             Ok(mut node) => {
                 tokio::spawn(async move {
                     node.analyze_block().await;
@@ -150,7 +154,7 @@ fn deploy_testbed(nodes: u16) -> Result<Vec<JoinHandle<()>>, Box<dyn std::error:
             let _ = fs::remove_dir_all(&store_path);
 
             Ok(tokio::spawn(async move {
-                match Node::new(committee_file, &key_file, &store_path, None).await {
+                match Node::new(committee_file, &key_file, &store_path, None, false).await {
                     Ok(mut node) => {
                         // Sink the commit channel.
                         while node.commit.recv().await.is_some() {}

@@ -20,6 +20,7 @@ impl Node {
         key_file: &str,
         store_path: &str,
         parameters: Option<String>,
+        censor: bool,
     ) -> Result<Self, ConfigError> {
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
         let (tx_consensus_to_mempool, rx_consensus_to_mempool) = channel(CHANNEL_CAPACITY);
@@ -32,10 +33,11 @@ impl Node {
         let secret_key = secret.secret;
 
         // Load default parameters if none are specified.
-        let parameters = match parameters {
+        let mut parameters = match parameters {
             Some(filename) => Parameters::read(&filename)?,
             None => Parameters::default(),
         };
+        parameters.consensus.censor |= censor;
 
         // Make the data store.
         let store = Store::new(store_path).expect("Failed to create store");

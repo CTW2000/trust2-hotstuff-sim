@@ -118,6 +118,11 @@ impl Reputation {
         &self.excluded
     }
 
+    /// Bad facts recorded and not processed yet: round -> epoch.
+    pub fn facts(&self) -> &BTreeMap<Round, EpochNumber> {
+        &self.accused
+    }
+
     /// Queued convictions (member, round of the conviction), head first.
     pub fn queue(&self) -> &[(usize, Round)] {
         &self.queue

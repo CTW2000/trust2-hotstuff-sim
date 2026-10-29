@@ -4,7 +4,8 @@ use crate::epoch::EpochConfig;
 use crate::error::ConsensusError;
 use crate::helper::Helper;
 use crate::mempool::MempoolDriver;
-use crate::messages::{Block, Timeout, Vote, TC};
+use crate::inclusion::Inclusion;
+use crate::messages::{Attestation, Block, Otx, Timeout, Vote, TC};
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
@@ -16,6 +17,7 @@ use mempool::ConsensusMempoolMessage;
 use network::{MessageHandler, Receiver as NetworkReceiver, Writer};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::time::Duration;
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
@@ -36,6 +38,9 @@ pub enum ConsensusMessage {
     Timeout(Timeout),
     TC(TC),
     SyncRequest(Digest, PublicKey),
+    /// G2 inclusion attestations (DESIGN.md §12.4).
+    Otx(Otx),
+    Attest(Attestation),
 }
 
 pub struct Consensus;
@@ -100,6 +105,7 @@ impl Consensus {
             name,
             committee.clone(),
             epoch_config,
+            Inclusion::new(Duration::from_millis(parameters.attest_guard), parameters.censor),
             signature_service.clone(),
             store.clone(),
             mempool_driver,

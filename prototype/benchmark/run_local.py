@@ -12,6 +12,7 @@ Run from prototype/benchmark/ (after `cargo build --release --features benchmark
     python3 run_local.py --nodes 4 --rate 50000 --duration 30 --warmup 10
 """
 import argparse
+import base64
 import fcntl
 import os
 import shlex
@@ -37,7 +38,7 @@ def node_parameters(args):
     return {
         "consensus": {"timeout_delay": args.timeout_delay, "sync_retry_delay": 10_000,
                       "epoch_length": args.epoch_length, "entity_cap_ppm": args.entity_cap_ppm,
-                      "class_cap_ppm": args.class_cap_ppm},
+                      "class_cap_ppm": args.class_cap_ppm, "attest_guard": args.attest_guard},
         "mempool": {"gc_depth": 50, "sync_retry_delay": 5_000, "sync_retry_nodes": 3,
                     "batch_size": 15_000, "max_batch_delay": 10},
     }
@@ -61,6 +62,7 @@ def binary(name):
 
 def run(args):
     node, client = binary("node"), binary("client")
+    observer = binary("observer") if args.otx_rate > 0 else None
     for f in glob(".db-*"):
         shutil.rmtree(f, ignore_errors=True)
     for f in glob(".*.json"):
@@ -85,11 +87,22 @@ def run(args):
     for i, addr in enumerate(committee.front[:clients]):
         cmd = f"{client} {addr} --size {args.tx_size} --rate {rate_share} --timeout {args.timeout_delay}"
         procs.append(launch(cmd, PathMaker.client_log_file(i)))
+    # Censoring nodes: the last booted ones, or (worst case for detection) a run of nodes that lead
+    # consecutive rounds (round robin follows the public keys' byte order).
+    censors = set(range(up - args.censor, up))
+    if args.censor_adjacent:
+        order = sorted(range(up), key=lambda i: base64.b64decode(names[i]))
+        censors = set(order[:args.censor])
     for i in range(up):
+        censor = " --censor" if i in censors else ""
         cmd = (f"{node} {'-vvv' if args.debug else '-vv'} run --keys {key_files[i]} "
                f"--committee {PathMaker.committee_file()} --store {PathMaker.db_path(i)} "
-               f"--parameters {PathMaker.parameters_file()}")
+               f"--parameters {PathMaker.parameters_file()}{censor}")
         procs.append(launch(cmd, PathMaker.node_log_file(i)))
+    if observer:
+        targets = " ".join(committee.consensus[:up])
+        cmd = f"{observer} --rate {args.otx_rate} {targets}"
+        procs.append(launch(cmd, join(PathMaker.logs_path(), "observer.log")))
 
     try:
         time.sleep(2 * args.timeout_delay / 1000)            # let the nodes synchronize
@@ -131,6 +144,10 @@ def main():
     ap.add_argument("--warmup", type=int, default=0, help="seconds left out of the measurement at the start")
     ap.add_argument("--timeout-delay", type=int, default=1_000)
     ap.add_argument("--epoch-length", type=int, default=100, help="rounds per epoch (0: a single epoch)")
+    ap.add_argument("--otx-rate", type=int, default=0, help="observed transactions per second (0: no observer)")
+    ap.add_argument("--attest-guard", type=int, default=500, help="attestation guard in ms")
+    ap.add_argument("--censor", type=int, default=0, help="number of booted nodes that censor victim accounts")
+    ap.add_argument("--censor-adjacent", action="store_true", help="censors lead consecutive rounds")
     ap.add_argument("--entity-cap-ppm", type=int, default=1_000_000)
     ap.add_argument("--class-cap-ppm", type=int, default=1_000_000)
     ap.add_argument("--cpu-quota", type=int, default=1200, help="percent of one core (1200 = 12 cores)")

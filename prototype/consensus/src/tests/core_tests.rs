@@ -4,6 +4,7 @@ use crate::leader::LeaderElector;
 use crypto::SecretKey;
 use futures::future::try_join_all;
 use std::fs;
+use std::time::Duration;
 use tokio::sync::mpsc::channel;
 
 fn core(
@@ -49,6 +50,7 @@ fn core(
         name,
         committee,
         epoch_config,
+        Inclusion::new(Duration::from_millis(500), false),
         signature_service,
         store,
         mempool_driver,
@@ -137,7 +139,7 @@ async fn generate_proposal() {
 
     // Ensure the core sends a new block.
     match rx_proposer.recv().await.unwrap() {
-        ProposerMessage::Make(round, qc, tc, _, _) => {
+        ProposerMessage::Make { round, qc, tc, .. } => {
             assert_eq!(round, 2);
             assert_eq!(qc, hight_qc);
             assert!(tc.is_none());

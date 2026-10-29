@@ -14,12 +14,13 @@
 use crate::config::{Authority, Committee, EpochNumber, Stake};
 use crate::consensus::Round;
 use crate::leader::leader;
-use crate::messages::Block;
+use crate::messages::{Block, OmitProof, MAX_OTXS};
 use crate::reputation::{Event, G2Config, Reputation};
 use crate::ttru::{self, Class};
-use crypto::PublicKey;
+use crypto::Hash as _;
+use crypto::{Digest, PublicKey};
 use log::info;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[cfg(test)]
 #[path = "tests/epoch_tests.rs"]
@@ -48,6 +49,19 @@ pub struct Epochs {
     tables: BTreeMap<EpochNumber, Committee>,
     /// First round of each kept epoch (a round's leader comes from the table of its epoch).
     first_rounds: BTreeMap<EpochNumber, Round>,
+    /// G2 inclusion attestations on the ledger (DESIGN.md §12.4): committed blocks of the rounds not yet
+    /// processed, and the round where each observed transaction and conflict key was first included.
+    committed: BTreeMap<Round, LedgerBlock>,
+    included: HashMap<Digest, Round>,
+    taken: HashMap<(u64, u64), Round>,
+}
+
+/// What an omission proof is checked against: a committed block's digest and observed transactions.
+struct LedgerBlock {
+    digest: Digest,
+    author: PublicKey,
+    otxs: HashSet<Digest>,
+    keys: HashSet<(u64, u64)>,
 }
 
 impl Epochs {
@@ -81,6 +95,9 @@ impl Epochs {
             start: 0,
             tables: BTreeMap::new(),
             first_rounds: BTreeMap::new(),
+            committed: BTreeMap::new(),
+            included: HashMap::new(),
+            taken: HashMap::new(),
         };
         let first = epochs.make_table(roster.epoch);
         epochs.tables.insert(roster.epoch, first);
@@ -114,11 +131,50 @@ impl Epochs {
         }
     }
 
-    /// A committed block, in chain order: the AT accusations it carries go on the ledger state.
+    /// A committed block, in chain order: the AT accusations it carries, and the omission proofs that hold on
+    /// the ledger, are bad facts of their rounds; its observed transactions are included.
     pub fn record(&mut self, block: &Block) {
         for accusation in &block.accusations {
             self.reputation.record(accusation.round, accusation.epoch);
         }
+        for omission in &block.omissions {
+            if self.omission_holds(omission) {
+                let author = self.committed[&omission.round].author;
+                info!("G2: omission of {} at round {} by {}", omission.otx.id(), omission.round, author);
+                self.reputation.record(omission.round, omission.epoch);
+            }
+        }
+        for x in &block.otxs {
+            self.included.entry(x.id()).or_insert(block.round);
+            self.taken.entry(x.key()).or_insert(block.round);
+        }
+        if block.round > self.reputation.done() {
+            let entry = LedgerBlock {
+                digest: block.digest(),
+                author: block.author,
+                otxs: block.otxs.iter().map(|x| x.id()).collect(),
+                keys: block.otxs.iter().map(|x| x.key()).collect(),
+            };
+            self.committed.insert(block.round, entry);
+        }
+    }
+
+    /// An omission proof holds if the committed block of its round is the certified block it names, which
+    /// leaves the transaction out without an exemption (not full, no conflicting transaction in it), and the
+    /// transaction and its conflict key were not included earlier.
+    fn omission_holds(&self, omission: &OmitProof) -> bool {
+        let block = match self.committed.get(&omission.round) {
+            Some(block) => block,
+            None => return false,
+        };
+        let earlier = |r: Option<&Round>| r.map_or(false, |r| *r < omission.round);
+        let (id, key) = (omission.otx.id(), omission.otx.key());
+        block.digest == omission.block
+            && block.otxs.len() < MAX_OTXS
+            && !block.otxs.contains(&id)
+            && !block.keys.contains(&key)
+            && !earlier(self.included.get(&id))
+            && !earlier(self.taken.get(&key))
     }
 
     /// Rounds up to here have been processed by the leader rule; accusations of them come too late.
@@ -176,6 +232,8 @@ impl Epochs {
             };
             info!("G2: {} {} at round {}", self.members[*k].0, what, round);
         }
+        let done = self.reputation.done();
+        self.committed = self.committed.split_off(&(done + 1));
         for (k, (old, new)) in before.iter().zip(self.reputation.r_ppm()).enumerate() {
             if old != new {
                 info!("G2: reputation of {} is {} ppm", self.members[k].0, new);

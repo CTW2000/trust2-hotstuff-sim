@@ -1,6 +1,6 @@
 use crate::config::{Committee, EpochNumber, Stake};
 use crate::consensus::{ConsensusMessage, Round};
-use crate::messages::{Accusation, Block, MAX_ACCUSATIONS, QC, TC};
+use crate::messages::{Accusation, Block, OmitProof, Otx, MAX_ACCUSATIONS, MAX_OMISSIONS, QC, TC};
 use bytes::Bytes;
 use crypto::{Digest, PublicKey, SignatureService};
 use futures::stream::futures_unordered::FuturesUnordered;
@@ -12,14 +12,25 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 #[derive(Debug)]
 pub enum ProposerMessage {
-    /// Make a block for the round, with the weight table of the current epoch; accusations of rounds up to
-    /// the last field are processed already and dropped.
-    Make(Round, QC, Option<TC>, Committee, Round),
+    /// Make a block for the round, with the weight table of the current epoch and the observed transactions
+    /// to include; G2 evidence of rounds up to `done` is processed already and dropped.
+    Make {
+        round: Round,
+        qc: QC,
+        tc: Option<TC>,
+        committee: Committee,
+        done: Round,
+        otxs: Vec<Otx>,
+    },
     Cleanup(Vec<Digest>),
     /// G2: an AT accusation to put on the ledger.
     Accuse(Accusation),
     /// G2: accusations committed on the ledger, no longer to propose.
     Accused(Vec<(EpochNumber, Round)>),
+    /// G2: an omission proof to put on the ledger.
+    Omit(OmitProof),
+    /// G2: omission proofs committed on the ledger, no longer to propose.
+    Omitted(Vec<(EpochNumber, Round, Digest)>),
 }
 
 pub struct Proposer {
@@ -31,6 +42,7 @@ pub struct Proposer {
     tx_loopback: Sender<Block>,
     buffer: HashSet<Digest>,
     accusations: BTreeMap<(EpochNumber, Round), Accusation>,
+    omissions: BTreeMap<(EpochNumber, Round, Digest), OmitProof>,
     network: ReliableSender,
 }
 
@@ -53,6 +65,7 @@ impl Proposer {
                 tx_loopback,
                 buffer: HashSet::new(),
                 accusations: BTreeMap::new(),
+                omissions: BTreeMap::new(),
                 network: ReliableSender::new(),
             }
             .run()
@@ -66,13 +79,20 @@ impl Proposer {
         deliver
     }
 
-    async fn make_block(&mut self, round: Round, qc: QC, tc: Option<TC>) {
-        // Accusations wait here until they are committed (or processed); the oldest go first.
+    async fn make_block(&mut self, round: Round, qc: QC, tc: Option<TC>, otxs: Vec<Otx>) {
+        // G2 evidence waits here until it is committed (or processed); the oldest goes first.
         let accusations: Vec<_> = self
             .accusations
             .values()
             .filter(|a| a.round < round)
             .take(MAX_ACCUSATIONS)
+            .cloned()
+            .collect();
+        let omissions: Vec<_> = self
+            .omissions
+            .values()
+            .filter(|o| o.round < round)
+            .take(MAX_OMISSIONS)
             .cloned()
             .collect();
 
@@ -81,8 +101,8 @@ impl Proposer {
             qc,
             tc,
             accusations,
-            /* otxs */ Vec::new(),
-            /* omissions */ Vec::new(),
+            otxs,
+            omissions,
             self.name,
             round,
             self.committee.epoch,
@@ -151,10 +171,11 @@ impl Proposer {
                     //}
                 },
                 Some(message) = self.rx_message.recv() => match message {
-                    ProposerMessage::Make(round, qc, tc, committee, done) => {
+                    ProposerMessage::Make { round, qc, tc, committee, done, otxs } => {
                         self.committee = committee;
                         self.accusations.retain(|(_, r), _| *r > done);
-                        self.make_block(round, qc, tc).await
+                        self.omissions.retain(|(_, r, _), _| *r > done);
+                        self.make_block(round, qc, tc, otxs).await
                     }
                     ProposerMessage::Cleanup(digests) => {
                         for x in &digests {
@@ -167,6 +188,14 @@ impl Proposer {
                     ProposerMessage::Accused(keys) => {
                         for key in &keys {
                             self.accusations.remove(key);
+                        }
+                    }
+                    ProposerMessage::Omit(proof) => {
+                        self.omissions.insert((proof.epoch, proof.round, proof.otx.id()), proof);
+                    }
+                    ProposerMessage::Omitted(keys) => {
+                        for key in &keys {
+                            self.omissions.remove(key);
                         }
                     }
                 }
