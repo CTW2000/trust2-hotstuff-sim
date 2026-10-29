@@ -1,8 +1,9 @@
 use crate::aggregator::Aggregator;
 use crate::config::Committee;
 use crate::consensus::{ConsensusMessage, Round};
+use crate::epoch::{EpochConfig, Epochs};
 use crate::error::{ConsensusError, ConsensusResult};
-use crate::leader::LeaderElector;
+use crate::leader::leader;
 use crate::mempool::MempoolDriver;
 use crate::messages::{Block, Timeout, Vote, QC, TC};
 use crate::proposer::ProposerMessage;
@@ -11,11 +12,11 @@ use crate::timer::Timer;
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use crypto::Hash as _;
-use crypto::{PublicKey, SignatureService};
+use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, info, warn};
 use network::SimpleSender;
 use std::cmp::max;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -23,12 +24,14 @@ use tokio::sync::mpsc::{Receiver, Sender};
 #[path = "tests/core_tests.rs"]
 pub mod core_tests;
 
+/// Messages of a later epoch wait here (bounded) until we enter that epoch.
+const MAX_DEFERRED: usize = 2_000;
+
 pub struct Core {
     name: PublicKey,
-    committee: Committee,
+    epochs: Epochs,
     store: Store,
     signature_service: SignatureService,
-    leader_elector: LeaderElector,
     mempool_driver: MempoolDriver,
     synchronizer: Synchronizer,
     rx_message: Receiver<ConsensusMessage>,
@@ -46,6 +49,13 @@ pub struct Core {
     timer: Timer,
     aggregator: Aggregator,
     network: SimpleSender,
+    // Messages of later epochs, and those to handle again after entering a new epoch.
+    deferred: Vec<ConsensusMessage>,
+    replay: VecDeque<ConsensusMessage>,
+    // Blocks of a later epoch already requested (cleared when we enter a new epoch).
+    requested: HashSet<Digest>,
+    // A proposal for the round held back until we have the block certified by our high QC.
+    pending_proposal: Option<(Round, Option<TC>)>,
 }
 
 impl Core {
@@ -53,9 +63,9 @@ impl Core {
     pub fn spawn(
         name: PublicKey,
         committee: Committee,
+        epoch_config: EpochConfig,
         signature_service: SignatureService,
         store: Store,
-        leader_elector: LeaderElector,
         mempool_driver: MempoolDriver,
         synchronizer: Synchronizer,
         timeout_delay: u64,
@@ -67,10 +77,9 @@ impl Core {
         tokio::spawn(async move {
             Self {
                 name,
-                committee: committee.clone(),
+                epochs: Epochs::new(&committee, epoch_config),
                 signature_service,
                 store,
-                leader_elector,
                 mempool_driver,
                 synchronizer,
                 rx_message,
@@ -84,8 +93,12 @@ impl Core {
                 ready_round: 0,
                 last_timeout: None,
                 timer: Timer::new(timeout_delay),
-                aggregator: Aggregator::new(committee),
+                aggregator: Aggregator::new(),
                 network: SimpleSender::new(),
+                deferred: Vec::new(),
+                replay: VecDeque::new(),
+                requested: HashSet::new(),
+                pending_proposal: None,
             }
             .run()
             .await
@@ -98,11 +111,87 @@ impl Core {
         self.store.write(key, value).await;
     }
 
+    async fn read_block(&mut self, digest: &Digest) -> ConsensusResult<Option<Block>> {
+        match self.store.read(digest.to_vec()).await? {
+            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn committee(&self) -> &Committee {
+        self.epochs.current()
+    }
+
+    fn table(&self, epoch: u128) -> ConsensusResult<&Committee> {
+        self.epochs.get(epoch).ok_or(ConsensusError::UnknownEpoch(epoch))
+    }
+
+    /// Certificates are verified against the weight table of their own epoch.
+    fn verify_qc(&self, qc: &QC) -> ConsensusResult<()> {
+        if *qc == QC::genesis() {
+            return Ok(());
+        }
+        qc.verify(self.table(qc.epoch)?)
+    }
+
+    fn verify_tc(&self, tc: &TC) -> ConsensusResult<()> {
+        tc.verify(self.table(tc.epoch)?)?;
+        self.verify_qc(&tc.high_qc)
+    }
+
+    fn defer(&mut self, message: ConsensusMessage) {
+        if self.deferred.len() < MAX_DEFERRED {
+            self.deferred.push(message);
+        }
+    }
+
+    /// Ask a node for a block we miss (its sync helper answers with a Propose message).
+    async fn request_block(&mut self, digest: Digest, from: PublicKey) {
+        if let Some(address) = self.committee().address(&from) {
+            let message = bincode::serialize(&ConsensusMessage::SyncRequest(digest, self.name))
+                .expect("Failed to serialize sync request");
+            self.network.send(address, Bytes::from(message)).await;
+        }
+    }
+
+    /// A QC (of an epoch we know) embedded in a message of a later epoch may be the commit proof of our
+    /// terminal block: process it, which commits and enters the next epoch (H3).
+    async fn catch_up(&mut self, qc: &QC) {
+        if self.verify_qc(qc).is_ok() {
+            self.process_qc(qc).await;
+        }
+    }
+
+    /// H3: enter the next epoch once its terminal block is committed; messages of the new epoch that
+    /// arrived early are handled again.
+    fn enter_epoch(&mut self, terminal: &Block) {
+        self.epochs.enter_next(terminal);
+        info!(
+            "Entered epoch {} at round {} (terminal block B{})",
+            self.epochs.epoch(),
+            self.round,
+            terminal.round
+        );
+        let current = self.epochs.epoch();
+        let (now, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.deferred)
+            .into_iter()
+            .filter(|m| epoch_of(m) >= current)
+            .partition(|m| epoch_of(m) == current);
+        self.replay.extend(now);
+        self.deferred = later;
+        self.requested.clear();
+    }
+
     fn increase_last_voted_round(&mut self, target: Round) {
         self.last_voted_round = max(self.last_voted_round, target);
     }
 
     async fn make_vote(&mut self, block: &Block) -> Option<Vote> {
+        // H3: we sign no message of an epoch other than the current one.
+        if block.epoch != self.epochs.epoch() {
+            return None;
+        }
+
         // Check if we can vote for this block.
         let safety_rule_1 = block.round > self.last_voted_round;
         let mut safety_rule_2 = block.qc.round + 1 == block.round;
@@ -126,7 +215,7 @@ impl Core {
             return Ok(());
         }
 
-        // Ensure we commit the entire chain. This is needed after view-change.
+        // Ensure we commit the entire chain, oldest first. This is needed after view-change.
         let mut to_commit = VecDeque::new();
         let mut parent = block.clone();
         while self.last_committed_round + 1 < parent.round {
@@ -135,16 +224,24 @@ impl Core {
                 .get_parent_block(&parent)
                 .await?
                 .expect("We should have all the ancestors by now");
+            if ancestor.round <= self.last_committed_round {
+                break;
+            }
             to_commit.push_front(ancestor.clone());
             parent = ancestor;
         }
-        to_commit.push_front(block.clone());
+        to_commit.push_back(block.clone());
 
         // Save the last committed block.
         self.last_committed_round = block.round;
 
         // Send all the newly committed blocks to the node's application layer.
-        while let Some(block) = to_commit.pop_back() {
+        while let Some(block) = to_commit.pop_front() {
+            // H1/H3: committing the terminal block of the epoch moves us to the next epoch.
+            if self.epochs.is_terminal(&block) {
+                self.enter_epoch(&block);
+            }
+
             if !block.payload.is_empty() {
                 info!("Committed {}", block);
 
@@ -176,13 +273,15 @@ impl Core {
 
         // Make a timeout message. R3: sign at most one timeout per round; if the timer fires again in the
         // same round, resend the one we already signed. N6: NR when no usable proposal arrived this round.
+        let epoch = self.epochs.epoch();
+        let resent = matches!(&self.last_timeout, Some(t) if t.round == self.round && t.epoch == epoch);
         let timeout = match &self.last_timeout {
-            Some(timeout) if timeout.round == self.round => timeout.clone(),
+            Some(timeout) if resent => timeout.clone(),
             _ => {
                 let timeout = Timeout::new(
                     self.high_qc.clone(),
                     self.round,
-                    self.committee.epoch,
+                    epoch,
                     /* nr */ self.ready_round < self.round,
                     self.name,
                     self.signature_service.clone(),
@@ -200,7 +299,7 @@ impl Core {
         // Broadcast the timeout message.
         debug!("Broadcasting {:?}", timeout);
         let addresses = self
-            .committee
+            .committee()
             .broadcast_addresses(&self.name)
             .into_iter()
             .map(|(_, x)| x)
@@ -211,7 +310,10 @@ impl Core {
             .broadcast(addresses, Bytes::from(message))
             .await;
 
-        // Process our message.
+        // Process our message (once: a resent timeout is already in our aggregator).
+        if resent {
+            return Ok(());
+        }
         self.handle_timeout(&timeout).await
     }
 
@@ -223,18 +325,19 @@ impl Core {
         }
 
         // Ensure the vote is well formed.
-        vote.verify(&self.committee)?;
+        let committee = self.committee().clone();
+        vote.verify(&committee)?;
 
         // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(qc) = self.aggregator.add_vote(vote.clone())? {
+        if let Some(qc) = self.aggregator.add_vote(vote.clone(), &committee)? {
             debug!("Assembled {:?}", qc);
 
-            // Process the QC.
+            // Process the QC (this may commit, and move us to the next epoch, before we propose).
             self.process_qc(&qc).await;
 
             // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(self.round) {
-                self.generate_proposal(None).await;
+            if self.name == leader(self.committee(), self.round) {
+                self.propose(None).await;
             }
         }
         Ok(())
@@ -247,13 +350,18 @@ impl Core {
         }
 
         // Ensure the timeout is well formed.
-        timeout.verify(&self.committee)?;
+        let committee = self.committee().clone();
+        timeout.verify(&committee)?;
+        self.verify_qc(&timeout.high_qc)?;
 
         // Process the QC embedded in the timeout.
         self.process_qc(&timeout.high_qc).await;
+        if timeout.epoch != self.epochs.epoch() {
+            return Ok(()); // the QC moved us to the next epoch
+        }
 
         // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(tc) = self.aggregator.add_timeout(timeout.clone())? {
+        if let Some(tc) = self.aggregator.add_timeout(timeout.clone(), &committee)? {
             debug!("Assembled {:?}", tc);
 
             // Try to advance the round.
@@ -262,7 +370,7 @@ impl Core {
             // Broadcast the TC.
             debug!("Broadcasting {:?}", tc);
             let addresses = self
-                .committee
+                .committee()
                 .broadcast_addresses(&self.name)
                 .into_iter()
                 .map(|(_, x)| x)
@@ -274,8 +382,8 @@ impl Core {
                 .await;
 
             // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(self.round) {
-                self.generate_proposal(Some(tc)).await;
+            if self.name == leader(self.committee(), self.round) {
+                self.propose(Some(tc)).await;
             }
         }
         Ok(())
@@ -295,10 +403,28 @@ impl Core {
         self.aggregator.cleanup(&self.round);
     }
 
+    /// Near the end of an epoch our high QC may be the commit proof of the terminal block, which we can
+    /// only tell once we hold the block it certifies (votes can arrive before the block). Then propose
+    /// only when that block is here, so that our block carries the right epoch; ask its author for it.
+    async fn propose(&mut self, tc: Option<TC>) {
+        let qc = self.high_qc.clone();
+        let missing = matches!(self.read_block(&qc.hash).await, Ok(None));
+        if self.epochs.may_end(qc.round) && missing {
+            debug!("Proposal for round {} waits for {}", self.round, qc.hash);
+            self.pending_proposal = Some((self.round, tc));
+            if let Some(author) = self.epochs.get(qc.epoch).map(|c| leader(c, qc.round)) {
+                self.request_block(qc.hash.clone(), author).await;
+            }
+            return;
+        }
+        self.generate_proposal(tc).await;
+    }
+
     #[async_recursion]
     async fn generate_proposal(&mut self, tc: Option<TC>) {
+        let committee = self.committee().clone();
         self.tx_proposer
-            .send(ProposerMessage::Make(self.round, self.high_qc.clone(), tc))
+            .send(ProposerMessage::Make(self.round, self.high_qc.clone(), tc, committee))
             .await
             .expect("Failed to send message to proposer");
     }
@@ -317,9 +443,33 @@ impl Core {
             .expect("Failed to send message to proposer");
     }
 
+    #[async_recursion]
     async fn process_qc(&mut self, qc: &QC) {
         self.advance_round(qc.round).await;
         self.update_high_qc(qc);
+        if let Err(e) = self.try_commit_via_qc(qc).await {
+            warn!("{}", e);
+        }
+    }
+
+    /// Commit as soon as we hold a commit proof, a QC for b1 whose parent b0 is from the round just
+    /// before (2-chain), rather than only when the next block is processed: a leader that assembles the
+    /// commit proof of the terminal block then enters the next epoch before it proposes (H3).
+    async fn try_commit_via_qc(&mut self, qc: &QC) -> ConsensusResult<()> {
+        if qc.round <= self.last_committed_round + 1 {
+            return Ok(());
+        }
+        let b1 = match self.read_block(&qc.hash).await? {
+            Some(b1) if b1.qc != QC::genesis() => b1,
+            _ => return Ok(()),
+        };
+        if let Some(b0) = self.read_block(&b1.qc.hash).await? {
+            if b0.round + 1 == b1.round {
+                self.mempool_driver.cleanup(b0.round).await;
+                self.commit(b0).await?;
+            }
+        }
+        Ok(())
     }
 
     #[async_recursion]
@@ -345,6 +495,23 @@ impl Core {
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
 
+        // A block fetched by synchronization may complete the commit proof we already hold (for instance
+        // the child of the terminal block when we catch up with a later epoch).
+        let high_qc = self.high_qc.clone();
+        if let Err(e) = self.try_commit_via_qc(&high_qc).await {
+            warn!("{}", e);
+        }
+
+        // The block our held-back proposal was waiting for (we may have entered the next epoch meanwhile).
+        if let Some((round, _)) = self.pending_proposal {
+            if round != self.round {
+                self.pending_proposal = None;
+            } else if block.digest() == high_qc.hash {
+                let (_, tc) = self.pending_proposal.take().unwrap();
+                self.generate_proposal(tc).await;
+            }
+        }
+
         self.cleanup_proposer(&b0, &b1, block).await;
 
         // Check if we can commit the head of the 2-chain.
@@ -364,13 +531,13 @@ impl Core {
         // See if we can vote for this block.
         if let Some(vote) = self.make_vote(block).await {
             debug!("Created {:?}", vote);
-            let next_leader = self.leader_elector.get_leader(self.round + 1);
+            let next_leader = leader(self.committee(), self.round + 1);
             if next_leader == self.name {
                 self.handle_vote(&vote).await?;
             } else {
                 debug!("Sending {:?} to {}", vote, next_leader);
                 let address = self
-                    .committee
+                    .committee()
                     .address(&next_leader)
                     .expect("The next leader is not in the committee");
                 let message = bincode::serialize(&ConsensusMessage::Vote(vote))
@@ -384,9 +551,27 @@ impl Core {
     async fn handle_proposal(&mut self, block: &Block) -> ConsensusResult<()> {
         let digest = block.digest();
 
-        // Ensure the block proposer is the right leader for the round.
+        // A block of a later epoch: its QC may be the commit proof of our terminal block (H3). Otherwise
+        // keep it until we get there, and fetch its parent.
+        if block.epoch > self.epochs.epoch() {
+            self.catch_up(&block.qc).await;
+            if block.epoch > self.epochs.epoch() {
+                self.defer(ConsensusMessage::Propose(block.clone()));
+                self.request_block(block.qc.hash.clone(), block.author).await;
+                return Ok(());
+            }
+        }
+
+        // A block of an epoch whose table we no longer keep is too old to matter.
+        if self.epochs.get(block.epoch).is_none() {
+            debug!("Dropping {} of old epoch {}", block, block.epoch);
+            return Ok(());
+        }
+
+        // Ensure the block proposer is the right leader for the round (in the table of its epoch).
+        let committee = self.table(block.epoch)?;
         ensure!(
-            block.author == self.leader_elector.get_leader(block.round),
+            block.author == leader(committee, block.round),
             ConsensusError::WrongLeader {
                 digest,
                 leader: block.author,
@@ -394,8 +579,12 @@ impl Core {
             }
         );
 
-        // Check the block is correctly formed.
-        block.verify(&self.committee)?;
+        // Check the block is correctly formed, and its certificates against the tables of their epochs.
+        block.verify(committee)?;
+        self.verify_qc(&block.qc)?;
+        if let Some(ref tc) = block.tc {
+            self.verify_tc(tc)?;
+        }
 
         // Process the QC. This may allow us to advance round.
         self.process_qc(&block.qc).await;
@@ -418,23 +607,64 @@ impl Core {
     }
 
     async fn handle_tc(&mut self, tc: TC) -> ConsensusResult<()> {
-        tc.verify(&self.committee)?;
+        self.verify_tc(&tc)?;
         if tc.round < self.round {
             return Ok(());
         }
         self.process_qc(&tc.high_qc).await;
         self.advance_round(tc.round).await;
-        if self.name == self.leader_elector.get_leader(self.round) {
-            self.generate_proposal(Some(tc)).await;
+        if self.name == leader(self.committee(), self.round) {
+            self.propose(Some(tc)).await;
         }
         Ok(())
+    }
+
+    /// Votes, timeouts and TCs of the current epoch are handled; those of a later epoch wait (their QC is
+    /// processed first, it may move us there); those of an older epoch are dropped (H3).
+    async fn handle_message(&mut self, message: ConsensusMessage) -> ConsensusResult<()> {
+        let epoch = epoch_of(&message);
+        if epoch > self.epochs.epoch() {
+            match &message {
+                ConsensusMessage::Timeout(timeout) => self.catch_up(&timeout.high_qc.clone()).await,
+                ConsensusMessage::TC(tc) => self.catch_up(&tc.high_qc.clone()).await,
+                _ => (),
+            }
+        }
+        match message {
+            ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
+            m if epoch > self.epochs.epoch() => {
+                // Votes of the next epoch can reach us before the block they vote for (which carries the
+                // commit proof that moves us there), and that block may be lost: ask the voter for it.
+                if let ConsensusMessage::Vote(vote) = &m {
+                    if self.requested.insert(vote.hash.clone()) {
+                        self.request_block(vote.hash.clone(), vote.author).await;
+                    }
+                }
+                self.defer(m);
+                Ok(())
+            }
+            _ if epoch < self.epochs.epoch() => Ok(()),
+            ConsensusMessage::Vote(vote) => self.handle_vote(&vote).await,
+            ConsensusMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
+            ConsensusMessage::TC(tc) => self.handle_tc(tc).await,
+            _ => panic!("Unexpected protocol message"),
+        }
+    }
+
+    fn log_result(result: ConsensusResult<()>) {
+        match result {
+            Ok(()) => (),
+            Err(ConsensusError::StoreError(e)) => error!("{}", e),
+            Err(ConsensusError::SerializationError(e)) => error!("Store corrupted. {}", e),
+            Err(e) => warn!("{}", e),
+        }
     }
 
     pub async fn run(&mut self) {
         // Upon booting, generate the very first block (if we are the leader).
         // Also, schedule a timer in case we don't hear from the leader.
         self.timer.reset();
-        if self.name == self.leader_elector.get_leader(self.round) {
+        if self.name == leader(self.committee(), self.round) {
             self.generate_proposal(None).await;
         }
 
@@ -442,22 +672,27 @@ impl Core {
         // and receive timeout notifications from our Timeout Manager.
         loop {
             let result = tokio::select! {
-                Some(message) = self.rx_message.recv() => match message {
-                    ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
-                    ConsensusMessage::Vote(vote) => self.handle_vote(&vote).await,
-                    ConsensusMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
-                    ConsensusMessage::TC(tc) => self.handle_tc(tc).await,
-                    _ => panic!("Unexpected protocol message")
-                },
+                Some(message) = self.rx_message.recv() => self.handle_message(message).await,
                 Some(block) = self.rx_loopback.recv() => self.process_block(&block).await,
                 () = &mut self.timer => self.local_timeout_round().await,
             };
-            match result {
-                Ok(()) => (),
-                Err(ConsensusError::StoreError(e)) => error!("{}", e),
-                Err(ConsensusError::SerializationError(e)) => error!("Store corrupted. {}", e),
-                Err(e) => warn!("{}", e),
+            Self::log_result(result);
+
+            // Messages of an epoch we just entered.
+            while let Some(message) = self.replay.pop_front() {
+                let result = self.handle_message(message).await;
+                Self::log_result(result);
             }
         }
+    }
+}
+
+fn epoch_of(message: &ConsensusMessage) -> u128 {
+    match message {
+        ConsensusMessage::Propose(block) => block.epoch,
+        ConsensusMessage::Vote(vote) => vote.epoch,
+        ConsensusMessage::Timeout(timeout) => timeout.epoch,
+        ConsensusMessage::TC(tc) => tc.epoch,
+        ConsensusMessage::SyncRequest(..) => 0,
     }
 }

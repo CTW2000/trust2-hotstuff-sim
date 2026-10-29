@@ -33,9 +33,11 @@ BASE_PORT = 9000
 LOCK = f"/tmp/{os.environ.get('USER', 'user')}_ttru_bench.lock"
 
 
-def node_parameters(timeout_delay):
+def node_parameters(args):
     return {
-        "consensus": {"timeout_delay": timeout_delay, "sync_retry_delay": 10_000},
+        "consensus": {"timeout_delay": args.timeout_delay, "sync_retry_delay": 10_000,
+                      "epoch_length": args.epoch_length, "entity_cap_ppm": args.entity_cap_ppm,
+                      "class_cap_ppm": args.class_cap_ppm},
         "mempool": {"gc_depth": 50, "sync_retry_delay": 5_000, "sync_retry_nodes": 3,
                     "batch_size": 15_000, "max_batch_delay": 10},
     }
@@ -73,7 +75,7 @@ def run(args):
     names = [Key.from_file(f).name for f in key_files]
     committee = LocalCommittee(names, BASE_PORT)
     committee.print(PathMaker.committee_file())
-    params = NodeParameters(node_parameters(args.timeout_delay))
+    params = NodeParameters(node_parameters(args))
     params.print(PathMaker.parameters_file())
 
     procs = []
@@ -127,6 +129,9 @@ def main():
     ap.add_argument("--tx-size", type=int, default=512)
     ap.add_argument("--duration", type=int, default=30)
     ap.add_argument("--timeout-delay", type=int, default=1_000)
+    ap.add_argument("--epoch-length", type=int, default=100, help="rounds per epoch (0: a single epoch)")
+    ap.add_argument("--entity-cap-ppm", type=int, default=1_000_000)
+    ap.add_argument("--class-cap-ppm", type=int, default=1_000_000)
     ap.add_argument("--cpu-quota", type=int, default=1200, help="percent of one core (1200 = 12 cores)")
     ap.add_argument("--mem-max", default="12G")
     ap.add_argument("--debug", action="store_true")

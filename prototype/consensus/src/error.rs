@@ -75,4 +75,7 @@ pub enum ConsensusError {
 
     #[error("Malformed TC for round {0}")]
     MalformedTC(Round),
+
+    #[error("No weight table for epoch {0}")]
+    UnknownEpoch(EpochNumber),
 }

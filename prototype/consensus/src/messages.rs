@@ -65,18 +65,10 @@ impl Block {
         );
         check_epoch(self.epoch, committee)?;
 
-        // Check the signature.
+        // Check the signature. The embedded QC and TC may belong to the previous epoch (the first block of
+        // an epoch carries the commit proof of the last one): the caller verifies them against the table of
+        // their own epoch (Core::verify_qc, Core::verify_tc).
         self.signature.verify(&self.digest(), &self.author)?;
-
-        // Check the embedded QC.
-        if self.qc != QC::genesis() {
-            self.qc.verify(committee)?;
-        }
-
-        // Check the TC embedded in the block (if any).
-        if let Some(ref tc) = self.tc {
-            tc.verify(committee)?;
-        }
         Ok(())
     }
 }
@@ -313,14 +305,12 @@ impl Timeout {
         // Check the signature.
         self.signature.verify(&self.digest(), &self.author)?;
 
-        // Check the embedded QC (R5: it is from an earlier round).
+        // R5: the embedded QC is from an earlier round. The caller verifies the QC itself against the table
+        // of its own epoch.
         ensure!(
             self.high_qc.round < self.round,
             ConsensusError::MalformedTimeout(self.author)
         );
-        if self.high_qc != QC::genesis() {
-            self.high_qc.verify(committee)?;
-        }
         Ok(())
     }
 }
@@ -376,15 +366,13 @@ impl TC {
             signature.verify(&digest, author)?;
         }
 
-        // Check the embedded highest QC: it is the highest one the signers reported.
+        // The embedded QC is the highest one the signers reported; the caller verifies the QC itself
+        // against the table of its own epoch.
         let max_round = self.high_qc_rounds().into_iter().max().unwrap_or(0);
         ensure!(
             self.high_qc.round == max_round,
             ConsensusError::MalformedTC(self.round)
         );
-        if self.high_qc != QC::genesis() {
-            self.high_qc.verify(committee)?;
-        }
         Ok(())
     }
 

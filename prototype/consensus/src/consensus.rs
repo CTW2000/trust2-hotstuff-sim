@@ -1,8 +1,8 @@
 use crate::config::{Committee, Parameters};
 use crate::core::Core;
+use crate::epoch::EpochConfig;
 use crate::error::ConsensusError;
 use crate::helper::Helper;
-use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
 use crate::messages::{Block, Timeout, Vote, TC};
 use crate::proposer::Proposer;
@@ -78,9 +78,6 @@ impl Consensus {
             name, address
         );
 
-        // Make the leader election module.
-        let leader_elector = LeaderElector::new(committee.clone());
-
         // Make the mempool driver.
         let mempool_driver = MempoolDriver::new(store.clone(), tx_mempool, tx_loopback.clone());
 
@@ -94,12 +91,17 @@ impl Consensus {
         );
 
         // Spawn the consensus core.
+        let epoch_config = EpochConfig {
+            length: parameters.epoch_length,
+            entity_cap_ppm: parameters.entity_cap_ppm,
+            class_cap_ppm: parameters.class_cap_ppm,
+        };
         Core::spawn(
             name,
             committee.clone(),
+            epoch_config,
             signature_service.clone(),
             store.clone(),
-            leader_elector,
             mempool_driver,
             synchronizer,
             parameters.timeout_delay,

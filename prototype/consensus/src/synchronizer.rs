@@ -61,13 +61,25 @@ impl Synchronizer {
                                     .expect("Failed to measure time")
                                     .as_millis();
                                 requests.insert(parent.clone(), now);
-                                let address = committee
-                                    .address(&author)
-                                    .expect("Author of valid block is not in the committee");
                                 let message = ConsensusMessage::SyncRequest(parent, name);
                                 let message = bincode::serialize(&message)
                                     .expect("Failed to serialize sync request");
-                                network.send(address, Bytes::from(message)).await;
+                                if author == name {
+                                    // We proposed on a QC for a block we never received (votes can arrive
+                                    // before the block): asking ourselves would only be retried after
+                                    // sync_retry_delay, so ask everyone at once.
+                                    let addresses = committee
+                                        .broadcast_addresses(&name)
+                                        .into_iter()
+                                        .map(|(_, x)| x)
+                                        .collect();
+                                    network.broadcast(addresses, Bytes::from(message)).await;
+                                } else {
+                                    let address = committee
+                                        .address(&author)
+                                        .expect("Author of valid block is not in the committee");
+                                    network.send(address, Bytes::from(message)).await;
+                                }
                             }
                         }
                     },

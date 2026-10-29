@@ -10,22 +10,21 @@ use std::collections::{HashMap, HashSet};
 #[path = "tests/aggregator_tests.rs"]
 pub mod aggregator_tests;
 
+/// Votes and timeouts are added after verification against the table of their epoch, which is passed in.
 pub struct Aggregator {
-    committee: Committee,
     votes_aggregators: HashMap<Round, HashMap<Digest, Box<QCMaker>>>,
     timeouts_aggregators: HashMap<Round, Box<TCMaker>>,
 }
 
 impl Aggregator {
-    pub fn new(committee: Committee) -> Self {
+    pub fn new() -> Self {
         Self {
-            committee,
             votes_aggregators: HashMap::new(),
             timeouts_aggregators: HashMap::new(),
         }
     }
 
-    pub fn add_vote(&mut self, vote: Vote) -> ConsensusResult<Option<QC>> {
+    pub fn add_vote(&mut self, vote: Vote, committee: &Committee) -> ConsensusResult<Option<QC>> {
         // TODO [issue #7]: A bad node may make us run out of memory by sending many votes
         // with different round numbers or different digests.
 
@@ -35,10 +34,14 @@ impl Aggregator {
             .or_insert_with(HashMap::new)
             .entry(vote.digest())
             .or_insert_with(|| Box::new(QCMaker::new()))
-            .append(vote, &self.committee)
+            .append(vote, committee)
     }
 
-    pub fn add_timeout(&mut self, timeout: Timeout) -> ConsensusResult<Option<TC>> {
+    pub fn add_timeout(
+        &mut self,
+        timeout: Timeout,
+        committee: &Committee,
+    ) -> ConsensusResult<Option<TC>> {
         // TODO: A bad node may make us run out of memory by sending many timeouts
         // with different round numbers.
 
@@ -46,7 +49,7 @@ impl Aggregator {
         self.timeouts_aggregators
             .entry(timeout.round)
             .or_insert_with(|| Box::new(TCMaker::new()))
-            .append(timeout, &self.committee)
+            .append(timeout, committee)
     }
 
     pub fn cleanup(&mut self, round: &Round) {

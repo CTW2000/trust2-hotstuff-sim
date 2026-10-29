@@ -57,18 +57,17 @@ async fn get_genesis_parent_block() {
     }
 }
 
-#[tokio::test]
-async fn get_missing_parent_block() {
-    let committee = committee_with_base_port(12_000);
+// The synchronizer of `name` is asked for the parent of the last block of the chain, which it does not have:
+// it must send a sync request to `targets` and loop the block back once the parent is stored.
+async fn missing_parent(name: PublicKey, base_port: u16, store_path: &str, ask_all: bool) {
+    let committee = committee_with_base_port(base_port);
     let mut chain = chain(keys());
     let block = chain.pop().unwrap();
     let parent_block = chain.pop().unwrap();
 
     // Make a new synchronizer.
-    let path = ".db_test_get_missing_parent_block";
-    let _ = fs::remove_dir_all(path);
-    let mut store = Store::new(path).unwrap();
-    let (name, _) = keys().pop().unwrap();
+    let _ = fs::remove_dir_all(store_path);
+    let mut store = Store::new(store_path).unwrap();
     let (tx_loopback, mut rx_loopback) = channel(1);
     let mut synchronizer = Synchronizer::new(
         name,
@@ -78,11 +77,18 @@ async fn get_missing_parent_block() {
         /* sync_retry_delay */ 10_000,
     );
 
-    // Spawn a listener to receive our sync request.
-    let address = committee.address(&block.author).unwrap();
+    // Spawn listeners to receive our sync request: the block author, or everyone else when we are the
+    // author (we proposed on a QC for a block we never received).
     let message = ConsensusMessage::SyncRequest(parent_block.digest(), name);
     let expected = Bytes::from(bincode::serialize(&message).unwrap());
-    let listener_handle = listener(address, Some(expected.clone()));
+    let targets: Vec<_> = match ask_all {
+        true => committee.broadcast_addresses(&name).into_iter().map(|(_, a)| a).collect(),
+        false => vec![committee.address(&block.author).unwrap()],
+    };
+    let listener_handles: Vec<_> = targets
+        .into_iter()
+        .map(|address| listener(address, Some(expected.clone())))
+        .collect();
 
     // Ask for the parent of a block to the synchronizer. The store does not have the parent yet.
     let copy = block.clone();
@@ -92,8 +98,10 @@ async fn get_missing_parent_block() {
         assert!(ret.unwrap().is_none());
     });
 
-    // Ensure the other listeners correctly received the sync request.
-    assert!(listener_handle.await.is_ok());
+    // Ensure the listeners correctly received the sync request.
+    for listener_handle in listener_handles {
+        assert!(listener_handle.await.is_ok());
+    }
 
     // Ensure the synchronizer returns None, thus suspending the processing of the block.
     assert!(handle.await.is_ok());
@@ -107,4 +115,18 @@ async fn get_missing_parent_block() {
     // to resume processing.
     let delivered = rx_loopback.recv().await.unwrap();
     assert_eq!(delivered, block.clone());
+}
+
+#[tokio::test]
+async fn get_missing_parent_block() {
+    // The last block of the chain is authored by the last key: ask its author.
+    let (name, _) = keys().remove(0);
+    missing_parent(name, 12_000, ".db_test_get_missing_parent_block", false).await;
+}
+
+#[tokio::test]
+async fn get_missing_parent_of_own_block() {
+    // We authored the block ourselves: ask everyone else at once instead of ourselves.
+    let (name, _) = keys().pop().unwrap();
+    missing_parent(name, 12_100, ".db_test_get_missing_parent_of_own_block", true).await;
 }

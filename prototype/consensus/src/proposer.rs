@@ -12,7 +12,8 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 #[derive(Debug)]
 pub enum ProposerMessage {
-    Make(Round, QC, Option<TC>),
+    /// Make a block for the round, with the weight table of the current epoch.
+    Make(Round, QC, Option<TC>, Committee),
     Cleanup(Vec<Digest>),
 }
 
@@ -131,7 +132,10 @@ impl Proposer {
                     //}
                 },
                 Some(message) = self.rx_message.recv() => match message {
-                    ProposerMessage::Make(round, qc, tc) => self.make_block(round, qc, tc).await,
+                    ProposerMessage::Make(round, qc, tc, committee) => {
+                        self.committee = committee;
+                        self.make_block(round, qc, tc).await
+                    }
                     ProposerMessage::Cleanup(digests) => {
                         for x in &digests {
                             self.buffer.remove(x);

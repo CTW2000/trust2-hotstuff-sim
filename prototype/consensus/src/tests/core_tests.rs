@@ -1,5 +1,6 @@
 use super::*;
 use crate::common::{chain, committee, committee_with_base_port, keys, listener, EPOCH};
+use crate::leader::LeaderElector;
 use crypto::SecretKey;
 use futures::future::try_join_all;
 use std::fs;
@@ -24,7 +25,6 @@ fn core(
     let signature_service = SignatureService::new(secret);
     let _ = fs::remove_dir_all(store_path);
     let store = Store::new(store_path).unwrap();
-    let leader_elector = LeaderElector::new(committee.clone());
     let mempool_driver = MempoolDriver::new(store.clone(), tx_mempool, tx_loopback.clone());
     let synchronizer = Synchronizer::new(
         name,
@@ -40,12 +40,17 @@ fn core(
         }
     });
 
+    let epoch_config = EpochConfig {
+        length: 100,
+        entity_cap_ppm: 1_000_000,
+        class_cap_ppm: 1_000_000,
+    };
     Core::spawn(
         name,
         committee,
+        epoch_config,
         signature_service,
         store,
-        leader_elector,
         mempool_driver,
         synchronizer,
         /* timeout_delay */ 100,
@@ -132,7 +137,7 @@ async fn generate_proposal() {
 
     // Ensure the core sends a new block.
     match rx_proposer.recv().await.unwrap() {
-        ProposerMessage::Make(round, qc, tc) => {
+        ProposerMessage::Make(round, qc, tc, _) => {
             assert_eq!(round, 2);
             assert_eq!(qc, hight_qc);
             assert!(tc.is_none());
