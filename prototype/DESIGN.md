@@ -396,7 +396,7 @@ P3 分两步：
 - 账本校验：`epoch.rs`，漏包事实与 AT 指控合并送入 CUSUM。
 - 实验工具：`observer` 程序；`run_local.py` 的 `--otx-rate`、`--attest-guard`、`--censor`、`--censor-adjacent`（审查者在轮转顺序里相邻，是检出的最坏情况）；`otxstat.py` 统计上链延迟和漏包事实。
 
-**测试：** 全部 79 项通过，P3-B 新增 11 项（类型与块字段 5 项、`inclusion.rs` 4 项、账本校验 1 项、证明组装 1 项）。
+**测试：** 全部 79 项通过，P3-B 新增 10 项（类型与块字段 5 项、`inclusion.rs` 4 项、账本校验 1 项）。
 
 **实验**（输入 10,000 tx/s，每 100 轮换表）：
 
