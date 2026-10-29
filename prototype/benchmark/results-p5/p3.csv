@@ -1,0 +1,5 @@
+scenario,build,nodes,net,epoch_length,otx_rate,attest_guard,censor,censor_adjacent,rep,consensus_tps,consensus_latency_ms,e2e_tps,e2e_latency_ms,timeouts,timeout_rounds,top_round,rounds_per_s,epochs,lag_median_ms,lag_max_ms,honest_cut,victim_mean_ms,victim_median_ms,victim_max_ms,other_mean_ms,other_median_ms,other_max_ms,omissions_faulty,g2_excluded_faulty,min_r_faulty,omissions_honest
+control,trust2,31,base,100,25,136,0,False,1,9986,220,9982,324,0,0,924,9.2,10,68,69,0.0,284,283,405,285,285,385,,,,
+censor,trust2,31,base,100,25,136,10,True,1,10000,226,9989,330,0,0,901,9.0,10,67,70,0.0,385,301,1678,294,292,535,612,10,840000,
+control,trust2,31,base,100,25,136,0,False,2,9987,218,9984,322,0,0,933,9.3,10,66,69,0.0,284,284,412,281,280,395,,,,
+censor,trust2,31,base,100,25,136,10,True,2,9985,228,9979,334,0,0,898,9.0,9,69,70,0.0,397,298,1679,296,291,659,782,9,900000,2

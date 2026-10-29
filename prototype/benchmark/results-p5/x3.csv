@@ -1,0 +1,15 @@
+scenario,build,nodes,net,epoch_length,rep,faults,consensus_tps,consensus_latency_ms,e2e_tps,e2e_latency_ms,timeouts,timeout_rounds,top_round,rounds_per_s,epochs,lag_median_ms,lag_max_ms,honest_cut,g2_excluded_faulty,min_r_faulty,late_p,frame,lie_nr,g1_levels_faulty,g1_suspensions_faulty,equivocate
+silent,baseline,31,base,50,1,3,7550,399,7546,1134,58,64,335,3.4,0,0,0,0.0,,,,,,,,
+silent,trust2,31,base,50,1,3,8876,298,8802,692,31,38,580,5.8,12,66,68,0.0,3,900000,,,,,,
+late,baseline,31,base,50,1,,9980,330,9971,543,16,42,668,6.7,0,0,0,0.0,,,0.1,,,,,
+late,trust2,31,base,50,1,,9717,340,9716,587,23,54,621,6.2,13,482,4492,0.0,,,0.1,,,,,
+framers+late,trust2,31,base,50,1,,4698,11113,4694,11682,76,114,127,1.3,3,1043,1067,0.0,,,0.1,7,,,,
+liars,trust2,31,base,50,1,,9987,235,9979,342,0,0,868,8.7,18,66,69,0.0,,,,,3,9,6,
+equivocators,trust2,31,base,50,1,,9993,226,9991,330,0,0,900,9.0,19,67,68,0.0,,,,,,6,6,3
+silent,baseline,31,base,50,2,3,10078,340,9716,1360,53,60,368,3.7,0,0,0,0.0,,,,,,,,
+silent,trust2,31,base,50,2,3,10026,321,9945,815,31,38,542,5.4,11,67,70,0.0,3,900000,,,,,,
+late,baseline,31,base,50,2,,9986,367,9976,598,19,50,644,6.4,0,0,0,0.0,,,0.1,,,,,
+late,trust2,31,base,50,2,,9973,340,9961,602,19,47,626,6.3,13,1060,3815,0.0,,,0.1,,,,,
+framers+late,trust2,31,base,50,2,,4785,7117,4785,7690,76,117,98,1.0,2,1247,1247,0.0,,,0.1,7,,,,
+liars,trust2,31,base,50,2,,9987,233,9974,340,0,0,871,8.7,18,66,87,0.0,,,,,3,9,6,
+equivocators,trust2,31,base,50,2,,9994,225,9980,330,0,0,904,9.0,19,67,70,0.0,,,,,,6,6,3

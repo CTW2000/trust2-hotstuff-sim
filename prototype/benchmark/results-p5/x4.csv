@@ -1,0 +1,9 @@
+build,nodes,net,epoch_length,rep,consensus_tps,consensus_latency_ms,e2e_tps,e2e_latency_ms,timeouts,timeout_rounds,top_round,rounds_per_s,epochs,lag_median_ms,lag_max_ms,honest_cut
+baseline,10,base,20,1,9977,210,9976,313,0,0,688,9.8,0,0,0,0.0
+trust2,10,base,20,1,9987,201,9978,303,0,0,714,10.2,36,63,64,0.0
+baseline,31,base,20,1,9986,223,9976,328,0,0,642,9.2,0,0,0,0.0
+trust2,31,base,20,1,9979,227,9971,333,0,0,632,9.0,32,66,69,0.0
+baseline,10,base,20,2,9980,237,9968,348,0,0,605,8.6,0,0,0,0.0
+trust2,10,base,20,2,9982,205,9982,308,0,0,703,10.0,36,63,64,0.0
+baseline,31,base,20,2,9987,222,9981,326,0,0,647,9.2,0,0,0,0.0
+trust2,31,base,20,2,9983,230,9977,337,0,0,625,8.9,32,67,77,0.0

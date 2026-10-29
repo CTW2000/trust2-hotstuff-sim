@@ -1,7 +1,7 @@
 """P5 experiment driver (prototype/DESIGN.md §14.3). Runs run_local.py over a matrix, one run at a time (the runner
 holds the lab server's lock and resource limits), and appends one CSV row per run to results-p5/<experiment>.csv;
 `report` summarizes every CSV into results-p5/<experiment>.md (median and range over the repetitions).
-Run from prototype/benchmark/:  python3 p5.py x2 | x3 | p3 | report
+Run from prototype/benchmark/:  python3 p5.py x2 | x3 | p3 | x4 | report
 """
 import csv
 import os
@@ -164,6 +164,14 @@ def p3():
             run("p3", config, 90)
 
 
+def x4():
+    """Epoch changes: Trust 2.0 with epochs of 20 rounds against the baseline, base network, n = 10 and 31."""
+    for rep in (1, 2):
+        for nodes in (10, 31):
+            for build in ("baseline", "trust2"):
+                run("x4", dict(build=build, nodes=nodes, net="base", epoch_length=20, rep=rep), 60)
+
+
 def report():
     for path in sorted(glob(f"{OUT}/*.csv")):
         with open(path) as fh:
@@ -221,4 +229,4 @@ def compare_x2(rows):
 
 
 if __name__ == "__main__":
-    {"x2": x2, "x3": x3, "p3": p3, "report": report}[sys.argv[1]]()
+    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "report": report}[sys.argv[1]]()
