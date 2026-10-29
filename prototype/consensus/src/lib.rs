@@ -11,6 +11,7 @@ mod messages;
 mod proposer;
 mod synchronizer;
 mod timer;
+pub mod ttru;
 
 #[cfg(test)]
 #[path = "tests/common.rs"]
