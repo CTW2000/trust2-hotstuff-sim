@@ -1,4 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
+use crate::delay;
 use crate::error::NetworkError;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
@@ -14,7 +15,7 @@ use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, sleep_until, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 #[cfg(test)]
@@ -118,8 +119,9 @@ struct Connection {
     receiver: Receiver<InnerMessage>,
     /// The initial delay to wait before re-attempting a connection (in ms).
     retry_delay: u64,
-    /// Buffer keeping all messages that need to be re-transmitted.
-    buffer: VecDeque<(Bytes, oneshot::Sender<Bytes>)>,
+    /// Buffer keeping all messages that need to be re-transmitted, with the time each is due (synthetic link
+    /// delay, see delay.rs).
+    buffer: VecDeque<(Bytes, oneshot::Sender<Bytes>, Instant)>,
 }
 
 impl Connection {
@@ -171,14 +173,19 @@ impl Connection {
                             // Drain the channel into the buffer to not saturate the channel and block the caller task.
                             // The caller is responsible to cleanup the buffer through the cancel handlers.
                             Some(InnerMessage{data, cancel_handler}) = self.receiver.recv() => {
-                                self.buffer.push_back((data, cancel_handler));
-                                self.buffer.retain(|(_, handler)| !handler.is_closed());
+                                self.enqueue(data, cancel_handler);
+                                self.buffer.retain(|(_, handler, _)| !handler.is_closed());
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    fn enqueue(&mut self, data: Bytes, handler: oneshot::Sender<Bytes>) {
+        let at = delay::due(&self.address, data.len(), self.buffer.back().map(|(_, _, at)| *at));
+        self.buffer.push_back((data, handler, at));
     }
 
     /// Transmit messages once we have established a connection.
@@ -189,12 +196,17 @@ impl Connection {
 
         let (mut writer, mut reader) = Framed::new(stream, LengthDelimitedCodec::new()).split();
         let error = 'connection: loop {
-            // Try to send all messages of the buffer.
-            while let Some((data, handler)) = self.buffer.pop_front() {
+            // Try to send all messages of the buffer that are due.
+            while let Some((_, handler, at)) = self.buffer.front() {
                 // Skip messages that have been cancelled.
                 if handler.is_closed() {
+                    self.buffer.pop_front();
                     continue;
                 }
+                if *at > Instant::now() {
+                    break;
+                }
+                let (data, handler, _) = self.buffer.pop_front().unwrap();
 
                 // Try to send the message.
                 match writer.send(data.clone()).await {
@@ -205,18 +217,21 @@ impl Connection {
                     }
                     Err(e) => {
                         // We failed to send the message, we put it back into the buffer.
-                        self.buffer.push_front((data, handler));
+                        self.buffer.push_front((data, handler, Instant::now()));
                         break 'connection NetworkError::FailedToSendMessage(self.address, e);
                     }
                 }
             }
 
-            // Check if there are any new messages to send or if we get an ACK for messages we already sent.
+            // Check if there are any new messages to send, if the next one is due, or if we get an ACK for messages we
+            // already sent.
+            let next = self.buffer.front().map_or_else(|| Instant::now() + Duration::from_secs(3600), |(_, _, at)| *at);
             tokio::select! {
                 Some(InnerMessage{data, cancel_handler}) = self.receiver.recv() => {
                     // Add the message to the buffer of messages to send.
-                    self.buffer.push_back((data, cancel_handler));
+                    self.enqueue(data, cancel_handler);
                 },
+                () = sleep_until(next), if !self.buffer.is_empty() => {},
                 response = reader.next() => {
                     let (data, handler) = match pending_replies.pop_front() {
                         Some(message) => message,
@@ -240,8 +255,8 @@ impl Connection {
 
         // If we reach this code, it means something went wrong. Put the messages for which we didn't receive an ACK
         // back into the sending buffer, we will try to send them again once we manage to establish a new connection.
-        while let Some(message) = pending_replies.pop_back() {
-            self.buffer.push_front(message);
+        while let Some((data, handler)) = pending_replies.pop_back() {
+            self.buffer.push_front((data, handler, Instant::now()));
         }
         error
     }

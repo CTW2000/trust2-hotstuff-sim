@@ -45,6 +45,9 @@ pub struct Parameters {
     /// Experiment switch: after every vote, also sign a timeout of the same round with an older high QC (E3).
     #[serde(default)]
     pub regress: bool,
+    /// Experiment switch: never vote, and report NR = 1 in every timeout (framing colluder).
+    #[serde(default)]
+    pub frame: bool,
 }
 
 fn default_attest_guard() -> u64 {
@@ -79,6 +82,7 @@ impl Default for Parameters {
             lie_nr: false,
             invalid_block: false,
             regress: false,
+            frame: false,
         }
     }
 }
@@ -105,6 +109,9 @@ impl Parameters {
         }
         if self.regress {
             info!("Regressing the high QC after every vote (experiment)");
+        }
+        if self.frame {
+            info!("Framing: withholding votes and reporting NR = 1 (experiment)");
         }
         info!(
             "Entity cap set to {} ppm, uncertified class cap to {} ppm",

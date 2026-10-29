@@ -14,6 +14,7 @@ Run from prototype/benchmark/ (after `cargo build --release --features benchmark
 import argparse
 import base64
 import fcntl
+import json
 import os
 import shlex
 import shutil
@@ -54,15 +55,36 @@ def in_scope(args):
     return subprocess.run(cmd, env=dict(os.environ, TTRU_SCOPE="1")).returncode
 
 
-def binary(name):
-    path = join(PathMaker.binary_path(), name)
+# Binaries of the two builds: Trust 2.0 (this workspace) and the baseline, upstream plus the same fixes (baseline/).
+BUILDS = {"trust2": join("..", "target", "release"), "baseline": join("..", "baseline", "target", "release")}
+
+
+def binary(name, build="trust2"):
+    path = join(BUILDS[build], name)
     if not os.path.exists(path):
-        sys.exit(f"missing {path}: run `cargo build --release --features benchmark` in prototype/node first")
+        sys.exit(f"missing {path}: run `cargo build --release --features benchmark` in the {build} node crate first")
     return os.path.abspath(path)
 
 
+def delays_file(args, committee):
+    """The link-delay table of the run for network/src/delay.rs (DESIGN.md §14.1), or None for no delays."""
+    if args.net == "none":
+        return None
+    with open(join("nets", f"{args.net}-n{args.nodes}-s0.json")) as fh:
+        net = json.load(fh)
+    addresses = {}
+    for i in range(args.nodes):
+        for address in (committee.consensus[i], committee.front[i], committee.mempool[i]):
+            addresses[address] = i
+    path = os.path.abspath(".delays.json")
+    with open(path, "w") as fh:
+        json.dump(dict(addresses=addresses, base_ms=net["base_ms"], jitter_ms=net["jitter_ms"],
+                       bandwidth_mbps=net["bandwidth_mbps"]), fh)
+    return path
+
+
 def run(args):
-    node, client = binary("node"), binary("client")
+    node, client = binary("node", args.build), binary("client", args.build)
     observer = binary("observer") if args.otx_rate > 0 else None
     for f in glob(".db-*"):
         shutil.rmtree(f, ignore_errors=True)
@@ -80,6 +102,7 @@ def run(args):
     committee.print(PathMaker.committee_file())
     params = NodeParameters(node_parameters(args))
     params.print(PathMaker.parameters_file())
+    delays = delays_file(args, committee)
 
     procs = []
     up = args.nodes - args.faults                            # faulty nodes are not booted
@@ -94,7 +117,7 @@ def run(args):
     switches = {}
     tail = list(range(up - 1, -1, -1))
     roles = (("--censor", args.censor), ("--equivocate", args.equivocate), ("--lie-nr", args.lie_nr),
-             ("--invalid-block", args.invalid_block), ("--regress", args.regress))
+             ("--invalid-block", args.invalid_block), ("--regress", args.regress), ("--frame", args.frame))
     for flag, count in roles:
         for i in tail[:count]:
             switches.setdefault(i, []).append(flag)
@@ -109,7 +132,8 @@ def run(args):
         cmd = (f"{node} {'-vvv' if args.debug else '-vv'} run --keys {key_files[i]} "
                f"--committee {PathMaker.committee_file()} --store {PathMaker.db_path(i)} "
                f"--parameters {PathMaker.parameters_file()}{censor}")
-        procs.append(launch(cmd, PathMaker.node_log_file(i)))
+        env = dict(os.environ, TTRU_DELAYS=delays, TTRU_NODE=str(i)) if delays else None
+        procs.append(launch(cmd, PathMaker.node_log_file(i), env))
     if observer:
         targets = " ".join(committee.consensus[:up])
         cmd = f"{observer} --rate {args.otx_rate} {targets}"
@@ -127,9 +151,9 @@ def run(args):
         fh.write(summary)
 
 
-def launch(cmd, log_file):
+def launch(cmd, log_file, env=None):
     return subprocess.Popen(shlex.split(cmd), stdout=subprocess.DEVNULL, stderr=open(log_file, "w"),
-                            start_new_session=True)
+                            start_new_session=True, env=env)
 
 
 def stop(procs):
@@ -147,6 +171,8 @@ def stop(procs):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--nodes", type=int, default=4)
+    ap.add_argument("--build", choices=sorted(BUILDS), default="trust2", help="Trust 2.0 or the upstream baseline")
+    ap.add_argument("--net", choices=["none", "base", "wide"], default="none", help="synthetic link delays")
     ap.add_argument("--faults", type=int, default=0)
     ap.add_argument("--clients", type=int, default=4)
     ap.add_argument("--rate", type=int, default=50_000)
@@ -163,6 +189,7 @@ def main():
     ap.add_argument("--lie-nr", type=int, default=0, help="number of booted nodes that lie about NR")
     ap.add_argument("--invalid-block", type=int, default=0, help="number of booted nodes that propose invalid blocks (E2)")
     ap.add_argument("--regress", type=int, default=0, help="number of booted nodes that regress their high QC (E3)")
+    ap.add_argument("--frame", type=int, default=0, help="number of booted nodes that withhold votes and claim NR = 1")
     ap.add_argument("--l-max-ppm", type=int, default=100_000, help="G1 suspension cap L_max in ppm")
     ap.add_argument("--governance-malicious", action="store_true", help="G1: an L4 without a fork evicts")
     ap.add_argument("--entity-cap-ppm", type=int, default=1_000_000)

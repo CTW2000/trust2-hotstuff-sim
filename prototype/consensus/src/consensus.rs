@@ -113,6 +113,7 @@ impl Consensus {
                 lie_nr: parameters.lie_nr,
                 invalid_block: parameters.invalid_block,
                 regress: parameters.regress,
+                frame: parameters.frame,
             },
             signature_service.clone(),
             store.clone(),

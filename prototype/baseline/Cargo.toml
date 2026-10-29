@@ -1,0 +1,5 @@
+# The baseline of the experiments (prototype/DESIGN.md §14.2): upstream consensus and node crates (commit 5d2cb4e of
+# this repository) with the same fixes as the Trust 2.0 prototype, on the prototype's own crypto, store, network
+# (with the delay injection) and mempool crates.
+[workspace]
+members = ["consensus", "node"]

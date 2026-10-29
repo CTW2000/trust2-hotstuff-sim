@@ -61,6 +61,9 @@ enum Command {
         /// Experiment switch: regress the high QC after every vote (E3, DESIGN.md §13.3).
         #[clap(long)]
         regress: bool,
+        /// Experiment switch: withhold votes and report NR = 1 (framing colluder, DESIGN.md §14.3).
+        #[clap(long)]
+        frame: bool,
     },
     /// Deploy a local testbed with the specified number of nodes.
     Deploy {
@@ -101,12 +104,13 @@ async fn main() {
             lie_nr,
             invalid_block,
             regress,
+            frame,
         } => match Node::new(
             &committee,
             &keys,
             &store,
             parameters,
-            Experiment { censor, equivocate, lie_nr, invalid_block, regress },
+            Experiment { censor, equivocate, lie_nr, invalid_block, regress, frame },
         )
         .await
         {

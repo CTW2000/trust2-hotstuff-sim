@@ -46,6 +46,9 @@ pub struct Faults {
     pub invalid_block: bool,
     /// After every vote, also broadcast a timeout of the same round with an older high QC (E3).
     pub regress: bool,
+    /// Never vote, and report NR = 1 in every timeout (withheld votes plus NR lies against the leaders: the
+    /// framing colluders of the simulator, which leave no G1 evidence).
+    pub frame: bool,
 }
 
 pub struct Core {
@@ -468,7 +471,7 @@ impl Core {
                     self.high_qc.clone(),
                     self.round,
                     epoch,
-                    /* nr */ self.ready_round < self.round,
+                    /* nr */ self.ready_round < self.round || self.faults.frame,
                     self.name,
                     self.signature_service.clone(),
                 )
@@ -821,6 +824,7 @@ impl Core {
 
         // See if we can vote for this block.
         let vote = match self.make_vote(block).await {
+            Some(_) if self.faults.frame => None,
             Some(vote) => Some(vote),
             // Experiment switch: vote for our own invalid block anyway (E2).
             None if self.faults.invalid_block && block.author == self.name && block.round == self.round => {

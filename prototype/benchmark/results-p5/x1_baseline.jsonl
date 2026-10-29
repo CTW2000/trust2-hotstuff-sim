@@ -1,0 +1,3 @@
+{"n": 4, "quorum": 3, "bytes": {"vote": 156, "timeout": 520, "qc": 396, "tc": 388, "block_empty": 529, "block_tc": 917, "block_100": 3729}, "us": {"verify_qc": 121, "verify_tc": 168}}
+{"n": 31, "quorum": 21, "bytes": {"vote": 156, "timeout": 2608, "qc": 2484, "tc": 2620, "block_empty": 2617, "block_tc": 5237, "block_100": 5817}, "us": {"verify_qc": 576, "verify_tc": 1191}}
+{"n": 100, "quorum": 67, "bytes": {"vote": 156, "timeout": 7944, "qc": 7820, "tc": 8324, "block_empty": 7953, "block_tc": 16277, "block_100": 11153}, "us": {"verify_qc": 1735, "verify_tc": 3824}}

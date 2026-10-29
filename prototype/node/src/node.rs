@@ -22,6 +22,7 @@ pub struct Experiment {
     pub lie_nr: bool,
     pub invalid_block: bool,
     pub regress: bool,
+    pub frame: bool,
 }
 
 impl Node {
@@ -52,6 +53,7 @@ impl Node {
         parameters.consensus.lie_nr |= experiment.lie_nr;
         parameters.consensus.invalid_block |= experiment.invalid_block;
         parameters.consensus.regress |= experiment.regress;
+        parameters.consensus.frame |= experiment.frame;
 
         // Make the data store.
         let store = Store::new(store_path).expect("Failed to create store");

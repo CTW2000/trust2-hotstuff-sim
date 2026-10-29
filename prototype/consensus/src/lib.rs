@@ -22,6 +22,10 @@ pub mod ttru;
 #[path = "tests/common.rs"]
 mod common;
 
+#[cfg(test)]
+#[path = "tests/overhead_tests.rs"]
+mod overhead_tests;
+
 pub use crate::config::{Committee, Parameters};
 pub use crate::consensus::{Consensus, ConsensusMessage};
 pub use crate::messages::{Block, Otx, QC, TC};
