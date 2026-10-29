@@ -3,18 +3,22 @@
 //! - H1: the terminal block G_e of epoch e is the first block of epoch e on the chain whose round is at
 //!   least s_e + length, where s_e is the round of G_{e-1} (0 for the first epoch). The predicate only
 //!   looks at the block, so it is a function of the chain prefix.
-//! - The table of epoch e+1 is a deterministic function of the ledger up to G_e. In P2 there is no
-//!   evidence on the ledger yet, so it is CapNorm of the base weights with r = 1 and z = 1 (reputation and
-//!   suspensions come with P3 and P4).
+//! - The table of epoch e+1 is a deterministic function of the ledger up to G_e: the AT accusations on it
+//!   drive the G2 leader rule and the reputations (reputation.rs, DESIGN.md §12.2), which give each
+//!   member's stake (CapNorm of the base weights times r, within the budget) and whether it may lead.
+//!   Suspensions (z, G1) come with P4.
 //! - H3: a node enters epoch e+1 when it first holds a commit proof of G_e (Core::commit); from then on it
 //!   signs no message of an older epoch. The tables of the last few epochs are kept to verify old blocks
 //!   received through synchronization.
 
 use crate::config::{Authority, Committee, EpochNumber, Stake};
 use crate::consensus::Round;
+use crate::leader::leader;
 use crate::messages::Block;
+use crate::reputation::{Event, G2Config, Reputation};
 use crate::ttru::{self, Class};
 use crypto::PublicKey;
+use log::info;
 use std::collections::BTreeMap;
 
 #[cfg(test)]
@@ -36,12 +40,14 @@ pub struct Epochs {
     config: EpochConfig,
     /// Members in a fixed order with their addresses and classes (from the configuration).
     members: Vec<(PublicKey, Authority)>,
-    /// CapNorm of the base weights (fixed point).
-    base: Vec<u128>,
+    /// G2 state from the ledger, by member index; holds the CapNorm base weights.
+    reputation: Reputation,
     current: EpochNumber,
     /// s_e: round of the terminal block of the previous epoch.
     start: Round,
     tables: BTreeMap<EpochNumber, Committee>,
+    /// First round of each kept epoch (a round's leader comes from the table of its epoch).
+    first_rounds: BTreeMap<EpochNumber, Round>,
 }
 
 impl Epochs {
@@ -70,28 +76,34 @@ impl Epochs {
         let mut epochs = Self {
             config,
             members,
-            base,
+            reputation: Reputation::new(base, G2Config::default()),
             current: roster.epoch,
             start: 0,
             tables: BTreeMap::new(),
+            first_rounds: BTreeMap::new(),
         };
         let first = epochs.make_table(roster.epoch);
         epochs.tables.insert(roster.epoch, first);
+        epochs.first_rounds.insert(roster.epoch, 0);
         epochs
     }
 
-    /// W_e = F(ledger up to G_{e-1}). P2: no evidence yet, so r = 1 and z = 1 for everyone.
+    /// W_e = F(ledger up to G_{e-1}): stakes from the reputations within the budget, leadership from the G2
+    /// exclusions. P3: no suspensions yet (z = 1).
     fn make_table(&self, epoch: EpochNumber) -> Committee {
         let n = self.members.len();
-        let stakes = ttru::table(&self.base, &vec![1_000_000; n], &vec![true; n], ttru::ONE);
+        let stakes = self.reputation.stakes(&vec![true; n]);
+        let excluded = self.reputation.excluded();
         Committee {
             authorities: self
                 .members
                 .iter()
                 .zip(stakes)
-                .map(|((name, a), stake)| {
+                .zip(excluded)
+                .map(|(((name, a), stake), excluded)| {
                     let authority = Authority {
                         stake: stake as Stake,
+                        leader: !excluded,
                         ..a.clone()
                     };
                     (*name, authority)
@@ -99,6 +111,18 @@ impl Epochs {
                 .collect(),
             epoch,
         }
+    }
+
+    /// A committed block, in chain order: the AT accusations it carries go on the ledger state.
+    pub fn record(&mut self, block: &Block) {
+        for accusation in &block.accusations {
+            self.reputation.record(accusation.round, accusation.epoch);
+        }
+    }
+
+    /// Rounds up to here have been processed by the leader rule; accusations of them come too late.
+    pub fn done(&self) -> Round {
+        self.reputation.done()
     }
 
     pub fn epoch(&self) -> EpochNumber {
@@ -128,16 +152,40 @@ impl Epochs {
         self.config.length > 0 && round > self.start + self.config.length
     }
 
-    /// H3: enter the next epoch once its terminal block is committed.
+    /// H3: enter the next epoch once its terminal block is committed. The leader rule processes the rounds up
+    /// to (terminal round + 1 - lag), each led by the leader of its epoch's table (the epoch the accusation
+    /// was made in, if any); then the next table is computed.
     pub fn enter_next(&mut self, terminal: &Block) {
+        let horizon = (terminal.round + 1).saturating_sub(self.reputation.config().lag);
+        let (tables, first_rounds, members) = (&self.tables, &self.first_rounds, &self.members);
+        let events = self.reputation.advance(horizon, |round, accused_in| {
+            let epoch = accused_in.or_else(|| {
+                first_rounds.iter().rev().find(|(_, first)| **first <= round).map(|(e, _)| *e)
+            })?;
+            let name = leader(tables.get(&epoch)?, round);
+            members.binary_search_by_key(&name, |(n, _)| *n).ok()
+        });
+        for event in events {
+            let (what, k, round) = match event {
+                Event::Exclude(k, u) => ("excluded from leading", k, u),
+                Event::Release(k, u) => ("may lead again", k, u),
+                Event::Queue(k, u) => ("convicted, queued", k, u),
+                Event::Drop(k, u) => ("dropped from the queue", k, u),
+            };
+            info!("G2: {} {} at round {}", self.members[*k].0, what, round);
+        }
+
         let next = self.current + 1;
         let table = self.make_table(next);
         self.tables.insert(next, table);
+        // The child of the terminal block still belongs to this epoch; the next one starts after it.
+        self.first_rounds.insert(next, terminal.round + 2);
         self.current = next;
         self.start = terminal.round;
         while self.tables.len() > KEEP {
             let oldest = *self.tables.keys().next().unwrap();
             self.tables.remove(&oldest);
+            self.first_rounds.remove(&oldest);
         }
     }
 }

@@ -62,11 +62,15 @@ pub struct Authority {
     pub stake: Stake,
     pub address: SocketAddr,
     /// Certified (licensed) entity; uncertified ones share at most the class cap.
-    #[serde(default = "default_certified")]
+    #[serde(default = "default_true")]
     pub certified: bool,
+    /// G2: may lead in this epoch (false while excluded by the leader rule); set by the weight table, not by
+    /// the configuration.
+    #[serde(default = "default_true")]
+    pub leader: bool,
 }
 
-fn default_certified() -> bool {
+fn default_true() -> bool {
     true
 }
 
@@ -92,6 +96,7 @@ impl Committee {
                         stake,
                         address,
                         certified: true,
+                        leader: true,
                     };
                     (name, authority)
                 })
