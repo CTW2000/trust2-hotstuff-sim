@@ -16,7 +16,7 @@ class ParseError(Exception):
 
 
 class LogParser:
-    def __init__(self, clients, nodes, faults):
+    def __init__(self, clients, nodes, faults, warmup=0):
         inputs = [clients, nodes]
         assert all(isinstance(x, list) for x in inputs)
         assert all(isinstance(x, str) for y in inputs for x in y)
@@ -38,6 +38,11 @@ class LogParser:
             = zip(*results)
         self.misses = sum(misses)
 
+        # Warm-up: leave out the first `warmup` seconds after the clients start (connections are set up and
+        # the nodes catch up with each other then); 0 keeps the upstream measurement.
+        self.warmup = warmup
+        self.cutoff = min(self.start) + warmup
+
         # Parse the nodes logs.
         try:
             with Pool(PARSE_PROCS) as p:
@@ -46,12 +51,22 @@ class LogParser:
             raise ParseError(f'Failed to parse node logs: {e}')
         proposals, commits, sizes, self.received_samples, timeouts, self.configs \
             = zip(*results)
-        self.proposals = self._merge_results([x.items() for x in proposals])
-        self.commits = self._merge_results([x.items() for x in commits])
+        self.proposals = {
+            k: v for k, v in self._merge_results([x.items() for x in proposals]).items()
+            if v >= self.cutoff
+        }
+        self.commits = {
+            k: v for k, v in self._merge_results([x.items() for x in commits]).items()
+            if k in self.proposals
+        }
         self.sizes = {
             k: v for x in sizes for k, v in x.items() if k in self.commits
         }
-        self.timeouts = max(timeouts)
+        self.sent_samples = [
+            {k: v for k, v in x.items() if v >= self.cutoff} for x in self.sent_samples
+        ]
+        since = self.cutoff if warmup else float('-inf')    # upstream counts the start-up timeouts too
+        self.timeouts = max(len([t for t in x if t >= since]) for x in timeouts)
 
         # Check whether clients missed their target rate.
         if self.misses != 0:
@@ -108,8 +123,8 @@ class LogParser:
         tmp = findall(r'Batch ([^ ]+) contains sample tx (\d+)', log)
         samples = {int(s): d for d, s in tmp}
 
-        tmp = findall(r'.* WARN .* Timeout', log)
-        timeouts = len(tmp)
+        tmp = findall(r'\[([^ ]*Z) WARN .* Timeout', log)
+        timeouts = [self._to_posix(t) for t in tmp]
 
         configs = {
             'consensus': {
@@ -164,7 +179,7 @@ class LogParser:
     def _end_to_end_throughput(self):
         if not self.commits:
             return 0, 0, 0
-        start, end = min(self.start), max(self.commits.values())
+        start, end = self.cutoff, max(self.commits.values())
         duration = end - start
         bytes = sum(self.sizes.values())
         bps = bytes / duration
@@ -175,8 +190,7 @@ class LogParser:
         latency = []
         for sent, received in zip(self.sent_samples, self.received_samples):
             for tx_id, batch_id in received.items():
-                if batch_id in self.commits:
-                    assert tx_id in sent  # We receive txs that we sent.
+                if batch_id in self.commits and tx_id in sent:
                     start = sent[tx_id]
                     end = self.commits[batch_id]
                     latency += [end-start]
@@ -207,6 +221,7 @@ class LogParser:
             f' Input rate: {sum(self.rate):,} tx/s\n'
             f' Transaction size: {self.size[0]:,} B\n'
             f' Execution time: {round(duration):,} s\n'
+            f' Warm-up (left out): {self.warmup:,} s\n'
             '\n'
             f' Consensus timeout delay: {consensus_timeout_delay:,} ms\n'
             f' Consensus sync retry delay: {consensus_sync_retry_delay:,} ms\n'
@@ -233,16 +248,20 @@ class LogParser:
             f.write(self.result())
 
     @classmethod
-    def process(cls, directory, faults):
+    def process(cls, directory, faults, warmup=0):
         assert isinstance(directory, str)
 
+        # Client i sends to node i: sort by index, not by name (node-10 sorts before node-2).
+        def by_index(filename):
+            return int(search(r'-(\d+)\.log$', filename).group(1))
+
         clients = []
-        for filename in sorted(glob(join(directory, 'client-*.log'))):
+        for filename in sorted(glob(join(directory, 'client-*.log')), key=by_index):
             with open(filename, 'r') as f:
                 clients += [f.read()]
         nodes = []
-        for filename in sorted(glob(join(directory, 'node-*.log'))):
+        for filename in sorted(glob(join(directory, 'node-*.log')), key=by_index):
             with open(filename, 'r') as f:
                 nodes += [f.read()]
 
-        return cls(clients, nodes, faults)
+        return cls(clients, nodes, faults, warmup)

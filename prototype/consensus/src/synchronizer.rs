@@ -10,6 +10,7 @@ use futures::stream::StreamExt as _;
 use log::{debug, error};
 use network::SimpleSender;
 use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -20,6 +21,29 @@ use tokio::time::{sleep, Duration, Instant};
 pub mod synchronizer_tests;
 
 const TIMER_ACCURACY: u64 = 5_000;
+
+/// How many holders of a missing block we ask at first (a retry asks everyone).
+pub const SYNC_FANOUT: usize = 3;
+
+/// The nodes to ask for the block a QC certifies: its other signers, each of which stored the block before
+/// voting for it. The author of a child block may hold only the QC (votes can arrive before the block), so
+/// asking it alone can leave the request unanswered until the retry. Without other signers, ask everyone.
+pub fn holders(qc: &QC, committee: &Committee, name: &PublicKey) -> Vec<SocketAddr> {
+    let signers: Vec<_> = qc
+        .votes
+        .iter()
+        .filter(|(signer, _)| signer != name)
+        .filter_map(|(signer, _)| committee.address(signer))
+        .collect();
+    if !signers.is_empty() {
+        return signers;
+    }
+    committee
+        .broadcast_addresses(name)
+        .into_iter()
+        .map(|(_, x)| x)
+        .collect()
+}
 
 pub struct Synchronizer {
     store: Store,
@@ -50,7 +74,7 @@ impl Synchronizer {
                     Some(block) = rx_inner.recv() => {
                         if pending.insert(block.digest()) {
                             let parent = block.parent().clone();
-                            let author = block.author;
+                            let addresses = holders(&block.qc, &committee, &name);
                             let fut = Self::waiter(store_copy.clone(), parent.clone(), block);
                             waiting.push(fut);
 
@@ -64,22 +88,7 @@ impl Synchronizer {
                                 let message = ConsensusMessage::SyncRequest(parent, name);
                                 let message = bincode::serialize(&message)
                                     .expect("Failed to serialize sync request");
-                                if author == name {
-                                    // We proposed on a QC for a block we never received (votes can arrive
-                                    // before the block): asking ourselves would only be retried after
-                                    // sync_retry_delay, so ask everyone at once.
-                                    let addresses = committee
-                                        .broadcast_addresses(&name)
-                                        .into_iter()
-                                        .map(|(_, x)| x)
-                                        .collect();
-                                    network.broadcast(addresses, Bytes::from(message)).await;
-                                } else {
-                                    let address = committee
-                                        .address(&author)
-                                        .expect("Author of valid block is not in the committee");
-                                    network.send(address, Bytes::from(message)).await;
-                                }
+                                network.lucky_broadcast(addresses, Bytes::from(message), SYNC_FANOUT).await;
                             }
                         }
                     },

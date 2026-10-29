@@ -9,7 +9,7 @@ Replaces upstream `fab local` (tmux sessions, one client per node, no resource l
 Results are parsed with the upstream LogParser and appended to results/.
 
 Run from prototype/benchmark/ (after `cargo build --release --features benchmark` in prototype/node):
-    python3 run_local.py --nodes 4 --rate 50000 --duration 30
+    python3 run_local.py --nodes 4 --rate 50000 --duration 30 --warmup 10
 """
 import argparse
 import fcntl
@@ -93,10 +93,10 @@ def run(args):
 
     try:
         time.sleep(2 * args.timeout_delay / 1000)            # let the nodes synchronize
-        time.sleep(args.duration)
+        time.sleep(args.warmup + args.duration)
     finally:
         stop(procs)
-    parser = LogParser.process(PathMaker.logs_path(), faults=args.faults)
+    parser = LogParser.process(PathMaker.logs_path(), faults=args.faults, warmup=args.warmup)
     summary = parser.result()
     print(summary)
     with open(PathMaker.result_file(args.faults, args.nodes, args.rate, args.tx_size), "a") as fh:
@@ -127,7 +127,8 @@ def main():
     ap.add_argument("--clients", type=int, default=4)
     ap.add_argument("--rate", type=int, default=50_000)
     ap.add_argument("--tx-size", type=int, default=512)
-    ap.add_argument("--duration", type=int, default=30)
+    ap.add_argument("--duration", type=int, default=30, help="measured seconds, after the warm-up")
+    ap.add_argument("--warmup", type=int, default=0, help="seconds left out of the measurement at the start")
     ap.add_argument("--timeout-delay", type=int, default=1_000)
     ap.add_argument("--epoch-length", type=int, default=100, help="rounds per epoch (0: a single epoch)")
     ap.add_argument("--entity-cap-ppm", type=int, default=1_000_000)

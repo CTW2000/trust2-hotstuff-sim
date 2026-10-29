@@ -1,6 +1,7 @@
 use super::*;
 use crate::common::{block, chain, committee, committee_with_base_port, keys, listener};
 use std::fs;
+use tokio::time::timeout;
 
 #[tokio::test]
 async fn get_existing_parent_block() {
@@ -58,8 +59,9 @@ async fn get_genesis_parent_block() {
 }
 
 // The synchronizer of `name` is asked for the parent of the last block of the chain, which it does not have:
-// it must send a sync request to `targets` and loop the block back once the parent is stored.
-async fn missing_parent(name: PublicKey, base_port: u16, store_path: &str, ask_all: bool) {
+// it must send a sync request to the signers of the QC certifying the parent (all three other signers here,
+// as the fan-out is three) and loop the block back once the parent is stored.
+async fn missing_parent(name: PublicKey, base_port: u16, store_path: &str) {
     let committee = committee_with_base_port(base_port);
     let mut chain = chain(keys());
     let block = chain.pop().unwrap();
@@ -77,14 +79,18 @@ async fn missing_parent(name: PublicKey, base_port: u16, store_path: &str, ask_a
         /* sync_retry_delay */ 10_000,
     );
 
-    // Spawn listeners to receive our sync request: the block author, or everyone else when we are the
-    // author (we proposed on a QC for a block we never received).
+    // Spawn listeners to receive our sync request: the other signers of the QC, which stored the parent
+    // before voting for it (the author of the block may hold only the QC).
     let message = ConsensusMessage::SyncRequest(parent_block.digest(), name);
     let expected = Bytes::from(bincode::serialize(&message).unwrap());
-    let targets: Vec<_> = match ask_all {
-        true => committee.broadcast_addresses(&name).into_iter().map(|(_, a)| a).collect(),
-        false => vec![committee.address(&block.author).unwrap()],
-    };
+    let targets: Vec<_> = block
+        .qc
+        .votes
+        .iter()
+        .filter(|(signer, _)| *signer != name)
+        .map(|(signer, _)| committee.address(signer).unwrap())
+        .collect();
+    assert_eq!(targets.len(), SYNC_FANOUT);
     let listener_handles: Vec<_> = targets
         .into_iter()
         .map(|address| listener(address, Some(expected.clone())))
@@ -98,9 +104,10 @@ async fn missing_parent(name: PublicKey, base_port: u16, store_path: &str, ask_a
         assert!(ret.unwrap().is_none());
     });
 
-    // Ensure the listeners correctly received the sync request.
+    // Ensure the listeners correctly received the sync request (well before any retry).
     for listener_handle in listener_handles {
-        assert!(listener_handle.await.is_ok());
+        let received = timeout(Duration::from_secs(2), listener_handle).await;
+        assert!(matches!(received, Ok(Ok(()))), "a signer of the QC was not asked");
     }
 
     // Ensure the synchronizer returns None, thus suspending the processing of the block.
@@ -119,14 +126,38 @@ async fn missing_parent(name: PublicKey, base_port: u16, store_path: &str, ask_a
 
 #[tokio::test]
 async fn get_missing_parent_block() {
-    // The last block of the chain is authored by the last key: ask its author.
+    // The last block of the chain is authored by the last key; we are another node.
     let (name, _) = keys().remove(0);
-    missing_parent(name, 12_000, ".db_test_get_missing_parent_block", false).await;
+    missing_parent(name, 12_000, ".db_test_get_missing_parent_block").await;
 }
 
 #[tokio::test]
 async fn get_missing_parent_of_own_block() {
-    // We authored the block ourselves: ask everyone else at once instead of ourselves.
+    // We authored the block ourselves (we proposed on a QC for a block we never received).
     let (name, _) = keys().pop().unwrap();
-    missing_parent(name, 12_100, ".db_test_get_missing_parent_of_own_block", true).await;
+    missing_parent(name, 12_100, ".db_test_get_missing_parent_of_own_block").await;
+}
+
+#[test]
+fn holders_are_other_signers_of_the_qc() {
+    let committee = committee();
+    let mut chain = chain(keys());
+    let block = chain.pop().unwrap();
+    let (name, _) = keys().remove(0);
+
+    let mut expected: Vec<_> = block
+        .qc
+        .votes
+        .iter()
+        .filter(|(signer, _)| *signer != name)
+        .map(|(signer, _)| committee.address(signer).unwrap())
+        .collect();
+    let mut got = holders(&block.qc, &committee, &name);
+    expected.sort();
+    got.sort();
+    assert_eq!(got, expected);
+
+    // No other signer (here: the genesis QC has none): ask everyone else.
+    let all = committee.broadcast_addresses(&name).len();
+    assert_eq!(holders(&QC::genesis(), &committee, &name).len(), all);
 }
