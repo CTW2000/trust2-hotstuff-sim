@@ -11,6 +11,7 @@ mod leader;
 mod mempool;
 mod messages;
 mod proposer;
+mod punish;
 mod reputation;
 mod synchronizer;
 mod timer;
