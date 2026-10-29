@@ -440,3 +440,18 @@ fn block_digest_covers_evidence() {
     let over = Block::new_from_key_evidence(qc(), many, name, 6, &secret);
     assert!(matches!(over.verify(&committee()), Err(ConsensusError::MalformedBlock(_))));
 }
+
+#[test]
+fn handover_leader_may_propose_without_weight() {
+    // The first round of an epoch keeps the old table's leader even when the new table suspends it (it holds
+    // the commit proof); its block is accepted although it has no weight (DESIGN.md §13.5).
+    let (name, secret) = leader();
+    let mut committee = committee();
+    committee.authorities.get_mut(&name).unwrap().stake = 0;
+    let block = Block::new_from_key(qc(), name, 3, Vec::new(), &secret);
+    assert!(matches!(block.verify(&committee), Err(ConsensusError::UnknownAuthority(_))));
+    committee.handover = Some((3, name));
+    assert!(block.verify(&committee).is_ok());
+    let later = Block::new_from_key(qc(), name, 4, Vec::new(), &secret);
+    assert!(later.verify(&committee).is_err());
+}

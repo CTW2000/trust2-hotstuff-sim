@@ -38,7 +38,8 @@ def node_parameters(args):
     return {
         "consensus": {"timeout_delay": args.timeout_delay, "sync_retry_delay": 10_000,
                       "epoch_length": args.epoch_length, "entity_cap_ppm": args.entity_cap_ppm,
-                      "class_cap_ppm": args.class_cap_ppm, "attest_guard": args.attest_guard},
+                      "class_cap_ppm": args.class_cap_ppm, "attest_guard": args.attest_guard,
+                      "l_max_ppm": args.l_max_ppm, "governance_malicious": args.governance_malicious},
         "mempool": {"gc_depth": 50, "sync_retry_delay": 5_000, "sync_retry_nodes": 3,
                     "batch_size": 15_000, "max_batch_delay": 10},
     }
@@ -87,14 +88,21 @@ def run(args):
     for i, addr in enumerate(committee.front[:clients]):
         cmd = f"{client} {addr} --size {args.tx_size} --rate {rate_share} --timeout {args.timeout_delay}"
         procs.append(launch(cmd, PathMaker.client_log_file(i)))
-    # Censoring nodes: the last booted ones, or (worst case for detection) a run of nodes that lead
-    # consecutive rounds (round robin follows the public keys' byte order).
-    censors = set(range(up - args.censor, up))
+    # Experiment switches, from the last booted node backwards: censors, then equivocators, then NR liars.
+    # Censors may instead lead consecutive rounds (round robin follows the public keys' byte order).
+    switches = {}
+    tail = list(range(up - 1, -1, -1))
+    for flag, count in (("--censor", args.censor), ("--equivocate", args.equivocate), ("--lie-nr", args.lie_nr)):
+        for i in tail[:count]:
+            switches.setdefault(i, []).append(flag)
+        tail = tail[count:]
     if args.censor_adjacent:
+        switches = {i: [f for f in fs if f != "--censor"] for i, fs in switches.items()}
         order = sorted(range(up), key=lambda i: base64.b64decode(names[i]))
-        censors = set(order[:args.censor])
+        for i in order[:args.censor]:
+            switches.setdefault(i, []).append("--censor")
     for i in range(up):
-        censor = " --censor" if i in censors else ""
+        censor = "".join(" " + f for f in switches.get(i, []))
         cmd = (f"{node} {'-vvv' if args.debug else '-vv'} run --keys {key_files[i]} "
                f"--committee {PathMaker.committee_file()} --store {PathMaker.db_path(i)} "
                f"--parameters {PathMaker.parameters_file()}{censor}")
@@ -148,6 +156,10 @@ def main():
     ap.add_argument("--attest-guard", type=int, default=500, help="attestation guard in ms")
     ap.add_argument("--censor", type=int, default=0, help="number of booted nodes that censor victim accounts")
     ap.add_argument("--censor-adjacent", action="store_true", help="censors lead consecutive rounds")
+    ap.add_argument("--equivocate", type=int, default=0, help="number of booted nodes that vote twice (E1)")
+    ap.add_argument("--lie-nr", type=int, default=0, help="number of booted nodes that lie about NR")
+    ap.add_argument("--l-max-ppm", type=int, default=100_000, help="G1 suspension cap L_max in ppm")
+    ap.add_argument("--governance-malicious", action="store_true", help="G1: an L4 without a fork evicts")
     ap.add_argument("--entity-cap-ppm", type=int, default=1_000_000)
     ap.add_argument("--class-cap-ppm", type=int, default=1_000_000)
     ap.add_argument("--cpu-quota", type=int, default=1200, help="percent of one core (1200 = 12 cores)")

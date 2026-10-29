@@ -3,10 +3,13 @@ use crate::config::Committee;
 use crate::consensus::{ConsensusMessage, Round};
 use crate::epoch::{EpochConfig, Epochs};
 use crate::error::{ConsensusError, ConsensusResult};
+use crate::evidence::Detector;
 use crate::inclusion::Inclusion;
 use crate::leader::leader;
 use crate::mempool::MempoolDriver;
-use crate::messages::{Accusation, Attestation, Block, OmitProof, Otx, Timeout, Vote, QC, TC};
+use crate::messages::{
+    vote_digest, Accusation, Attestation, Block, Evidence, OmitProof, Otx, SignedTimeout, Timeout, Vote, QC, TC,
+};
 use crate::proposer::ProposerMessage;
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
@@ -28,6 +31,18 @@ pub mod core_tests;
 
 /// Messages of a later epoch wait here (bounded) until we enter that epoch.
 const MAX_DEFERRED: usize = 2_000;
+
+/// G1 evidence detection looks this many rounds back.
+const DETECT_WINDOW: Round = 300;
+
+/// Experiment switches (not part of the protocol, DESIGN.md §13.3).
+#[derive(Clone, Copy, Default)]
+pub struct Faults {
+    /// Send a second vote for another digest with every vote (E1).
+    pub equivocate: bool,
+    /// After every vote, also broadcast an NR = 1 timeout of the same round (NR self-contradiction).
+    pub lie_nr: bool,
+}
 
 pub struct Core {
     name: PublicKey,
@@ -56,6 +71,9 @@ pub struct Core {
     // and have marked certified.
     inclusion: Inclusion,
     last_certified: Round,
+    // G1: contradictions among the signed messages we verified.
+    detector: Detector,
+    faults: Faults,
     network: SimpleSender,
     // Messages of later epochs, and those to handle again after entering a new epoch.
     deferred: Vec<ConsensusMessage>,
@@ -73,6 +91,7 @@ impl Core {
         committee: Committee,
         epoch_config: EpochConfig,
         inclusion: Inclusion,
+        faults: Faults,
         signature_service: SignatureService,
         store: Store,
         mempool_driver: MempoolDriver,
@@ -106,6 +125,8 @@ impl Core {
                 accuser: Accuser::new(),
                 inclusion,
                 last_certified: 0,
+                detector: Detector::new(),
+                faults,
                 network: SimpleSender::new(),
                 deferred: Vec::new(),
                 replay: VecDeque::new(),
@@ -244,6 +265,17 @@ impl Core {
         }
     }
 
+    /// G1: evidence found by the detector goes to the proposer for the ledger.
+    async fn propose_evidence(&mut self, found: Vec<Evidence>) {
+        for evidence in found {
+            info!("G1: found {:?}", evidence);
+            self.tx_proposer
+                .send(ProposerMessage::Evidence(evidence))
+                .await
+                .expect("Failed to send message to proposer");
+        }
+    }
+
     async fn propose_accusation(&mut self, accusation: Accusation) {
         debug!("Assembled {:?}", accusation);
         self.tx_proposer
@@ -295,6 +327,7 @@ impl Core {
         self.requested.clear();
         self.accuser.cleanup(self.epochs.done() + 1);
         self.inclusion.cleanup(self.epochs.done() + 1);
+        self.detector.cleanup(self.round.saturating_sub(DETECT_WINDOW));
     }
 
     fn increase_last_voted_round(&mut self, target: Round) {
@@ -365,6 +398,16 @@ impl Core {
                 let keys = block.omissions.iter().map(|o| (o.epoch, o.round, o.otx.id())).collect();
                 self.tx_proposer
                     .send(ProposerMessage::Omitted(keys))
+                    .await
+                    .expect("Failed to send message to proposer");
+            }
+            if !block.evidence.is_empty() {
+                for evidence in &block.evidence {
+                    self.detector.on_ledger(evidence);
+                }
+                let windows = block.evidence.iter().map(Detector::window).collect();
+                self.tx_proposer
+                    .send(ProposerMessage::Evidenced(windows))
                     .await
                     .expect("Failed to send message to proposer");
             }
@@ -463,6 +506,8 @@ impl Core {
         // Ensure the vote is well formed.
         let committee = self.committee().clone();
         vote.verify(&committee)?;
+        let found = self.detector.vote(vote.clone());
+        self.propose_evidence(found).await;
 
         // Add the new vote to our aggregator and see if we have a quorum.
         if let Some(qc) = self.aggregator.add_vote(vote.clone(), &committee)? {
@@ -482,11 +527,16 @@ impl Core {
     async fn handle_timeout(&mut self, timeout: &Timeout) -> ConsensusResult<()> {
         debug!("Processing {:?}", timeout);
         if timeout.round < self.round {
-            // G2: a late NR = 1 timeout still counts towards an accusation of its round.
-            if timeout.nr && timeout.round > self.epochs.done() {
+            // G2: a late NR = 1 timeout still counts towards an accusation of its round; G1: it may contradict
+            // a vote of its author.
+            if timeout.round + DETECT_WINDOW > self.round {
                 let committee = self.committee().clone();
                 timeout.verify(&committee)?;
-                self.accuse(timeout, &committee).await;
+                let found = self.detector.timeout(SignedTimeout::from(timeout));
+                self.propose_evidence(found).await;
+                if timeout.nr && timeout.round > self.epochs.done() {
+                    self.accuse(timeout, &committee).await;
+                }
             }
             return Ok(());
         }
@@ -496,6 +546,8 @@ impl Core {
         timeout.verify(&committee)?;
         self.verify_qc(&timeout.high_qc)?;
         self.accuse(timeout, &committee).await;
+        let found = self.detector.timeout(SignedTimeout::from(timeout));
+        self.propose_evidence(found).await;
 
         // Process the QC embedded in the timeout.
         self.process_qc(&timeout.high_qc).await;
@@ -581,6 +633,41 @@ impl Core {
             .expect("Failed to send message to proposer");
     }
 
+    /// Experiment switch: a second vote of the same round for another digest, to the next leader (E1).
+    async fn vote_twice(&mut self, vote: &Vote) {
+        let mut hash = vote.hash.clone();
+        hash.0[0] ^= 0xff;
+        let digest = vote_digest(vote.epoch, &hash, vote.round);
+        let signature = self.signature_service.request_signature(digest).await;
+        let other = Vote { hash, signature, ..vote.clone() };
+        let next_leader = leader(self.committee(), self.round + 1);
+        if let Some(address) = self.committee().address(&next_leader) {
+            let message = bincode::serialize(&ConsensusMessage::Vote(other)).expect("Failed to serialize vote");
+            self.network.send(address, Bytes::from(message)).await;
+        }
+    }
+
+    /// Experiment switch: after voting, claim no usable proposal in the same round (NR self-contradiction).
+    async fn lie_about_nr(&mut self, block: &Block) {
+        let timeout = Timeout::new(
+            self.high_qc.clone(),
+            block.round,
+            block.epoch,
+            /* nr */ true,
+            self.name,
+            self.signature_service.clone(),
+        )
+        .await;
+        let addresses = self
+            .committee()
+            .broadcast_addresses(&self.name)
+            .into_iter()
+            .map(|(_, x)| x)
+            .collect();
+        let message = bincode::serialize(&ConsensusMessage::Timeout(timeout)).expect("Failed to serialize timeout");
+        self.network.broadcast(addresses, Bytes::from(message)).await;
+    }
+
     async fn cleanup_proposer(&mut self, b0: &Block, b1: &Block, block: &Block) {
         let digests = b0
             .payload
@@ -597,6 +684,10 @@ impl Core {
 
     #[async_recursion]
     async fn process_qc(&mut self, qc: &QC) {
+        // G1: the votes of its signers (every QC we process is verified).
+        let found = self.detector.qc(qc);
+        self.propose_evidence(found).await;
+
         // G2: the block it certifies, if we hold it, before we attest in the next round.
         if qc.round > self.last_certified {
             if let Ok(Some(block)) = self.read_block(&qc.hash).await {
@@ -693,6 +784,12 @@ impl Core {
         // See if we can vote for this block.
         if let Some(vote) = self.make_vote(block).await {
             debug!("Created {:?}", vote);
+            if self.faults.lie_nr {
+                self.lie_about_nr(block).await;
+            }
+            if self.faults.equivocate {
+                self.vote_twice(&vote).await;
+            }
             let next_leader = leader(self.committee(), self.round + 1);
             if next_leader == self.name {
                 self.handle_vote(&vote).await?;
@@ -753,6 +850,14 @@ impl Core {
         for omission in &block.omissions {
             omission.verify(self.table(omission.epoch)?)?;
         }
+        for evidence in &block.evidence {
+            evidence.verify()?;
+        }
+        let mut found = self.detector.block(block);
+        if let Some(ref tc) = block.tc {
+            found.extend(self.detector.tc(tc));
+        }
+        self.propose_evidence(found).await;
 
         // Process the QC. This may allow us to advance round.
         self.process_qc(&block.qc).await;
@@ -778,6 +883,8 @@ impl Core {
     async fn handle_tc(&mut self, tc: TC) -> ConsensusResult<()> {
         self.verify_tc(&tc)?;
         self.accuse_from_tc(&tc).await;
+        let found = self.detector.tc(&tc);
+        self.propose_evidence(found).await;
         if tc.round < self.round {
             return Ok(());
         }

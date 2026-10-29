@@ -1,6 +1,6 @@
 use crate::config::{Committee, EpochNumber, Stake};
 use crate::consensus::{ConsensusMessage, Round};
-use crate::messages::{Accusation, Block, OmitProof, Otx, MAX_ACCUSATIONS, MAX_OMISSIONS, QC, TC};
+use crate::messages::{Accusation, Block, Evidence, OmitProof, Otx, MAX_ACCUSATIONS, MAX_EVIDENCE, MAX_OMISSIONS, QC, TC};
 use bytes::Bytes;
 use crypto::{Digest, PublicKey, SignatureService};
 use futures::stream::futures_unordered::FuturesUnordered;
@@ -31,6 +31,11 @@ pub enum ProposerMessage {
     Omit(OmitProof),
     /// G2: omission proofs committed on the ledger, no longer to propose.
     Omitted(Vec<(EpochNumber, Round, Digest)>),
+    /// G1: evidence to put on the ledger.
+    Evidence(Evidence),
+    /// G1: punishment windows (culprit, safety class, sign epoch) with evidence on the ledger: one piece per
+    /// window is enough.
+    Evidenced(Vec<(PublicKey, bool, EpochNumber)>),
 }
 
 pub struct Proposer {
@@ -43,6 +48,8 @@ pub struct Proposer {
     buffer: HashSet<Digest>,
     accusations: BTreeMap<(EpochNumber, Round), Accusation>,
     omissions: BTreeMap<(EpochNumber, Round, Digest), OmitProof>,
+    evidence: BTreeMap<(PublicKey, bool, EpochNumber), Evidence>,
+    evidenced: HashSet<(PublicKey, bool, EpochNumber)>,
     network: ReliableSender,
 }
 
@@ -66,6 +73,8 @@ impl Proposer {
                 buffer: HashSet::new(),
                 accusations: BTreeMap::new(),
                 omissions: BTreeMap::new(),
+                evidence: BTreeMap::new(),
+                evidenced: HashSet::new(),
                 network: ReliableSender::new(),
             }
             .run()
@@ -95,6 +104,7 @@ impl Proposer {
             .take(MAX_OMISSIONS)
             .cloned()
             .collect();
+        let evidence: Vec<_> = self.evidence.values().take(MAX_EVIDENCE).cloned().collect();
 
         // Generate a new block.
         let block = Block::new(
@@ -103,7 +113,7 @@ impl Proposer {
             accusations,
             otxs,
             omissions,
-            /* evidence */ Vec::new(),
+            evidence,
             self.name,
             round,
             self.committee.epoch,
@@ -197,6 +207,18 @@ impl Proposer {
                     ProposerMessage::Omitted(keys) => {
                         for key in &keys {
                             self.omissions.remove(key);
+                        }
+                    }
+                    ProposerMessage::Evidence(evidence) => {
+                        let window = (evidence.culprit(), evidence.is_safety(), evidence.epoch());
+                        if !self.evidenced.contains(&window) {
+                            self.evidence.entry(window).or_insert(evidence);
+                        }
+                    }
+                    ProposerMessage::Evidenced(windows) => {
+                        for window in windows {
+                            self.evidence.remove(&window);
+                            self.evidenced.insert(window);
                         }
                     }
                 }

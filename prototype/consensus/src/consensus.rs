@@ -1,5 +1,5 @@
 use crate::config::{Committee, Parameters};
-use crate::core::Core;
+use crate::core::{Core, Faults};
 use crate::epoch::EpochConfig;
 use crate::error::ConsensusError;
 use crate::helper::Helper;
@@ -108,6 +108,7 @@ impl Consensus {
             committee.clone(),
             epoch_config,
             Inclusion::new(Duration::from_millis(parameters.attest_guard), parameters.censor),
+            Faults { equivocate: parameters.equivocate, lie_nr: parameters.lie_nr },
             signature_service.clone(),
             store.clone(),
             mempool_driver,

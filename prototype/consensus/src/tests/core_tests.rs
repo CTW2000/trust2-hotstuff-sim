@@ -53,6 +53,7 @@ fn core(
         committee,
         epoch_config,
         Inclusion::new(Duration::from_millis(500), false),
+        Faults::default(),
         signature_service,
         store,
         mempool_driver,

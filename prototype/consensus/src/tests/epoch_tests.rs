@@ -204,12 +204,15 @@ fn g1_evidence_suspends_or_bars_at_an_epoch_change() {
     let carrying = Block { epoch: EPOCH, round: 8, evidence: vec![e1, nr], ..Block::default() };
     epochs.record(&carrying);
 
+    let old = epochs.current().clone();
     epochs.enter_next(&block(EPOCH, 10));
     let table = epochs.current().clone();
     assert_eq!(table.stake(&cheat.0), 0);
+    // The first round (12) stays with the old table's leader, suspended or not.
+    assert_eq!(table.handover, Some((12, leader(&old, 12))));
     assert!(!table.authorities[&cheat.0].leader);
     assert!(table.stake(&liar.0) > 0 && !table.authorities[&liar.0].leader);
-    assert!((0..100).all(|u| { let l = leader(&table, u); l != cheat.0 && l != liar.0 }));
+    assert!((13..100).all(|u| { let l = leader(&table, u); l != cheat.0 && l != liar.0 }));
 
     // The bar lasts one epoch, the suspension four.
     epochs.enter_next(&block(EPOCH + 1, 20));

@@ -3,7 +3,7 @@ mod node;
 
 use crate::config::Export as _;
 use crate::config::{Committee, Secret};
-use crate::node::Node;
+use crate::node::{Experiment, Node};
 use clap::{Parser, Subcommand};
 use consensus::Committee as ConsensusCommittee;
 use env_logger::Env;
@@ -49,6 +49,12 @@ enum Command {
         /// Experiment switch: censor the observed transactions of victim accounts (DESIGN.md §12.4).
         #[clap(long)]
         censor: bool,
+        /// Experiment switch: vote twice in every round (E1, DESIGN.md §13.3).
+        #[clap(long)]
+        equivocate: bool,
+        /// Experiment switch: lie about NR after every vote (DESIGN.md §13.3).
+        #[clap(long)]
+        lie_nr: bool,
     },
     /// Deploy a local testbed with the specified number of nodes.
     Deploy {
@@ -85,7 +91,11 @@ async fn main() {
             parameters,
             store,
             censor,
-        } => match Node::new(&committee, &keys, &store, parameters, censor).await {
+            equivocate,
+            lie_nr,
+        } => match Node::new(&committee, &keys, &store, parameters, Experiment { censor, equivocate, lie_nr })
+            .await
+        {
             Ok(mut node) => {
                 tokio::spawn(async move {
                     node.analyze_block().await;
@@ -154,7 +164,7 @@ fn deploy_testbed(nodes: u16) -> Result<Vec<JoinHandle<()>>, Box<dyn std::error:
             let _ = fs::remove_dir_all(&store_path);
 
             Ok(tokio::spawn(async move {
-                match Node::new(committee_file, &key_file, &store_path, None, false).await {
+                match Node::new(committee_file, &key_file, &store_path, None, Experiment::default()).await {
                     Ok(mut node) => {
                         // Sink the commit channel.
                         while node.commit.recv().await.is_some() {}

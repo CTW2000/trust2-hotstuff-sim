@@ -14,13 +14,21 @@ pub struct Node {
     pub commit: Receiver<Block>,
 }
 
+/// Experiment switches, not part of the protocol (prototype/DESIGN.md §12.4, §13.3).
+#[derive(Clone, Copy, Default)]
+pub struct Experiment {
+    pub censor: bool,
+    pub equivocate: bool,
+    pub lie_nr: bool,
+}
+
 impl Node {
     pub async fn new(
         committee_file: &str,
         key_file: &str,
         store_path: &str,
         parameters: Option<String>,
-        censor: bool,
+        experiment: Experiment,
     ) -> Result<Self, ConfigError> {
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
         let (tx_consensus_to_mempool, rx_consensus_to_mempool) = channel(CHANNEL_CAPACITY);
@@ -37,7 +45,9 @@ impl Node {
             Some(filename) => Parameters::read(&filename)?,
             None => Parameters::default(),
         };
-        parameters.consensus.censor |= censor;
+        parameters.consensus.censor |= experiment.censor;
+        parameters.consensus.equivocate |= experiment.equivocate;
+        parameters.consensus.lie_nr |= experiment.lie_nr;
 
         // Make the data store.
         let store = Store::new(store_path).expect("Failed to create store");

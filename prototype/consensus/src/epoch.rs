@@ -275,14 +275,11 @@ impl Epochs {
         }
 
         // The child of the terminal block still belongs to this epoch (the commit proof certifies it, at the
-        // adjacent round); the next epoch starts after it, and its first round keeps the old leader unless
-        // the new table takes its weight away.
+        // adjacent round); the next epoch starts after it, and its first round keeps the old leader, which
+        // holds that proof, even if the new table suspends it (it then proposes without voting).
         let first = terminal.round + 2;
         let mut table = self.make_table(next);
-        let old_leader = leader(self.current(), first);
-        if table.stake(&old_leader) > 0 {
-            table.handover = Some((first, old_leader));
-        }
+        table.handover = Some((first, leader(self.current(), first)));
         self.tables.insert(next, table);
         self.first_rounds.insert(next, first);
         self.current = next;

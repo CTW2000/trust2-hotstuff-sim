@@ -33,6 +33,12 @@ pub struct Parameters {
     /// Experiment switch, not part of the protocol: censor the observed transactions of victim accounts.
     #[serde(default)]
     pub censor: bool,
+    /// Experiment switch: send a second vote for another digest with every vote (E1).
+    #[serde(default)]
+    pub equivocate: bool,
+    /// Experiment switch: after every vote, also sign an NR = 1 timeout of the same round (NR contradiction).
+    #[serde(default)]
+    pub lie_nr: bool,
 }
 
 fn default_attest_guard() -> u64 {
@@ -63,6 +69,8 @@ impl Default for Parameters {
             governance_malicious: false,
             attest_guard: default_attest_guard(),
             censor: false,
+            equivocate: false,
+            lie_nr: false,
         }
     }
 }
@@ -77,6 +85,12 @@ impl Parameters {
         info!("Attestation guard set to {} ms", self.attest_guard);
         if self.censor {
             info!("Censoring the observed transactions of victim accounts (experiment)");
+        }
+        if self.equivocate {
+            info!("Voting twice in every round (experiment)");
+        }
+        if self.lie_nr {
+            info!("Lying about NR after every vote (experiment)");
         }
         info!(
             "Entity cap set to {} ppm, uncertified class cap to {} ppm",

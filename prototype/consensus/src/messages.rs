@@ -81,10 +81,11 @@ impl Block {
     }
 
     pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
-        // Ensure the authority has voting rights.
+        // Ensure the authority has voting rights, or leads the first round of the epoch for the old table
+        // (it holds the commit proof of the last epoch, even if the new table suspends it).
         let voting_rights = committee.stake(&self.author);
         ensure!(
-            voting_rights > 0,
+            voting_rights > 0 || committee.handover == Some((self.round, self.author)),
             ConsensusError::UnknownAuthority(self.author)
         );
         check_epoch(self.epoch, committee)?;

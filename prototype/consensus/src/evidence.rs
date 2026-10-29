@@ -46,7 +46,7 @@ impl Detector {
     }
 
     fn report(&mut self, evidence: Evidence, found: &mut Vec<Evidence>) {
-        if self.reported.insert((evidence.culprit(), evidence.is_safety(), evidence.epoch())) {
+        if self.reported.insert(Self::window(&evidence)) {
             found.push(evidence);
         }
     }
@@ -193,6 +193,16 @@ impl Detector {
             self.check_vote_on_block(&vote, block, &mut found);
         }
         found
+    }
+
+    /// Evidence of this window is on the ledger: nothing more to report for it.
+    pub fn on_ledger(&mut self, evidence: &Evidence) {
+        self.reported.insert(Self::window(evidence));
+    }
+
+    /// The punishment window of a piece of evidence: (culprit, safety class, sign epoch).
+    pub fn window(evidence: &Evidence) -> (PublicKey, bool, EpochNumber) {
+        (evidence.culprit(), evidence.is_safety(), evidence.epoch())
     }
 
     /// Forget the rounds before `round`.
