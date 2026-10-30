@@ -116,6 +116,26 @@ fn repeated_entries_do_not_inflate_the_quorum() {
 }
 
 #[test]
+fn pending_table_is_bounded() {
+    // 8.5 / 1.13: the pending buffer has a ceiling. Once it is full, a new distinct observed transaction is
+    // refused (neither forwarded, attested nor included) rather than letting a flood of distinct transactions
+    // -- which may never reach a certified block -- grow memory without bound. Transactions we already hold are
+    // still deduplicated as before, so the cap never rejects a repeat.
+    let mut inclusion = Inclusion::new(GUARD, false);
+    inclusion.max_pending = 3;
+    let t0 = Instant::now();
+    assert!(inclusion.receive(otx(1, 1), t0));
+    assert!(inclusion.receive(otx(1, 2), t0));
+    assert!(inclusion.receive(otx(1, 3), t0));
+    // Full: a fourth distinct transaction is refused and does not join the pending set.
+    assert!(!inclusion.receive(otx(1, 4), t0));
+    assert_eq!(inclusion.select().len(), 3);
+    assert!(!inclusion.to_attest(t0 + GUARD).contains(&otx(1, 4).id()));
+    // A transaction we already hold is still deduplicated (not an insert), so the cap does not reject it.
+    assert!(!inclusion.receive(otx(1, 1), t0));
+}
+
+#[test]
 fn censor_ignores_victim_transactions() {
     let mut inclusion = Inclusion::new(GUARD, true);
     let t0 = Instant::now();

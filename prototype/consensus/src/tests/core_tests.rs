@@ -231,6 +231,32 @@ async fn far_future_block_does_not_turn_off_nr() {
 }
 
 #[tokio::test]
+async fn far_future_round_messages_are_dropped() {
+    // 1.13: a current-epoch consensus message for a round implausibly far beyond ours is dropped before it
+    // reaches the per-round aggregator / accuser / detector / inclusion maps, so a faulty member cannot grow
+    // memory without bound by signing votes or timeouts for arbitrary future rounds. A full quorum of NR = 1
+    // timeouts for such a round therefore yields no accusation -- contrast nr_timeouts_make_an_accusation,
+    // where the same quorum at the current round does produce one.
+    let (leader1, leader2) = (leader_keys(1).0, leader_keys(2).0);
+    let (name, secret) = keys()
+        .into_iter()
+        .find(|(k, _)| *k != leader1 && *k != leader2)
+        .unwrap();
+    let store_path = ".db_test_far_future_round_messages_are_dropped";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee(), store_path);
+
+    let far = 1 + ACCEPT_WINDOW + 1; // just past the acceptance window ahead of the starting round (1)
+    for (key, secret) in keys().iter().filter(|(k, _)| *k != name) {
+        let timeout = Timeout::new_from_key(QC::genesis(), far, true, *key, secret);
+        tx_core.send(ConsensusMessage::Timeout(timeout)).await.unwrap();
+    }
+
+    // Nothing should reach the proposer: the far-future timeouts are dropped, so no accusation forms.
+    let got = tokio::time::timeout(Duration::from_millis(300), rx_proposer.recv()).await;
+    assert!(got.is_err(), "a far-future round must not produce a proposer message");
+}
+
+#[tokio::test]
 async fn nr_timeouts_make_an_accusation() {
     // G2: NR = 1 timeouts of a round from more than 2/3 of the weight go to the proposer as an AT accusation.
     let (leader1, leader2) = (leader_keys(1).0, leader_keys(2).0);

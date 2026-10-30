@@ -28,9 +28,16 @@ pub fn victim(otx: &Otx) -> bool {
     otx.account % 4 == 0
 }
 
+/// A ceiling on the pending observed transactions one node buffers: once reached, new distinct transactions
+/// are refused rather than letting a flood of them -- which may never reach a certified block -- grow memory
+/// without bound. Generous, so honest load never reaches it. A per-node buffer bound, not part of the protocol.
+const MAX_PENDING_OTXS: usize = 100_000;
+
 pub struct Inclusion {
     guard: Duration,
     censor: bool,
+    /// Ceiling on `pending` (and so on `known`): new transactions are refused once it is reached.
+    max_pending: usize,
     /// Pending observed transactions we hold: id -> (transaction, held since, arrival number).
     pending: HashMap<Digest, (Otx, Instant, u64)>,
     arrivals: u64,
@@ -51,6 +58,7 @@ impl Inclusion {
         Self {
             guard,
             censor,
+            max_pending: MAX_PENDING_OTXS,
             pending: HashMap::new(),
             arrivals: 0,
             known: HashMap::new(),
@@ -68,10 +76,16 @@ impl Inclusion {
         if (self.censor && victim(&otx)) || self.known.contains_key(&id) {
             return false;
         }
-        self.known.insert(id.clone(), otx.clone());
         if self.included.contains_key(&id) {
-            return true; // already in a certified block: forward it, but there is nothing to attest or include
+            self.known.insert(id, otx); // already in a certified block: nothing to attest or include, but forward
+            return true;
         }
+        // Bound the pending buffer (and with it `known`): once full, refuse new transactions rather than let a
+        // flood of distinct ones grow memory without limit.
+        if self.pending.len() >= self.max_pending {
+            return false;
+        }
+        self.known.insert(id.clone(), otx.clone());
         self.arrivals += 1;
         self.pending.insert(id, (otx, now, self.arrivals));
         true

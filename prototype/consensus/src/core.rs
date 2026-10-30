@@ -35,6 +35,13 @@ const MAX_DEFERRED: usize = 2_000;
 /// G1 evidence detection looks this many rounds back.
 const DETECT_WINDOW: Round = 300;
 
+/// A current-epoch consensus message for a round more than this far beyond ours is dropped. Honest nodes
+/// advance through the QC/TC chain and never sign one for a round so far ahead, so it is junk that would only
+/// grow the per-round aggregator / accuser / detector / inclusion maps. The window is generous -- well past
+/// any epoch length or honest round skew -- so it never drops a message a node legitimately catching up still
+/// needs (such a node advances via the certificate chain, not by aggregating votes hundreds of rounds ahead).
+const ACCEPT_WINDOW: Round = 1_000;
+
 /// Experiment switches (not part of the protocol, DESIGN.md §13.3).
 #[derive(Clone, Copy, Default)]
 pub struct Faults {
@@ -970,13 +977,26 @@ impl Core {
                 _ => (),
             }
         }
+        // 1.13: drop a current-epoch message whose round is implausibly far beyond ours, before it reaches the
+        // per-round aggregator / accuser / detector / inclusion maps (a later epoch's messages are bounded
+        // instead by the deferred buffer; an earlier epoch's are dropped below).
+        if epoch == self.epochs.epoch() {
+            if let Some(round) = round_of(&message) {
+                if round > self.round.saturating_add(ACCEPT_WINDOW) {
+                    debug!("Dropping a message for far-future round {} (we are at round {})", round, self.round);
+                    return Ok(());
+                }
+            }
+        }
         match message {
             ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
             m if epoch > self.epochs.epoch() => {
                 // Votes of the next epoch can reach us before the block they vote for (which carries the
-                // commit proof that moves us there), and that block may be lost: ask the voter for it.
+                // commit proof that moves us there), and that block may be lost: ask the voter for it. These
+                // votes are not verified here, so bound the set of outstanding requests (as the deferred buffer
+                // is bounded) rather than let unverified future-epoch votes grow it without limit.
                 if let ConsensusMessage::Vote(vote) = &m {
-                    if self.requested.insert(vote.hash.clone()) {
+                    if self.requested.len() < MAX_DEFERRED && self.requested.insert(vote.hash.clone()) {
                         self.request_block(vote.hash.clone(), vote.author).await;
                     }
                 }
@@ -1036,5 +1056,18 @@ fn epoch_of(message: &ConsensusMessage) -> u128 {
         ConsensusMessage::TC(tc) => tc.epoch,
         ConsensusMessage::Attest(attestation) => attestation.epoch,
         ConsensusMessage::SyncRequest(..) | ConsensusMessage::Otx(..) => 0,
+    }
+}
+
+/// The round a consensus message is about, for the acceptance-window check (None for messages that carry no
+/// round, which are never dropped by it).
+fn round_of(message: &ConsensusMessage) -> Option<Round> {
+    match message {
+        ConsensusMessage::Propose(block) => Some(block.round),
+        ConsensusMessage::Vote(vote) => Some(vote.round),
+        ConsensusMessage::Timeout(timeout) => Some(timeout.round),
+        ConsensusMessage::TC(tc) => Some(tc.round),
+        ConsensusMessage::Attest(attestation) => Some(attestation.round),
+        ConsensusMessage::SyncRequest(..) | ConsensusMessage::Otx(..) => None,
     }
 }
