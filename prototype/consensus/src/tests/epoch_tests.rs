@@ -39,6 +39,41 @@ fn single_epoch_mode_has_no_handover() {
 }
 
 #[test]
+fn single_epoch_ledger_keeps_only_a_window() {
+    // A single-epoch run has no handover to process the ledger facts and then forget them, so committed blocks and
+    // accusation facts are kept only for the last SINGLE_EPOCH_LEDGER_WINDOW rounds -- decided by the ledger itself,
+    // so every node keeps the same. An omission proof for a recent round is still checked against its committed
+    // block. A multi-epoch run keeps everything until its handover, as before.
+    let rounds = SINGLE_EPOCH_LEDGER_WINDOW + 500;
+    let accused = |round: Round| Block {
+        accusations: vec![Accusation { round: round - 1, epoch: EPOCH, votes: Vec::new() }],
+        ..block(EPOCH, round)
+    };
+    let mut single = Epochs::new(&committee(), config(0));
+    let mut multi = Epochs::new(&committee(), config(10 * rounds));
+    for round in 1..=rounds {
+        single.record(&accused(round));
+        multi.record(&accused(round));
+    }
+    let oldest = *single.committed.keys().next().unwrap();
+    assert!(oldest >= rounds - SINGLE_EPOCH_LEDGER_WINDOW, "oldest committed round kept: {}", oldest);
+    assert!(single.committed.len() as Round <= SINGLE_EPOCH_LEDGER_WINDOW + 1);
+    assert!(single.reputation.facts().len() as Round <= SINGLE_EPOCH_LEDGER_WINDOW + 1);
+    assert_eq!(multi.committed.len() as Round, rounds);
+
+    let x = Otx { account: 1, nonce: 1, data: [0; 32] };
+    let recent = rounds - 10;
+    let proof = OmitProof {
+        round: recent,
+        epoch: EPOCH,
+        block: single.committed[&recent].digest.clone(),
+        otx: x,
+        attestations: Vec::new(),
+    };
+    assert!(single.omission_holds(&proof));
+}
+
+#[test]
 fn class_cap_limits_uncertified_members() {
     // Two of four equal members uncertified, class cap 25%: they share 0.25, the licensed share 0.75.
     let mut roster = committee();

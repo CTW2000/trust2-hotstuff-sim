@@ -35,6 +35,11 @@ const MAX_DEFERRED: usize = 2_000;
 /// G1 evidence detection looks this many rounds back.
 const DETECT_WINDOW: Round = 300;
 
+// A single-epoch ledger keeps SINGLE_EPOCH_LEDGER_WINDOW rounds of committed blocks; it must outlast every honest
+// omission proof, which is for a round at most two detection windows old (attestations live until the periodic
+// cleanup, which runs once per window), plus the rounds until the proof is included and committed.
+const _: () = assert!(3 * DETECT_WINDOW <= crate::epoch::SINGLE_EPOCH_LEDGER_WINDOW);
+
 /// A current-epoch consensus message for a round more than this far beyond ours is dropped, so that a faulty
 /// member cannot grow the per-round aggregator / accuser / detector / inclusion maps by signing messages for
 /// arbitrary future rounds. A node that fell behind still catches up: the certificate a far message carries (a

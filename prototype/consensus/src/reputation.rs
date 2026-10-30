@@ -136,6 +136,11 @@ impl Reputation {
         }
     }
 
+    /// Forget the facts of rounds before `round`: in a single-epoch run no epoch change processes them.
+    pub fn forget_before(&mut self, round: Round) {
+        self.accused = self.accused.split_off(&round);
+    }
+
     /// Epoch change: process the rounds up to `horizon` in order, then update the reputations. `leader_of`
     /// gives the member that led a round (given the epoch of its accusation, if any), or None if unknown.
     /// Returns the events of this epoch change.

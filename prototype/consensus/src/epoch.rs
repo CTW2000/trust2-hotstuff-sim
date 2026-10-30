@@ -31,6 +31,12 @@ pub mod epoch_tests;
 /// Tables kept for verification: the current epoch and the previous ones.
 const KEEP: usize = 16;
 
+/// In a single-epoch run, committed blocks and accusation facts of rounds more than this far behind the latest
+/// committed block are forgotten: there is no handover to process them (enter_next), so nothing else would. It
+/// must outlast any honest omission proof, which is for a round at most about two detection windows old (core.rs
+/// checks the bound at compile time).
+pub const SINGLE_EPOCH_LEDGER_WINDOW: Round = 1_000;
+
 #[derive(Clone, Copy, Debug)]
 pub struct EpochConfig {
     /// Rounds per epoch, counted from the previous terminal block (0: a single epoch).
@@ -176,6 +182,14 @@ impl Epochs {
                 keys: block.otxs.iter().map(|x| x.key()).collect(),
             };
             self.committed.insert(block.round, entry);
+        }
+        // A single-epoch run has no handover to process these facts and then forget them (enter_next), so keep
+        // only the recent rounds. The horizon comes from the ledger (the block just recorded), so every node
+        // keeps the same.
+        if self.single_epoch() {
+            let horizon = block.round.saturating_sub(SINGLE_EPOCH_LEDGER_WINDOW);
+            self.committed = self.committed.split_off(&horizon);
+            self.reputation.forget_before(horizon);
         }
     }
 
