@@ -621,6 +621,141 @@ async fn a_commit_proof_inside_a_timeout_commits() {
 }
 
 #[tokio::test]
+async fn a_transaction_of_an_abandoned_block_is_proposed_again() {
+    // 2.1: block 1 holds x and gets certified, but the TC of round 2 does not report that QC and the chain goes on
+    // from genesis. The QCs of blocks 3 and 4 commit block 3: block 1 is abandoned, and the leader of round 6, which
+    // had counted x as included, proposes it again.
+    let x = Otx { account: 1, nonce: 1, data: [0; 32] };
+    let (l1, l1_secret) = leader_keys(1);
+    let b1 = Block::new_from_key_full(
+        QC::genesis(),
+        None,
+        Vec::new(),
+        vec![x.clone()],
+        Vec::new(),
+        l1,
+        1,
+        Vec::new(),
+        &l1_secret,
+    );
+    let (l3, l3_secret) = leader_keys(3);
+    let tc2 = tc_of(2, &QC::genesis(), &committee());
+    let b3 = Block::new_from_key_with_tc(QC::genesis(), Some(tc2), l3, 3, Vec::new(), &l3_secret);
+    let (l4, l4_secret) = leader_keys(4);
+    let b4 = Block::new_from_key(qc_for(&b3), l4, 4, Vec::new(), &l4_secret);
+    let (l5, l5_secret) = leader_keys(5);
+    let b5 = Block::new_from_key(qc_for(&b4), l5, 5, Vec::new(), &l5_secret);
+    let tc5 = tc_of(5, &qc_for(&b4), &committee());
+
+    // Another member's timeout brings the QC of block 1: we hold the block, so it counts as certified here.
+    let (name, secret) = leader_keys(6);
+    let (other, other_secret) = keys().into_iter().find(|(k, _)| *k != name).unwrap();
+    let timeout = Timeout::new_from_key(qc_for(&b1), 2, false, other, &other_secret);
+
+    let store_path = ".db_test_a_transaction_of_an_abandoned_block_is_proposed_again";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee(), store_path);
+    let messages = vec![
+        ConsensusMessage::Otx(x.clone()),
+        ConsensusMessage::Propose(b1),
+        ConsensusMessage::Timeout(timeout),
+        ConsensusMessage::Propose(b3),
+        ConsensusMessage::Propose(b4),
+        ConsensusMessage::Propose(b5),
+        ConsensusMessage::TC(tc5),
+    ];
+    tokio::spawn(async move {
+        for message in messages {
+            tx_core.send(message).await.unwrap();
+        }
+        std::future::pending::<()>().await; // the core stops if the channel closes
+    });
+
+    let proposed = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(ProposerMessage::Make { round: 6, otxs, .. }) = rx_proposer.recv().await {
+                return otxs;
+            }
+        }
+    });
+    assert_eq!(proposed.await.expect("no proposal for round 6"), vec![x]);
+}
+
+#[test]
+fn deferred_keeps_the_next_epoch_within_each_members_share() {
+    // 8.9: a message of a later epoch than the next is not kept, or it could sit here for good; a member that uses up
+    // its share of the bytes does not touch the others'; entering the epoch empties the buffer and restores the shares.
+    let (a, b) = (keys()[0].0, keys()[1].0);
+    let next = EPOCH + 1;
+    let vote = |epoch, author| {
+        let (hash, signature) = (Digest::default(), Signature::default());
+        ConsensusMessage::Vote(Vote { hash, round: 5, epoch, author, signature })
+    };
+    let size = bincode::serialized_size(&vote(next, a)).unwrap() as usize;
+    let members = MAX_DEFERRED_BYTES / (3 * size); // a share of three votes
+    let mut deferred = Deferred::default();
+
+    assert!(!deferred.add(next, members, a, vote(next + 1, a)));
+    for _ in 0..3 {
+        assert!(deferred.add(next, members, a, vote(next, a)));
+    }
+    assert!(!deferred.add(next, members, a, vote(next, a)));
+    assert!(deferred.add(next, members, b, vote(next, b)));
+
+    assert_eq!(deferred.take().len(), 4);
+    assert!(deferred.add(next, members, a, vote(next, a)));
+}
+
+#[tokio::test]
+async fn a_message_of_a_later_epoch_must_be_signed_by_a_member() {
+    // 8.9: a vote of a later epoch makes us ask the voter for its block, and it would be kept. A forged one gets
+    // nothing, so the first thing the voter hears from us is the request for the block of the signed vote after it.
+    let committee = committee_with_base_port(17_100);
+    let mut members = keys();
+    let (name, secret) = members.remove(0);
+    let (voter, voter_secret) = members.remove(0);
+    let (forged_hash, hash) = (Digest([8; 32]), Digest([9; 32]));
+    let vote = |hash, signature| Vote { hash, round: 5, epoch: EPOCH + 1, author: voter, signature };
+    let forged = vote(forged_hash, Signature::default());
+    let signature = Signature::new(&vote_digest(EPOCH + 1, &hash, 5), &voter_secret);
+    let signed = vote(hash.clone(), signature);
+    let expected = bincode::serialize(&ConsensusMessage::SyncRequest(hash, name)).unwrap();
+
+    let mut received = frames(committee.address(&voter).unwrap(), 1);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let store_path = ".db_test_a_message_of_a_later_epoch_must_be_signed_by_a_member";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Vote(forged)).await.unwrap();
+    tx_core.send(ConsensusMessage::Vote(signed)).await.unwrap();
+    assert_eq!(received.recv().await.unwrap(), Bytes::from(expected));
+}
+
+#[tokio::test]
+async fn a_block_of_a_far_epoch_still_asks_for_its_parent() {
+    // 8.9: a node several epochs behind catches up by fetching blocks backwards from what it hears. A block more than
+    // one epoch ahead is not kept, but it must still ask its author for its parent.
+    let committee = committee_with_base_port(17_200);
+    let mut members = keys();
+    let (name, secret) = members.remove(0);
+    let (author, author_secret) = members.remove(0);
+    let parent = Digest([7; 32]);
+    let epoch = EPOCH + 5;
+    let qc = QC { hash: parent.clone(), round: 9, epoch, votes: Vec::new() };
+    let mut block = Block::new_from_key(qc, author, 10, Vec::new(), &author_secret);
+    block.epoch = epoch;
+    block.signature = Signature::new(&block.digest(), &author_secret);
+    let expected = bincode::serialize(&ConsensusMessage::SyncRequest(parent, name)).unwrap();
+
+    let mut received = frames(committee.address(&author).unwrap(), 1);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let store_path = ".db_test_a_block_of_a_far_epoch_still_asks_for_its_parent";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+    assert_eq!(received.recv().await.unwrap(), Bytes::from(expected));
+}
+
+#[tokio::test]
 async fn nr_timeouts_make_an_accusation() {
     // G2: NR = 1 timeouts of a round from more than 2/3 of the weight go to the proposer as an AT accusation.
     let (leader1, leader2) = (leader_keys(1).0, leader_keys(2).0);

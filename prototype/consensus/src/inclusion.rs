@@ -7,6 +7,8 @@
 //! - When a block we hold is certified, a transaction listed by attestations of its round from more than 2/3
 //!   of the weight that the block leaves out, without an exemption (full block, or a conflicting transaction
 //!   already included), gives an omission proof for the ledger.
+//! - A certified block can still be abandoned (a TC extended an older QC). Once the chain has passed its round,
+//!   what it held counts as never included and is pending again.
 //!
 //! `censor` is an experiment switch (not part of the protocol): the node ignores the transactions of victim
 //! accounts, so it neither forwards, attests nor includes them, as the simulator's TxAdversary.censor.
@@ -36,7 +38,7 @@ const MAX_PENDING_OTXS: usize = 100_000;
 pub struct Inclusion {
     guard: Duration,
     censor: bool,
-    /// Ceiling on `pending` (and so on `known`): new transactions are refused once it is reached.
+    /// Ceiling on `pending`: new transactions are refused once it is reached.
     max_pending: usize,
     /// Pending observed transactions we hold: id -> (transaction, held since, arrival number).
     pending: HashMap<Digest, (Otx, Instant, u64)>,
@@ -51,6 +53,8 @@ pub struct Inclusion {
     /// Certified blocks of recent rounds (late attestations are checked against them).
     certified: BTreeMap<Round, Block>,
     made: HashSet<(EpochNumber, Round, Digest)>,
+    /// The highest committed round: up to here the chain is settled.
+    settled: Round,
 }
 
 impl Inclusion {
@@ -67,6 +71,7 @@ impl Inclusion {
             attestations: BTreeMap::new(),
             certified: BTreeMap::new(),
             made: HashSet::new(),
+            settled: 0,
         }
     }
 
@@ -80,8 +85,8 @@ impl Inclusion {
             self.known.insert(id, otx); // already in a certified block: nothing to attest or include, but forward
             return true;
         }
-        // Bound the pending buffer (and with it `known`): once full, refuse new transactions rather than let a
-        // flood of distinct ones grow memory without limit.
+        // Bound the pending buffer: once full, refuse new transactions rather than let a flood of distinct ones
+        // grow memory without limit.
         if self.pending.len() >= self.max_pending {
             return false;
         }
@@ -125,6 +130,15 @@ impl Inclusion {
         if self.certified.get(&block.round).map_or(false, |b| b.digest() == block.digest()) {
             return Vec::new();
         }
+        // A late certificate of a block the chain has already passed over: it stays abandoned.
+        if block.round <= self.settled {
+            return Vec::new();
+        }
+        self.mark(block);
+        self.omissions(block.epoch, block.round, committee)
+    }
+
+    fn mark(&mut self, block: &Block) {
         self.certified.insert(block.round, block.clone());
         for x in &block.otxs {
             self.included.entry(x.id()).or_insert(block.round);
@@ -133,10 +147,52 @@ impl Inclusion {
         }
         // A transaction that conflicts with an included one can never be included: stop proposing it. It
         // stays known (unpending) so that omissions of it before the conflict can still be proved.
-        let proofs = self.omissions(block.epoch, block.round, committee);
         let taken = &self.taken;
         self.pending.retain(|_, (otx, _, _)| !taken.contains_key(&otx.key()));
-        proofs
+    }
+
+    /// A block is committed, in chain order. That settles its round and those since the last commit: any other
+    /// certified block among them has been abandoned, and what it held was not included after all.
+    pub fn commit(&mut self, block: &Block, now: Instant) {
+        if block.round <= self.settled {
+            return;
+        }
+        let digest = block.digest();
+        let abandoned: Vec<Round> = self
+            .certified
+            .range(self.settled + 1..=block.round)
+            .filter(|(_, b)| b.digest() != digest)
+            .map(|(round, _)| *round)
+            .collect();
+        self.settled = block.round;
+        let abandoned: Vec<Block> = abandoned.iter().filter_map(|round| self.certified.remove(round)).collect();
+        if !abandoned.is_empty() {
+            self.give_back(&abandoned, now);
+        }
+        if !self.certified.contains_key(&block.round) {
+            self.mark(block);
+        }
+    }
+
+    /// Undo what abandoned blocks marked, then put back what is free again: first in line, as it has waited longest,
+    /// and with the guard restarted. That includes the transactions pushed out as conflicting with them.
+    fn give_back(&mut self, abandoned: &[Block], now: Instant) {
+        let rounds: HashSet<Round> = abandoned.iter().map(|b| b.round).collect();
+        self.included.retain(|_, round| !rounds.contains(round));
+        self.taken.retain(|_, round| !rounds.contains(round));
+        // A live certified block may hold the same transaction, or a conflicting one.
+        for (round, block) in &self.certified {
+            for x in &block.otxs {
+                self.included.entry(x.id()).or_insert(*round);
+                self.taken.entry(x.key()).or_insert(*round);
+            }
+        }
+        let keys: HashSet<_> = abandoned.iter().flat_map(|b| b.otxs.iter().map(|x| x.key())).collect();
+        for (id, otx) in &self.known {
+            if keys.contains(&otx.key()) && !self.taken.contains_key(&otx.key()) {
+                self.pending.entry(id.clone()).or_insert((otx.clone(), now, 0));
+            }
+        }
     }
 
     /// A verified attestation (of the table `committee`); it may complete an omission proof for a round whose
@@ -215,10 +271,12 @@ impl Inclusion {
         proofs
     }
 
-    /// Forget the attestations and certified blocks of rounds before `round`.
+    /// Forget the attestations and certified blocks of rounds before `round`, but no certified block of a round the
+    /// chain has not settled yet: it may still be abandoned.
     pub fn cleanup(&mut self, round: Round) {
         self.attestations.retain(|(_, r), _| *r >= round);
-        self.certified.retain(|r, _| *r >= round);
+        let settled = round.min(self.settled + 1);
+        self.certified.retain(|r, _| *r >= settled);
         self.made.retain(|(_, r, _)| *r >= round);
     }
 }

@@ -86,6 +86,8 @@ pub struct Punishment {
     weights: Vec<u64>,
     cap: u128,
     u_max: u128,
+    /// Above this share an offence is correlated: the cap, as CapNorm applied it.
+    correlated: u128,
     /// Base shares when the run started (c is counted on them) and now (fork evictions recompute them).
     base0: Vec<u128>,
     base: Vec<u128>,
@@ -106,8 +108,13 @@ pub struct Punishment {
 
 impl Punishment {
     /// `classes` and `weights` are the members' classes and base weights w_i; `cap` and `u_max` the CapNorm caps.
-    pub fn new(classes: Vec<Class>, weights: Vec<u64>, cap: u128, u_max: u128, config: PunishConfig) -> Self {
+    pub fn new(classes: Vec<Class>, weights: Vec<u64>, cap: u128, u_max: u128, mut config: PunishConfig) -> Self {
         let base = ttru::base_weights(&classes, &weights, cap, u_max);
+        // CapNorm relaxes the cap for a committee too small to respect it (no member can hold less than 1/n of an
+        // equal split). L_max rises with it, or the strict FIFO queue would stall for good at a member above it;
+        // and one member alone is still not a correlated fault.
+        let largest = base.iter().copied().max().unwrap_or(0);
+        config.l_max = config.l_max.max(largest);
         let n = classes.len();
         Self {
             config,
@@ -115,6 +122,7 @@ impl Punishment {
             weights,
             cap,
             u_max,
+            correlated: cap.max(largest),
             base0: base.clone(),
             base,
             pending: Vec::new(),
@@ -209,7 +217,7 @@ impl Punishment {
                 let c = self.correlated(item, k);
                 let base = if item.fork || 3 * c > ONE {
                     4
-                } else if c > self.cap {
+                } else if c > self.correlated {
                     3
                 } else {
                     2

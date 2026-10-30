@@ -1,5 +1,5 @@
 use crate::aggregator::{Accuser, Aggregator};
-use crate::config::Committee;
+use crate::config::{Committee, EpochNumber};
 use crate::consensus::{ConsensusMessage, Round};
 use crate::epoch::{EpochConfig, Epochs};
 use crate::error::{ConsensusError, ConsensusResult};
@@ -21,7 +21,7 @@ use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, info, warn};
 use network::SimpleSender;
 use std::cmp::max;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 use std::time::Instant;
@@ -30,8 +30,11 @@ use std::time::Instant;
 #[path = "tests/core_tests.rs"]
 pub mod core_tests;
 
-/// Messages of a later epoch wait here (bounded) until we enter that epoch.
-const MAX_DEFERRED: usize = 2_000;
+/// Messages of the next epoch wait in `Deferred` up to this many bytes, shared equally by the members.
+const MAX_DEFERRED_BYTES: usize = 64 << 20;
+
+/// At most this many blocks of a later epoch requested at a time (cleared when we enter a new epoch).
+const MAX_REQUESTED: usize = 2_000;
 
 /// G1 evidence detection looks this many rounds back.
 const DETECT_WINDOW: Round = 300;
@@ -47,6 +50,37 @@ const _: () = assert!(3 * DETECT_WINDOW <= crate::epoch::SINGLE_EPOCH_LEDGER_WIN
 /// block's QC, a timeout's high QC) is processed before the message is dropped, and a TC is never dropped --
 /// certificates need 2f+1 signatures, so a faulty member cannot forge them (handle_message).
 const ACCEPT_WINDOW: Round = 1_000;
+
+/// Messages of the next epoch, kept until we enter it: its votes and timeouts can reach us before the commit proof
+/// that moves us there. Only the next epoch, so a message cannot sit here for good: everything leaves when we
+/// enter it. Each member has an equal share of the bytes, so a faulty one cannot crowd out the others.
+#[derive(Default)]
+struct Deferred {
+    messages: Vec<ConsensusMessage>,
+    bytes: HashMap<PublicKey, usize>,
+}
+
+impl Deferred {
+    /// Keep a message signed by `author`, one of `members` members; `next` is the next epoch.
+    fn add(&mut self, next: EpochNumber, members: usize, author: PublicKey, message: ConsensusMessage) -> bool {
+        if epoch_of(&message) != next {
+            return false;
+        }
+        let size = bincode::serialized_size(&message).map_or(usize::MAX, |size| size as usize);
+        let used = self.bytes.entry(author).or_insert(0);
+        if used.saturating_add(size) > MAX_DEFERRED_BYTES / members {
+            return false;
+        }
+        *used += size;
+        self.messages.push(message);
+        true
+    }
+
+    fn take(&mut self) -> Vec<ConsensusMessage> {
+        self.bytes.clear();
+        std::mem::take(&mut self.messages)
+    }
+}
 
 /// Experiment switches (not part of the protocol, DESIGN.md §13.3).
 #[derive(Clone, Copy, Default)]
@@ -97,8 +131,8 @@ pub struct Core {
     detector: Detector,
     faults: Faults,
     network: SimpleSender,
-    // Messages of later epochs, and those to handle again after entering a new epoch.
-    deferred: Vec<ConsensusMessage>,
+    // Messages of the next epoch, and those to handle again after entering a new epoch.
+    deferred: Deferred,
     replay: VecDeque<ConsensusMessage>,
     // Blocks of a later epoch already requested (cleared when we enter a new epoch).
     requested: HashSet<Digest>,
@@ -153,7 +187,7 @@ impl Core {
                 detector: Detector::new(),
                 faults,
                 network: SimpleSender::new(),
-                deferred: Vec::new(),
+                deferred: Deferred::default(),
                 replay: VecDeque::new(),
                 requested: HashSet::new(),
                 pending_proposal: None,
@@ -317,10 +351,11 @@ impl Core {
             && round_of(message).map_or(false, |round| round > self.round.saturating_add(ACCEPT_WINDOW))
     }
 
-    fn defer(&mut self, message: ConsensusMessage) {
-        if self.deferred.len() < MAX_DEFERRED {
-            self.deferred.push(message);
-        }
+    /// A message of a later epoch, signed by `author`: kept if it is of the next epoch and within `author`'s share.
+    /// One of a later epoch than that goes: a node that far behind catches up through block synchronization.
+    fn defer(&mut self, author: PublicKey, message: ConsensusMessage) {
+        let (next, members) = (self.epochs.epoch() + 1, self.committee().size());
+        self.deferred.add(next, members, author, message);
     }
 
     /// Ask a node for a block we miss (its sync helper answers with a Propose message).
@@ -350,13 +385,7 @@ impl Core {
             self.round,
             terminal.round
         );
-        let current = self.epochs.epoch();
-        let (now, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.deferred)
-            .into_iter()
-            .filter(|m| epoch_of(m) >= current)
-            .partition(|m| epoch_of(m) == current);
-        self.replay.extend(now);
-        self.deferred = later;
+        self.replay.extend(self.deferred.take());
         self.requested.clear();
         self.accuser.cleanup(self.epochs.done() + 1);
         self.inclusion.cleanup(self.epochs.done() + 1);
@@ -415,6 +444,7 @@ impl Core {
         while let Some(block) = to_commit.pop_front() {
             // G2: the evidence on the ledger, up to and including the terminal block, decides the next table.
             self.epochs.record(&block);
+            self.inclusion.commit(&block, Instant::now());
             if !block.accusations.is_empty() {
                 let keys = block.accusations.iter().map(|a| (a.epoch, a.round)).collect();
                 self.tx_proposer
@@ -905,7 +935,7 @@ impl Core {
         if block.epoch > self.epochs.epoch() {
             self.catch_up(&block.qc).await;
             if block.epoch > self.epochs.epoch() {
-                self.defer(ConsensusMessage::Propose(block.clone()));
+                self.defer(block.author, ConsensusMessage::Propose(block.clone()));
                 self.request_block(block.qc.hash.clone(), block.author).await;
                 return Ok(());
             }
@@ -995,7 +1025,16 @@ impl Core {
             message => message,
         };
         let epoch = epoch_of(&message);
+        let mut author = None;
         if epoch > self.epochs.epoch() {
+            // We do not know that epoch's table yet, but the members and their keys do not change between epochs,
+            // so a message of a later epoch can at least be checked to come from a member. Nothing below acts on
+            // it (asking for blocks, keeping it, verifying the certificates it carries) until then.
+            author = signer_of(&message, self.committee());
+            if author.is_none() {
+                debug!("Dropping a message of later epoch {} not signed by a member", epoch);
+                return Ok(());
+            }
             match &message {
                 ConsensusMessage::Timeout(timeout) => self.catch_up(&timeout.high_qc.clone()).await,
                 ConsensusMessage::TC(tc) => self.catch_up(&tc.high_qc.clone()).await,
@@ -1005,8 +1044,8 @@ impl Core {
         // 1.13: a current-epoch message for a round implausibly far beyond ours. First catch up from the
         // certificate it carries (that is how a node that fell behind jumps forward; a faulty member cannot forge
         // one), then drop the message itself if it is still beyond the window, before it reaches the per-round
-        // aggregator / accuser / detector / inclusion maps. A later epoch's messages are bounded instead by the
-        // deferred buffer; an earlier epoch's are dropped below.
+        // aggregator / accuser / detector / inclusion maps. A later epoch's messages are bounded instead by
+        // Deferred; an earlier epoch's are dropped below.
         if epoch == self.epochs.epoch() && self.beyond_window(&message) {
             // Check the message's own signature (one check) before its certificate (2f+1), as for a message
             // within the window, so junk from a non-member stays cheap to drop.
@@ -1028,15 +1067,15 @@ impl Core {
             ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
             m if epoch > self.epochs.epoch() => {
                 // Votes of the next epoch can reach us before the block they vote for (which carries the
-                // commit proof that moves us there), and that block may be lost: ask the voter for it. These
-                // votes are not verified here, so bound the set of outstanding requests (as the deferred buffer
-                // is bounded) rather than let unverified future-epoch votes grow it without limit.
+                // commit proof that moves us there), and that block may be lost: ask the voter for it.
                 if let ConsensusMessage::Vote(vote) = &m {
-                    if self.requested.len() < MAX_DEFERRED && self.requested.insert(vote.hash.clone()) {
+                    if self.requested.len() < MAX_REQUESTED && self.requested.insert(vote.hash.clone()) {
                         self.request_block(vote.hash.clone(), vote.author).await;
                     }
                 }
-                self.defer(m);
+                if let Some(author) = author {
+                    self.defer(author, m);
+                }
                 Ok(())
             }
             _ if epoch < self.epochs.epoch() => Ok(()),
@@ -1093,6 +1132,33 @@ fn epoch_of(message: &ConsensusMessage) -> u128 {
         ConsensusMessage::Attest(attestation) => attestation.epoch,
         ConsensusMessage::SyncRequest(..) | ConsensusMessage::Otx(..) => 0,
     }
+}
+
+/// The member that signed a message of an epoch whose table we do not know yet, if the signature holds. The
+/// signature is checked only once the signer is known to be a member, so junk from anyone else stays cheap. A TC
+/// counts against its first signer, and all of its signers must be members.
+fn signer_of(message: &ConsensusMessage, committee: &Committee) -> Option<PublicKey> {
+    let member = |name: &PublicKey| committee.address(name).is_some();
+    let author = match message {
+        ConsensusMessage::Propose(block) => block.author,
+        ConsensusMessage::Vote(vote) => vote.author,
+        ConsensusMessage::Timeout(timeout) => timeout.author,
+        ConsensusMessage::Attest(attestation) => attestation.author,
+        ConsensusMessage::TC(tc) if tc.votes.iter().all(|(name, ..)| member(name)) => tc.votes.first()?.0,
+        _ => return None,
+    };
+    if !member(&author) {
+        return None;
+    }
+    let signed = match message {
+        ConsensusMessage::Propose(block) => block.signature.verify(&block.digest(), &block.author).is_ok(),
+        ConsensusMessage::Vote(vote) => vote.signature.verify(&vote.digest(), &vote.author).is_ok(),
+        ConsensusMessage::Timeout(timeout) => SignedTimeout::from(timeout).verify().is_ok(),
+        ConsensusMessage::Attest(attestation) => attestation.signature.verify(&attestation.digest(), &author).is_ok(),
+        ConsensusMessage::TC(tc) => tc.check_signatures().is_ok(),
+        _ => false,
+    };
+    signed.then(|| author)
 }
 
 /// When a round advance is far enough past the previous cleanup (`last`) to run the round-based cleanup again,

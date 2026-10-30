@@ -62,6 +62,10 @@ class GradedPunishment:
         self.forks = sorted(forks, key=lambda x: x[1])
         n = len(self.cls)
         self.base = ttru.base_weights(self.cls, self.stake, 0.0, 0.0, cap, u_max)
+        # CapNorm relaxes the cap for a committee too small to respect it. L_max rises with it, or the strict FIFO
+        # queue would stall for good at an entity above it; and one entity alone is still not a correlated fault.
+        largest = float(self.base.max())
+        self.l_max, self.correlated = max(l_max, largest), max(cap, largest)
         self.items = []                     # dicts: i, kind, es, ec, mal, fork, level, applied
         self.windows = {}                   # (i, kind, es) -> item index (one punishment per window)
         self.bar_until = np.zeros(n, int)   # barred from leading in epochs < bar_until
@@ -124,7 +128,7 @@ class GradedPunishment:
         if it["kind"] == "live":
             return min(1 + it["k"], 3)
         c = self._c(it, k)
-        lvl = 4 if (it["fork"] or c > 1 / 3 + 1e-12) else (3 if c > self.cap + 1e-12 else 2)
+        lvl = 4 if (it["fork"] or c > 1 / 3 + 1e-12) else (3 if c > self.correlated + 1e-12 else 2)
         return min(lvl + it["k"], 4)
 
     # ---- effects ---------------------------------------------------------------------------------

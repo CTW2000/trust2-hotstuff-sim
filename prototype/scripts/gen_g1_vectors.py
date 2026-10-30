@@ -76,14 +76,18 @@ def script_of(name, base, rng):
             who.append(int(i))
             acc += base[i]
         return [(i, "safe", 6, 6, True, False) for i in who]
+    if name == "small":                                # a committee too small for the cap: one entity alone, then two
+        return [(0, "safe", 3, 3, False, False), (1, "safe", 20, 20, False, False), (2, "safe", 20, 20, False, False)]
     raise ValueError(name)
 
 
 def main():
     out = []
-    names = ["live-repeat", "iso", "safe-repeat", "correlated", "bug", "fork", "malicious"]
+    names = ["live-repeat", "iso", "safe-repeat", "correlated", "bug", "fork", "malicious", "small"]
     for seed, name in enumerate(names):
         cls, s = ttru.population(10, 12, 9, seed % 3, alpha=1.16)
+        if name == "small":
+            cls, s = np.array(["L"] * 7), np.ones(7)
         w = np.rint(s * 1e12).astype(np.int64)
         base = ttru.base_weights(cls, w.astype(float), 0.0, 0.0, CAP, U_MAX)
         script = script_of(name, base, np.random.default_rng([seed, 7]))

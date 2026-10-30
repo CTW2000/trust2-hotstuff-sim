@@ -122,13 +122,77 @@ fn cleanup_forgets_rounds_before_the_floor() {
     let x = otx(1, 1);
     let mut inclusion = Inclusion::new(GUARD, false);
     inclusion.receive(x.clone(), Instant::now());
-    assert!(inclusion.certify(&block(5, vec![otx(2, 1)]), &committee()).is_empty());
+    let b5 = block(5, vec![otx(2, 1)]);
+    assert!(inclusion.certify(&b5, &committee()).is_empty());
     assert_eq!(attest_all(&mut inclusion, 5, 3, &[x.id()]).len(), 1); // a proof is made, marking round 5
     assert!(!inclusion.attestations.is_empty() && !inclusion.certified.is_empty() && !inclusion.made.is_empty());
+    inclusion.commit(&b5, Instant::now());
     inclusion.cleanup(6);
     assert!(inclusion.attestations.is_empty(), "old attestations dropped");
     assert!(inclusion.certified.is_empty(), "old certified blocks dropped");
     assert!(inclusion.made.is_empty(), "old made-proof marks dropped");
+}
+
+#[test]
+fn an_abandoned_block_gives_its_transactions_back() {
+    // 2.1: a certified block can be abandoned (a TC extended an older QC). Once the chain has passed its round, what
+    // it held was not included after all: the transaction, and the one pushed out as conflicting with it, are pending
+    // again, first in line, and attested after a fresh guard. Cleanup must not lose the block before that.
+    let (x, rival, other) = (otx(1, 1), Otx { data: [1; 32], ..otx(1, 1) }, otx(3, 1));
+    let t0 = Instant::now();
+    let mut inclusion = Inclusion::new(GUARD, false);
+    for tx in [&x, &rival, &other] {
+        inclusion.receive(tx.clone(), t0);
+    }
+    let abandoned = block(5, vec![x.clone()]);
+    inclusion.certify(&abandoned, &committee());
+    assert_eq!(inclusion.select(), vec![other.clone()]);
+    inclusion.cleanup(6);
+
+    // The chain skips round 5: the next block it commits is of round 6.
+    let committed = block(6, Vec::new());
+    inclusion.certify(&committed, &committee());
+    inclusion.commit(&committed, t0 + GUARD);
+
+    let selected = inclusion.select();
+    assert_eq!(selected.len(), 2, "one of the two conflicting transactions, and the other");
+    assert_eq!(selected[0].key(), x.key());
+    assert_eq!(selected[1], other);
+    assert_eq!(inclusion.to_attest(t0 + GUARD), vec![other.id()]);
+    assert_eq!(inclusion.to_attest(t0 + 2 * GUARD).len(), 3);
+
+    // Its round is settled: a late QC does not bring the block back.
+    assert!(inclusion.certify(&abandoned, &committee()).is_empty());
+    assert_eq!(inclusion.select().len(), 2);
+}
+
+#[test]
+fn a_transaction_also_in_a_live_block_stays_included() {
+    // 2.1: only what no live certified block holds goes back: x is also in block 7, which nothing has abandoned.
+    let x = otx(1, 1);
+    let t0 = Instant::now();
+    let mut inclusion = Inclusion::new(GUARD, false);
+    inclusion.receive(x.clone(), t0);
+    inclusion.certify(&block(5, vec![x.clone()]), &committee());
+    inclusion.certify(&block(7, vec![x.clone()]), &committee());
+    let committed = block(6, Vec::new());
+    inclusion.certify(&committed, &committee());
+    inclusion.commit(&committed, t0);
+    assert!(inclusion.select().is_empty());
+    assert!(inclusion.to_attest(t0 + GUARD).is_empty());
+}
+
+#[test]
+fn a_committed_block_counts_even_if_never_seen_certified() {
+    // 2.1: the chain decides. A committed block marks what it holds even if this node never saw its QC, and the
+    // certified blocks up to it that are not on the chain are abandoned all the same.
+    let x = otx(1, 1);
+    let t0 = Instant::now();
+    let mut inclusion = Inclusion::new(GUARD, false);
+    inclusion.receive(x.clone(), t0);
+    inclusion.commit(&block(6, vec![x.clone()]), t0);
+    assert!(inclusion.select().is_empty());
+    assert!(inclusion.included.contains_key(&x.id()));
 }
 
 #[test]

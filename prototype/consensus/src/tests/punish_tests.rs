@@ -73,7 +73,6 @@ fn graded_punishment_matches_the_simulator() {
 
 #[test]
 fn suspended_share_never_exceeds_l_max() {
-    let l_max = PunishConfig::default().l_max;
     for case in cases() {
         let classes: Vec<Class> = case
             .certified
@@ -88,7 +87,7 @@ fn suspended_share_never_exceeds_l_max() {
         }
         for k in 1..=case.epochs.len() as EpochNumber {
             punishment.update(k);
-            assert!(punishment.suspended_share(k) <= l_max, "{} epoch {}", case.name, k);
+            assert!(punishment.suspended_share(k) <= punishment.config.l_max, "{} epoch {}", case.name, k);
         }
     }
 }
@@ -116,4 +115,21 @@ fn repeats_count_only_within_the_lookback() {
     };
     assert_eq!(levels(10), vec![1, 2]);
     assert_eq!(levels(70), vec![1, 1]);
+}
+
+#[test]
+fn one_member_of_a_small_committee_is_not_correlated() {
+    // 7 equal members cannot respect a 5% cap: CapNorm relaxes it to 1/7. One member's offence is then L2, not the
+    // L3 of a correlated fault; two members in one window still are.
+    let levels = |culprits: &[usize]| -> Vec<u8> {
+        let (classes, weights) = (vec![Class::Licensed; 7], vec![1; 7]);
+        let mut punishment = Punishment::new(classes, weights, from_ppm(50_000), ONE, PunishConfig::default());
+        for i in culprits {
+            punishment.record(*i, Kind::Safety, 1, 1, false, false);
+        }
+        let events = punishment.update(2);
+        events.iter().filter_map(|e| if let G1Event::Level(l, _, _) = e { Some(*l) } else { None }).collect()
+    };
+    assert_eq!(levels(&[0]), vec![2]);
+    assert_eq!(levels(&[0, 1]).last(), Some(&3));
 }

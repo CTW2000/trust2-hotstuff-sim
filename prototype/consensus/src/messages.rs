@@ -514,11 +514,7 @@ impl TC {
             ConsensusError::TCRequiresQuorum
         );
 
-        // Check the signatures.
-        for (author, signature, high_qc_round, nr) in &self.votes {
-            let digest = timeout_digest(self.epoch, self.round, *high_qc_round, *nr);
-            signature.verify(&digest, author)?;
-        }
+        self.check_signatures()?;
 
         // The embedded QC is the highest one the signers reported; the caller verifies the QC itself
         // against the table of its own epoch.
@@ -527,6 +523,15 @@ impl TC {
             self.high_qc.round == max_round,
             ConsensusError::MalformedTC(self.round)
         );
+        Ok(())
+    }
+
+    /// The signatures alone, which need no weight table.
+    pub fn check_signatures(&self) -> ConsensusResult<()> {
+        for (author, signature, high_qc_round, nr) in &self.votes {
+            let digest = timeout_digest(self.epoch, self.round, *high_qc_round, *nr);
+            signature.verify(&digest, author)?;
+        }
         Ok(())
     }
 
@@ -816,7 +821,7 @@ pub struct SignedTimeout {
 }
 
 impl SignedTimeout {
-    fn verify(&self) -> ConsensusResult<()> {
+    pub fn verify(&self) -> ConsensusResult<()> {
         let digest = timeout_digest(self.epoch, self.round, self.high_qc_round, self.nr);
         self.signature.verify(&digest, &self.author)?;
         Ok(())

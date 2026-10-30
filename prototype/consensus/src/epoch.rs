@@ -118,14 +118,12 @@ impl Epochs {
             // NOTE: this log entry is used to weigh the reputation cuts by base weight (benchmark/p5.py).
             info!("T_tru base weight of {} is {} ppm", name, b * ttru::PPM / ttru::ONE);
         }
-        // CapNorm relaxes the cap for a committee too small to respect it (no member can hold less than 1/n of an
-        // equal split). L_max then rises with it: the strict FIFO queue would stall for good at a member above it.
         let largest = base.iter().copied().max().unwrap_or(0);
         if largest > cap {
             info!("Entity cap relaxed to {} ppm: the committee is too small for it", largest * ttru::PPM / ttru::ONE);
         }
         let punish_config = PunishConfig {
-            l_max: ttru::from_ppm(config.l_max_ppm).max(largest),
+            l_max: ttru::from_ppm(config.l_max_ppm),
             ..PunishConfig::default()
         };
         let punishment = Punishment::new(classes, weights, cap, u_max, punish_config);
