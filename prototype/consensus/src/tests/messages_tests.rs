@@ -284,6 +284,29 @@ fn attestation_signs_its_list() {
 }
 
 #[test]
+fn attestation_list_is_bounded_and_distinct() {
+    // 8.7 / 12.8: a correctly signed attestation is still rejected if its list is too long or repeats an entry.
+    // The bound keeps one attestation (and the omission proofs built from it) small; distinct entries make "the
+    // weight listing x" the same counted per entry (Inclusion::omissions) or per author (OmitProof::verify).
+    let (name, secret) = keys().remove(0);
+    let distinct: Vec<Digest> = (0..MAX_ATTESTATION_OTXS as u64).map(|n| otx(1, n, 0).id()).collect();
+    assert!(Attestation::new_from_key(4, distinct.clone(), name, &secret).verify(&committee()).is_ok());
+
+    let mut over = distinct;
+    over.push(otx(1, MAX_ATTESTATION_OTXS as u64, 0).id());
+    assert!(matches!(
+        Attestation::new_from_key(4, over, name, &secret).verify(&committee()),
+        Err(ConsensusError::MalformedAttestation(4))
+    ));
+
+    let x = otx(1, 1, 0).id();
+    assert!(matches!(
+        Attestation::new_from_key(4, vec![x.clone(), x], name, &secret).verify(&committee()),
+        Err(ConsensusError::MalformedAttestation(4))
+    ));
+}
+
+#[test]
 fn omission_proof_verification() {
     let x = otx(1, 1, 0);
     let y = otx(2, 1, 0);
@@ -439,6 +462,32 @@ fn block_digest_covers_evidence() {
     let many = vec![evidence[0].clone(); MAX_EVIDENCE + 1];
     let over = Block::new_from_key_evidence(qc(), many, name, 6, &secret);
     assert!(matches!(over.verify(&committee()), Err(ConsensusError::MalformedBlock(_))));
+}
+
+#[test]
+fn block_evidence_nesting_is_bounded() {
+    // 8.9: Evidence::InvalidBlock / ::Regression embed a block whose own evidence embeds further blocks.
+    // Deserializing a message is bounded in depth, so a deeply nested (malformed) message is refused rather
+    // than exhausting the stack. A shallow nesting still round-trips.
+    let (name, secret) = leader();
+    let voter = keys().remove(0);
+    let nest = |depth: u32| {
+        let mut block = Block::default();
+        for _ in 0..depth {
+            let vote = Vote::new_from_key(block.digest(), block.round, voter.0, &voter.1);
+            block = Block::new_from_key_evidence(qc(), vec![Evidence::InvalidBlock(vote, block)], name, 6, &secret);
+        }
+        block
+    };
+
+    let shallow = nest(2);
+    let bytes = bincode::serialize(&shallow).unwrap();
+    let back: Block = bincode::deserialize(&bytes).expect("shallow nesting round-trips");
+    assert_eq!(back.digest(), shallow.digest());
+
+    let deep = nest(MAX_EVIDENCE_DEPTH + 1);
+    let bytes = bincode::serialize(&deep).unwrap();
+    assert!(bincode::deserialize::<Block>(&bytes).is_err());
 }
 
 #[test]

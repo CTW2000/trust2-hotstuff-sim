@@ -204,6 +204,33 @@ async fn local_timeout_round() {
 }
 
 #[tokio::test]
+async fn far_future_block_does_not_turn_off_nr() {
+    // 3.6 / N6: a valid block of a far-future round (from that round's leader) must not raise ready_round, so a
+    // timeout of the current round still reports NR = 1 (no usable proposal for this round was received). Were
+    // ready_round raised by any block, a faulty leader could keep every node's NR at 0 and disable AT.
+    let committee = committee_with_base_port(16_300);
+    let (public_key, secret_key) = leader_keys(3);
+    let timeout = Timeout::new_from_key(QC::genesis(), 1, true, public_key, &secret_key);
+    let expected = bincode::serialize(&ConsensusMessage::Timeout(timeout)).unwrap();
+
+    let store_path = ".db_test_far_future_block_does_not_turn_off_nr";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(public_key, secret_key, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+
+    // A valid block for a much later round, from that round's leader, while we are still in round 1.
+    let (future_leader, future_key) = leader_keys(10);
+    let block = Block::new_from_key(QC::genesis(), future_leader, 10, Vec::new(), &future_key);
+    tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+
+    let handles: Vec<_> = committee
+        .broadcast_addresses(&public_key)
+        .into_iter()
+        .map(|(_, address)| listener(address, Some(Bytes::from(expected.clone()))))
+        .collect();
+    assert!(try_join_all(handles).await.is_ok());
+}
+
+#[tokio::test]
 async fn nr_timeouts_make_an_accusation() {
     // G2: NR = 1 timeouts of a round from more than 2/3 of the weight go to the proposer as an AT accusation.
     let (leader1, leader2) = (leader_keys(1).0, leader_keys(2).0);

@@ -102,6 +102,20 @@ fn certified_block_omitting_a_due_transaction_gives_a_proof() {
 }
 
 #[test]
+fn repeated_entries_do_not_inflate_the_quorum() {
+    // 12.8: one attester listing x three times is still one author's weight, below the quorum of a 4-member
+    // committee, so no proof is built. Counting per list entry (before the fix) reached the quorum and produced
+    // a proof that every other node, counting per author, then rejected -- which could stall the chain.
+    let x = otx(1, 1);
+    let mut inclusion = Inclusion::new(GUARD, false);
+    inclusion.receive(x.clone(), Instant::now());
+    assert!(inclusion.certify(&block(5, vec![otx(2, 1)]), &committee()).is_empty());
+    let (name, secret) = keys().remove(0);
+    let repeated = Attestation::new_from_key(5, vec![x.id(), x.id(), x.id()], name, &secret);
+    assert!(inclusion.attest(repeated, &committee()).is_empty());
+}
+
+#[test]
 fn censor_ignores_victim_transactions() {
     let mut inclusion = Inclusion::new(GUARD, true);
     let t0 = Instant::now();

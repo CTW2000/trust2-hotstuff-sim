@@ -5,6 +5,7 @@ use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::convert::TryInto;
 use std::fmt;
@@ -21,6 +22,46 @@ pub const MAX_OTXS: usize = 16;
 pub const MAX_OMISSIONS: usize = 32;
 /// At most this many pieces of G1 evidence per block.
 pub const MAX_EVIDENCE: usize = 16;
+/// At most this many observed transactions in one attestation. A node attests the small set of observed
+/// transactions it is waiting to see included (DESIGN.md §12.4), so this bound is far above honest use; it
+/// keeps a single attestation small and the omission proofs built from attestations under the network frame.
+pub const MAX_ATTESTATION_OTXS: usize = 64;
+/// The deepest a block-in-evidence nesting may go when deserializing an (untrusted) message. Evidence::
+/// InvalidBlock and ::Regression embed a block, whose own evidence embeds further blocks; honest nodes
+/// produce only a couple of levels, so this bound is well above honest use. It is enforced while
+/// deserializing (see `bounded_evidence`) so that a deeply nested message cannot exhaust the stack.
+const MAX_EVIDENCE_DEPTH: u32 = 8;
+
+thread_local! {
+    /// How many blocks deep the evidence currently being deserialized is nested (reset per message, per thread).
+    static EVIDENCE_DEPTH: Cell<u32> = Cell::new(0);
+}
+
+/// Deserialize a block's evidence, refusing nesting beyond MAX_EVIDENCE_DEPTH. A block's evidence may embed
+/// another block (Evidence::InvalidBlock / ::Regression), whose own evidence is deserialized through this same
+/// function, so the counter bounds the block-in-evidence recursion and a malformed deeply nested message is
+/// rejected before it can exhaust the stack, rather than after (Block::verify runs only once this returns).
+fn bounded_evidence<'de, D>(deserializer: D) -> Result<Vec<Evidence>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            EVIDENCE_DEPTH.with(|d| d.set(d.get() - 1));
+        }
+    }
+    let depth = EVIDENCE_DEPTH.with(|d| {
+        let next = d.get() + 1;
+        d.set(next);
+        next
+    });
+    let _guard = Guard;
+    if depth > MAX_EVIDENCE_DEPTH {
+        return Err(serde::de::Error::custom("block evidence nested too deeply"));
+    }
+    Vec::<Evidence>::deserialize(deserializer)
+}
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Block {
@@ -32,6 +73,7 @@ pub struct Block {
     pub otxs: Vec<Otx>,
     pub omissions: Vec<OmitProof>,
     /// G1 evidence (DESIGN.md §13).
+    #[serde(deserialize_with = "bounded_evidence")]
     pub evidence: Vec<Evidence>,
     pub author: PublicKey,
     pub round: Round,
@@ -629,6 +671,14 @@ impl Attestation {
             ConsensusError::UnknownAuthority(self.author)
         );
         check_epoch(self.epoch, committee)?;
+        // The list is bounded and free of duplicates: a bounded list keeps the attestation (and the omission
+        // proofs built from it) small; distinct entries make "the weight listing x" the same whether counted
+        // per entry (Inclusion::omissions) or per author (OmitProof::verify).
+        let mut seen = HashSet::new();
+        ensure!(
+            self.otxs.len() <= MAX_ATTESTATION_OTXS && self.otxs.iter().all(|x| seen.insert(x)),
+            ConsensusError::MalformedAttestation(self.round)
+        );
         self.signature.verify(&self.digest(), &self.author)?;
         Ok(())
     }

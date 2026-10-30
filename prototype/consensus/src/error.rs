@@ -85,6 +85,9 @@ pub enum ConsensusError {
     #[error("Malformed omission proof for round {0}")]
     MalformedOmission(Round),
 
+    #[error("Malformed attestation for round {0}")]
+    MalformedAttestation(Round),
+
     #[error("Malformed G1 evidence against {0}")]
     MalformedEvidence(PublicKey),
 

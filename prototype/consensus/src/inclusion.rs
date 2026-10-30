@@ -13,7 +13,7 @@
 
 use crate::config::{Committee, EpochNumber, Stake};
 use crate::consensus::Round;
-use crate::messages::{Attestation, Block, OmitProof, Otx, MAX_OTXS};
+use crate::messages::{Attestation, Block, OmitProof, Otx, MAX_ATTESTATION_OTXS, MAX_OTXS};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -83,11 +83,13 @@ impl Inclusion {
         pending
     }
 
-    /// What we attest on entering a round: the pending transactions held for at least the guard.
+    /// What we attest on entering a round: the pending transactions held for at least the guard, oldest first,
+    /// at most MAX_ATTESTATION_OTXS (so our own attestation stays within the bound Attestation::verify enforces).
     pub fn to_attest(&self, now: Instant) -> Vec<Digest> {
         self.oldest_first()
             .into_iter()
             .filter(|(_, since, _)| *since + self.guard <= now)
+            .take(MAX_ATTESTATION_OTXS)
             .map(|(otx, _, _)| otx.id())
             .collect()
     }
@@ -154,8 +156,15 @@ impl Inclusion {
 
         let mut weights: HashMap<&Digest, Stake> = HashMap::new();
         for (author, (_, list)) in attestations {
+            let stake = committee.stake(author);
+            // Count each author's weight once per transaction, as OmitProof::verify does (per author, not per
+            // list entry), so a repeated entry in one list cannot push the weight past the quorum and make us
+            // assemble a proof that every other node then rejects.
+            let mut counted = HashSet::new();
             for x in list {
-                *weights.entry(x).or_insert(0) += committee.stake(author);
+                if counted.insert(x) {
+                    *weights.entry(x).or_insert(0) += stake;
+                }
             }
         }
         let mut proofs = Vec::new();
