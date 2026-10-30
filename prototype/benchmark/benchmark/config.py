@@ -19,7 +19,7 @@ class Key:
 
 
 class Committee:
-    def __init__(self, names, consensus_addr, transactions_addr, mempool_addr):
+    def __init__(self, names, consensus_addr, transactions_addr, mempool_addr, stakes=None, certified=None):
         inputs = [names, consensus_addr, transactions_addr, mempool_addr]
         assert all(isinstance(x, list) for x in inputs)
         assert all(isinstance(x, str) for y in inputs for x in y)
@@ -29,6 +29,10 @@ class Committee:
         self.consensus = consensus_addr
         self.front = transactions_addr
         self.mempool = mempool_addr
+        # Consensus base weights (the chain's w_i) and certification; by default equal and all certified, written
+        # as before. The mempool committee keeps equal stakes.
+        self.stakes = stakes or [1] * len(names)
+        self.certified = certified
 
         self.json = {
             'consensus': self._build_consensus(),
@@ -37,8 +41,10 @@ class Committee:
 
     def _build_consensus(self):
         node = {}
-        for a, n in zip(self.consensus, self.names):
-            node[n] = {'name': n, 'stake': 1, 'address': a}
+        for i, (a, n) in enumerate(zip(self.consensus, self.names)):
+            node[n] = {'name': n, 'stake': self.stakes[i], 'address': a}
+            if self.certified is not None:
+                node[n]['certified'] = self.certified[i]
         return {'authorities': node, 'epoch': 1}
 
     def _build_mempool(self):
@@ -79,7 +85,7 @@ class Committee:
 
 
 class LocalCommittee(Committee):
-    def __init__(self, names, port):
+    def __init__(self, names, port, stakes=None, certified=None):
         assert isinstance(names, list) and all(
             isinstance(x, str) for x in names)
         assert isinstance(port, int)
@@ -87,7 +93,7 @@ class LocalCommittee(Committee):
         consensus = [f'127.0.0.1:{port + i}' for i in range(size)]
         front = [f'127.0.0.1:{port + i + size}' for i in range(size)]
         mempool = [f'127.0.0.1:{port + i + 2*size}' for i in range(size)]
-        super().__init__(names, consensus, front, mempool)
+        super().__init__(names, consensus, front, mempool, stakes, certified)
 
 
 class NodeParameters:

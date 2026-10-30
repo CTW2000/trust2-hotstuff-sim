@@ -16,6 +16,7 @@ import base64
 import fcntl
 import json
 import os
+import random
 import shlex
 import shutil
 import signal
@@ -44,6 +45,25 @@ def node_parameters(args):
         "mempool": {"gc_depth": 50, "sync_retry_delay": 5_000, "sync_retry_nodes": 3,
                     "batch_size": 15_000, "max_batch_delay": 10},
     }
+
+
+def base_weights(args):
+    """The committee's base weights w_i and certification (DESIGN.md §9). By default equal and all certified, written
+    to the committee file exactly as before. `lognormal:<sigma>` draws the weights with a fixed seed, so every run
+    has the same committee; the uncertified members are spread through it (node indices 2, 5, 8, ... first)."""
+    stakes = None
+    if args.stakes != "equal":
+        kind, sigma = args.stakes.split(":")
+        if kind != "lognormal":
+            sys.exit(f"unknown --stakes {args.stakes}")
+        rng = random.Random(0)
+        stakes = [max(1, round(1000 * rng.lognormvariate(0, float(sigma)))) for _ in range(args.nodes)]
+    certified = None
+    if args.uncertified:
+        order = sorted(range(args.nodes), key=lambda i: (i % 3 != 2, i))
+        uncertified = set(order[:args.uncertified])
+        certified = [i not in uncertified for i in range(args.nodes)]
+    return stakes, certified
 
 
 def in_scope(args):
@@ -99,7 +119,7 @@ def run(args):
     for f in key_files:
         subprocess.run([node, "keys", "--filename", f], check=True)
     names = [Key.from_file(f).name for f in key_files]
-    committee = LocalCommittee(names, BASE_PORT)
+    committee = LocalCommittee(names, BASE_PORT, *base_weights(args))
     committee.print(PathMaker.committee_file())
     params = NodeParameters(node_parameters(args))
     params.print(PathMaker.parameters_file())
@@ -197,6 +217,8 @@ def main():
     ap.add_argument("--governance-malicious", action="store_true", help="G1: an L4 without a fork evicts")
     ap.add_argument("--entity-cap-ppm", type=int, default=1_000_000)
     ap.add_argument("--class-cap-ppm", type=int, default=1_000_000)
+    ap.add_argument("--stakes", default="equal", help="base weights: equal, or lognormal:<sigma> (fixed seed)")
+    ap.add_argument("--uncertified", type=int, default=0, help="number of uncertified members (class cap applies)")
     ap.add_argument("--cpu-quota", type=int, default=1200, help="percent of one core (1200 = 12 cores)")
     ap.add_argument("--mem-max", default="12G")
     ap.add_argument("--debug", action="store_true")

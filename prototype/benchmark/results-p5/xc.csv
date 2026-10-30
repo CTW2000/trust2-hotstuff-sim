@@ -1,0 +1,7 @@
+scenario,build,nodes,net,epoch_length,rep,stakes,uncertified,entity_cap_ppm,class_cap_ppm,consensus_tps,consensus_latency_ms,e2e_tps,e2e_latency_ms,timeouts,timeout_rounds,top_round,rounds_per_s,epochs,lag_median_ms,lag_max_ms,honest_cut,base_max_ppm,base_min_ppm,faulty_base_ppm,faults,accusations_faulty,g2_excluded_faulty,min_r_faulty,equivocate,g1_levels_faulty,g1_suspensions_faulty
+normal,trust2,31,base,50,1,lognormal:1,10,50000,250000,9985,226,9980,332,0,0,635,9.1,13,66,69,0,50000,2624,0,,,,,,,
+silent,trust2,31,base,50,1,lognormal:1,10,50000,250000,10031,353,10015,1049,31,38,288,4.1,6,67,69,0,50000,2624,112991,3,19,3,900000,,,
+equivocators,trust2,31,base,50,1,lognormal:1,10,50000,250000,9984,218,9965,322,0,0,655,9.4,14,67,69,0,50000,2624,112991,,,,,3,15,2
+normal,trust2,31,base,50,2,lognormal:1,10,50000,250000,9978,215,9976,318,0,0,668,9.5,14,67,69,0,50000,2624,0,,,,,,,
+silent,trust2,31,base,50,2,lognormal:1,10,50000,250000,8283,359,8244,933,31,38,285,4.1,6,66,68,0,50000,2624,112991,3,19,3,900000,,,
+equivocators,trust2,31,base,50,2,lognormal:1,10,50000,250000,9984,220,9973,324,0,0,654,9.3,14,66,69,0,50000,2624,112991,,,,,3,15,2

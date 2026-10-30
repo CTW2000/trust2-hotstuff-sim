@@ -98,6 +98,10 @@ impl Epochs {
         let weights: Vec<u64> = members.iter().map(|(_, a)| a.stake as u64).collect();
         let (cap, u_max) = (ttru::from_ppm(config.entity_cap_ppm), ttru::from_ppm(config.class_cap_ppm));
         let base = ttru::base_weights(&classes, &weights, cap, u_max);
+        for ((name, _), b) in members.iter().zip(&base) {
+            // NOTE: this log entry is used to weigh the reputation cuts by base weight (benchmark/p5.py).
+            info!("T_tru base weight of {} is {} ppm", name, b * ttru::PPM / ttru::ONE);
+        }
         let punish_config = PunishConfig {
             l_max: ttru::from_ppm(config.l_max_ppm),
             ..PunishConfig::default()
@@ -153,6 +157,13 @@ impl Epochs {
     /// the ledger, are bad facts of their rounds; its observed transactions are included.
     pub fn record(&mut self, block: &Block) {
         for accusation in &block.accusations {
+            // NOTE: this log entry is used to count the accusation facts per leader (benchmark/p5.py): the first
+            // fact of a round counts, against the leader of that round in the table of the accusation's epoch.
+            let counts = accusation.round > self.reputation.done()
+                && !self.reputation.facts().contains_key(&accusation.round);
+            if let Some(table) = self.tables.get(&accusation.epoch).filter(|_| counts) {
+                info!("G2: accusation of round {} led by {}", accusation.round, leader(table, accusation.round));
+            }
             self.reputation.record(accusation.round, accusation.epoch);
         }
         for omission in &block.omissions {

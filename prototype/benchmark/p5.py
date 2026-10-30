@@ -38,10 +38,15 @@ def ledger_events(logs, role, n):
     """G1/G2 outcomes on node-0's ledger, split into honest and the others (absent nodes count as faulty)."""
     side = lambda who: "honest" if role.get(who) == "honest" else "faulty"
     with open(f"{logs}/node-0.log") as fh:
-        lines = [line.split("] ", 1)[1].strip() for line in fh if "G1: " in line or "G2: " in line]
+        text = fh.read()
+    lines = [line.split("] ", 1)[1].strip() for line in text.splitlines() if "G1: " in line or "G2: " in line]
+    base = {who: int(ppm) for who, ppm in re.findall(r"T_tru base weight of (\S+) is (\d+) ppm", text)}
     count = defaultdict(int)
     r_ppm = {}
     for line in lines:
+        m = re.match(r"G2: accusation of round \d+ led by (\S+)", line)
+        if m:
+            count[f"accusations_{side(m.group(1))}"] += 1
         m = re.match(r"G2: (\S+) excluded from leading", line)
         if m:
             count[f"g2_excluded_{side(m.group(1))}"] += 1
@@ -58,8 +63,13 @@ def ledger_events(logs, role, n):
         m = re.match(r"G1: (\S+) suspended", line)
         if m:
             count[f"g1_suspensions_{side(m.group(1))}"] += 1
-    # Weight cut from honest members by reputation at the end of the run (equal base weights).
-    count["honest_cut"] = round(sum(1 - r / 1e6 for who, r in r_ppm.items() if side(who) == "honest") / n, 4)
+    # Weight cut from honest members by reputation at the end of the run, by base weight (equal if not logged).
+    weight = lambda who: base.get(who, 1e6 / n) / 1e6
+    count["honest_cut"] = round(sum(weight(who) * (1 - r / 1e6) for who, r in r_ppm.items() if side(who) == "honest"), 4)
+    if base and len(set(base.values())) > 1:
+        count["base_max_ppm"] = max(base.values())
+        count["base_min_ppm"] = min(base.values())
+        count["faulty_base_ppm"] = sum(ppm for who, ppm in base.items() if side(who) == "faulty")
     return dict(count)
 
 
@@ -172,6 +182,44 @@ def x4():
                 run("x4", dict(build=build, nodes=nodes, net="base", epoch_length=20, rep=rep), 60)
 
 
+def xa():
+    """E-A (review 12.1 D8): the baseline now also commits as soon as it holds a commit proof (try_commit_via_qc),
+    as the prototype does, so the two differ only in Trust 2.0. Rerun, with the current code on both sides, the
+    comparisons that commit-after-timeout and the extra store reads can affect: the silent-leader and late-message
+    scenarios of X3, and the local (CPU-bound) cells of X2."""
+    for rep in (1, 2):
+        for name, faults in (("silent", dict(faults=3)), ("late", dict(late_p=0.1))):
+            for build in ("baseline", "trust2"):
+                config = dict(scenario=name, build=build, nodes=31, net="base", epoch_length=50, rep=rep, **faults)
+                run("xa_x3", config, 90)
+    for rep in (1, 2, 3):
+        for nodes in (4, 10, 31):
+            for build in ("baseline", "trust2"):
+                run("xa_x2", dict(build=build, nodes=nodes, net="none", epoch_length=100, rep=rep), 30)
+
+
+def xb():
+    """E-B (review 5.5): framing long enough to convict -- some 40 rounds or more per leader, where conviction needs
+    about six consecutive accusations of a leader's rounds (ln 10^4 / ln 5) -- with each accusation fact on the ledger
+    counted against the leader of its round. n = 10 with 2 framers (beta = 0.2, close to the 7 of 31 of X3) on top
+    of 10% late messages, against a control with the late messages alone."""
+    for rep in (1, 2):
+        for name, faults in (("framers+late", dict(frame=2, late_p=0.1)), ("late", dict(late_p=0.1))):
+            run("xb", dict(scenario=name, build="trust2", nodes=10, net="base", epoch_length=50, rep=rep, **faults), 240)
+
+
+def xc():
+    """E-C (review 12.6): the T_tru weighted path end to end -- unequal base weights (log-normal, sigma 1, fixed
+    seed), 10 of 31 members uncertified (class cap 25%), entity cap 5% (<= L_max 10%) -- in the normal case, with 3
+    silent leaders and with 3 equivocators; base network."""
+    weighted = dict(stakes="lognormal:1", uncertified=10, entity_cap_ppm=50_000, class_cap_ppm=250_000)
+    for rep in (1, 2):
+        for name, faults in (("normal", {}), ("silent", dict(faults=3)), ("equivocators", dict(equivocate=3))):
+            config = dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=50, rep=rep,
+                          **weighted, **faults)
+            run("xc", config, 60)
+
+
 def report():
     for path in sorted(glob(f"{OUT}/*.csv")):
         with open(path) as fh:
@@ -180,7 +228,8 @@ def report():
             continue
         metrics = [k for k in rows[0] if k not in ("scenario", "build", "nodes", "net", "epoch_length", "rep",
                                                    "faults", "frame", "lie_nr", "equivocate", "otx_rate",
-                                                   "attest_guard", "censor", "censor_adjacent", "late_p")]
+                                                   "attest_guard", "censor", "censor_adjacent", "late_p",
+                                                   "stakes", "uncertified", "entity_cap_ppm", "class_cap_ppm")]
         keys = [k for k in rows[0] if k not in metrics and k != "rep"]
         groups = defaultdict(list)
         for r in rows:
@@ -229,4 +278,4 @@ def compare_x2(rows):
 
 
 if __name__ == "__main__":
-    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "report": report}[sys.argv[1]]()
+    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "report": report}[sys.argv[1]]()

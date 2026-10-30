@@ -11,7 +11,7 @@ use crate::timer::Timer;
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use crypto::Hash as _;
-use crypto::{PublicKey, SignatureService};
+use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, info, warn};
 use network::SimpleSender;
 use std::cmp::max;
@@ -90,6 +90,13 @@ impl Core {
         let key = block.digest().to_vec();
         let value = bincode::serialize(block).expect("Failed to serialize block");
         self.store.write(key, value).await;
+    }
+
+    async fn read_block(&mut self, digest: &Digest) -> ConsensusResult<Option<Block>> {
+        match self.store.read(digest.to_vec()).await? {
+            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            None => Ok(None),
+        }
     }
 
     fn increase_last_voted_round(&mut self, target: Round) {
@@ -308,6 +315,30 @@ impl Core {
     async fn process_qc(&mut self, qc: &QC) {
         self.advance_round(qc.round).await;
         self.update_high_qc(qc);
+        if let Err(e) = self.try_commit_via_qc(qc).await {
+            warn!("{}", e);
+        }
+    }
+
+    /// Commit as soon as we hold a commit proof, a QC for b1 whose parent b0 is from the round just before
+    /// (2-chain), rather than only when the next block is processed. (Baseline fix, as in the Trust 2.0
+    /// prototype, so that the comparison isolates Trust 2.0: after a timeout the QC carried by the timeouts
+    /// commits the head without waiting for the next successful block.)
+    async fn try_commit_via_qc(&mut self, qc: &QC) -> ConsensusResult<()> {
+        if qc.round <= self.last_committed_round + 1 {
+            return Ok(());
+        }
+        let b1 = match self.read_block(&qc.hash).await? {
+            Some(b1) if b1.qc != QC::genesis() => b1,
+            _ => return Ok(()),
+        };
+        if let Some(b0) = self.read_block(&b1.qc.hash).await? {
+            if b0.round + 1 == b1.round {
+                self.mempool_driver.cleanup(b0.round).await;
+                self.commit(b0).await?;
+            }
+        }
+        Ok(())
     }
 
     #[async_recursion]
@@ -329,6 +360,13 @@ impl Core {
 
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
+
+        // A block fetched by synchronization may complete the commit proof we already hold (baseline fix, as in
+        // the Trust 2.0 prototype).
+        let high_qc = self.high_qc.clone();
+        if let Err(e) = self.try_commit_via_qc(&high_qc).await {
+            warn!("{}", e);
+        }
 
         self.cleanup_proposer(&b0, &b1, block).await;
 
