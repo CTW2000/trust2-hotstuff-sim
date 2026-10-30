@@ -851,6 +851,18 @@ pub enum Evidence {
     NrContradiction(Vote, SignedTimeout),
 }
 
+/// The voting rule's condition on a block's certificates: its round is the one after its QC, or the one after its
+/// TC with a QC at least as high as every high QC the TC reports. Honest nodes vote only for such blocks
+/// (Core::make_vote) and a vote for a block that breaks it is E2 evidence (Evidence::InvalidBlock): one predicate
+/// for both, so an honest vote can never count as E2.
+pub fn extends_validly(round: Round, qc_round: Round, tc: Option<&TC>) -> bool {
+    let adjacent = qc_round.checked_add(1) == Some(round);
+    let justified = tc.map_or(false, |tc| {
+        tc.round.checked_add(1) == Some(round) && qc_round >= tc.high_qc_rounds().into_iter().max().unwrap_or(0)
+    });
+    adjacent || justified
+}
+
 impl Evidence {
     fn vote(&self) -> &Vote {
         match self {
@@ -894,15 +906,11 @@ impl Evidence {
                 a.author == b.author && a.epoch == b.epoch && a.round == b.round && a.hash != b.hash
             }
             Evidence::InvalidBlock(vote, block) => {
-                let adjacent = block.qc_round + 1 == block.round;
-                let justified = block.tc.as_ref().map_or(false, |tc| {
-                    tc.round + 1 == block.round
-                        && block.qc_round >= tc.high_qc_rounds().into_iter().max().unwrap_or(0)
-                });
                 vote.hash == block.digest()
                     && vote.round == block.round
                     && vote.epoch == block.epoch
-                    && (block.qc_round >= block.round || !(adjacent || justified))
+                    && (block.qc_round >= block.round
+                        || !extends_validly(block.round, block.qc_round, block.tc.as_ref()))
             }
             Evidence::Regression(vote, block, timeout) => {
                 vote.hash == block.digest()

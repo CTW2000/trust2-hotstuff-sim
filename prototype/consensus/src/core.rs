@@ -8,7 +8,8 @@ use crate::inclusion::Inclusion;
 use crate::leader::leader;
 use crate::mempool::MempoolDriver;
 use crate::messages::{
-    vote_digest, Accusation, Attestation, Block, Evidence, OmitProof, Otx, SignedTimeout, Timeout, Vote, QC, TC,
+    extends_validly, vote_digest, Accusation, Attestation, Block, Evidence, OmitProof, Otx, SignedTimeout, Timeout,
+    Vote, QC, TC,
 };
 use crate::proposer::ProposerMessage;
 use crate::synchronizer::Synchronizer;
@@ -372,14 +373,9 @@ impl Core {
             return None;
         }
 
-        // Check if we can vote for this block.
+        // Check if we can vote for this block (the second rule is shared with the E2 evidence check).
         let safety_rule_1 = block.round > self.last_voted_round;
-        let mut safety_rule_2 = block.qc.round + 1 == block.round;
-        if let Some(ref tc) = block.tc {
-            let mut can_extend = tc.round + 1 == block.round;
-            can_extend &= block.qc.round >= *tc.high_qc_rounds().iter().max().expect("Empty TC");
-            safety_rule_2 |= can_extend;
-        }
+        let safety_rule_2 = extends_validly(block.round, block.qc.round, block.tc.as_ref());
         if !(safety_rule_1 && safety_rule_2) {
             return None;
         }

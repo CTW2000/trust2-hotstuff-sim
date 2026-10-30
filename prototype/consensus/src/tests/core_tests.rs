@@ -337,6 +337,78 @@ async fn node_far_behind_catches_up_from_a_carried_qc() {
 }
 
 #[tokio::test]
+async fn honest_vote_then_timeout_reports_nr_0() {
+    // 5.4 / N6: a node that received the round's proposal (and voted for it) reports NR = 0 when it later times out
+    // in that round. With NR = 1, the nodes that receive both its vote and its timeout would hold an NR
+    // contradiction against an honest node.
+    let committee = committee_with_base_port(16_600);
+    let block = chain(vec![leader_keys(1)]).pop().unwrap();
+    let (l1, l2) = (leader_keys(1).0, leader_keys(2).0);
+    let (name, secret) = keys().into_iter().find(|(k, _)| *k != l1 && *k != l2).unwrap();
+    let timeout = Timeout::new_from_key(QC::genesis(), 1, false, name, &secret);
+    let expected = bincode::serialize(&ConsensusMessage::Timeout(timeout)).unwrap();
+
+    let store_path = ".db_test_honest_vote_then_timeout_reports_nr_0";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+
+    // Everyone but the next leader (which first gets our vote) receives our timeout of round 1, with NR = 0.
+    let next = committee.address(&l2).unwrap();
+    let handles: Vec<_> = committee
+        .broadcast_addresses(&name)
+        .into_iter()
+        .filter(|(_, address)| *address != next)
+        .map(|(_, address)| listener(address, Some(Bytes::from(expected.clone()))))
+        .collect();
+    assert!(try_join_all(handles).await.is_ok());
+}
+
+#[tokio::test]
+async fn honest_node_votes_for_a_block_justified_by_a_tc() {
+    // 5.4: Core::make_vote and the E2 check share one voting rule (messages::extends_validly). After round 2 times
+    // out, the leader of round 3 extends the QC of round 1 with the TC of round 2: not adjacent, but vouched for. An
+    // honest node votes for it (and messages_tests checks that such a vote is not E2).
+    let committee = committee_with_base_port(16_700);
+    let b1 = chain(vec![leader_keys(1)]).pop().unwrap();
+    let qc1 = QC {
+        hash: b1.digest(),
+        round: 1,
+        epoch: EPOCH,
+        votes: keys()
+            .iter()
+            .map(|(key, secret)| {
+                let vote = Vote::new_from_key(b1.digest(), 1, *key, secret);
+                (vote.author, vote.signature)
+            })
+            .collect(),
+    };
+    let mut aggregator = Aggregator::new();
+    let tc2 = keys()
+        .into_iter()
+        .find_map(|(key, secret)| {
+            let timeout = Timeout::new_from_key(qc1.clone(), 2, false, key, &secret);
+            aggregator.add_timeout(timeout, &committee).unwrap()
+        })
+        .unwrap();
+    let (l3, l3_secret) = leader_keys(3);
+    let b3 = Block::new_from_key_with_tc(qc1, Some(tc2), l3, 3, Vec::new(), &l3_secret);
+
+    // We lead round 2, so our vote for b1 stays with us; our vote for b3 goes to the leader of round 4.
+    let (name, secret) = leader_keys(2);
+    let vote = Vote::new_from_key(b3.digest(), 3, name, &secret);
+    let expected = bincode::serialize(&ConsensusMessage::Vote(vote)).unwrap();
+    let store_path = ".db_test_honest_node_votes_for_a_block_justified_by_a_tc";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Propose(b1)).await.unwrap();
+    tx_core.send(ConsensusMessage::Propose(b3)).await.unwrap();
+
+    let next = committee.address(&leader_keys(4).0).unwrap();
+    assert!(listener(next, Some(Bytes::from(expected))).await.is_ok());
+}
+
+#[tokio::test]
 async fn nr_timeouts_make_an_accusation() {
     // G2: NR = 1 timeouts of a round from more than 2/3 of the weight go to the proposer as an AT accusation.
     let (leader1, leader2) = (leader_keys(1).0, leader_keys(2).0);

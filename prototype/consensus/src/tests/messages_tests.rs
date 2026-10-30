@@ -418,6 +418,25 @@ fn invalid_block_evidence() {
 }
 
 #[test]
+fn vote_for_a_block_justified_by_a_tc_is_not_e2() {
+    // 5.4: the voting rule also lets a block extend a QC that is not adjacent when the TC of the round before
+    // vouches for it (the QC is at least as high as every high QC the TC reports). An honest vote for such a block
+    // is not E2 evidence; once the QC is below a reported high QC, or the TC is of another round, it is.
+    let (leader_key, voter) = (leader(), keys().remove(0));
+    let tc4 = tc(4, &[(qc_of(3), false), (qc_of(2), true), (qc_of(3), false)]);
+    let e2 = |qc: QC, tc: TC| {
+        let block = Block::new_from_key_with_tc(qc, Some(tc), leader_key.0, 5, Vec::new(), &leader_key.1);
+        let vote = Vote::new_from_key(block.digest(), 5, voter.0, &voter.1);
+        Evidence::InvalidBlock(vote, block.header()).verify().is_ok()
+    };
+    assert!(!e2(qc_of(3), tc4.clone()), "QC as high as the TC's highest report, TC of the round before");
+    assert!(e2(qc_of(2), tc4.clone()), "QC below a high QC the TC reports");
+    let tc3 = tc(3, &[(qc_of(3), false), (qc_of(3), false), (qc_of(3), false)]);
+    assert!(e2(qc_of(3), tc3), "TC of another round");
+    assert!(extends_validly(5, 3, Some(&tc4)) && extends_validly(5, 4, None) && !extends_validly(5, 3, None));
+}
+
+#[test]
 fn regression_evidence() {
     let (leader_key, voter) = (leader(), keys().remove(0));
     // A vote at round 3 for a block certifying round 2, then a timeout at round >= 3 reporting hq 1 < 2.

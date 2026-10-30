@@ -53,6 +53,27 @@ fn honest_traffic_gives_no_evidence() {
 }
 
 #[test]
+fn honest_vote_after_a_tc_gives_no_evidence() {
+    // 5.4: after round 4 times out (honest NR = 1 reports with high QC 2), the leader of round 5 extends that QC with
+    // the TC of round 4 -- not adjacent, but vouched for. Honest votes for it are neither E2 nor E3 nor NR.
+    let mut detector = Detector::new();
+    let (name, secret) = key(3);
+    let tc = TC {
+        round: 4,
+        epoch: EPOCH,
+        votes: (0..3).map(|i| (key(i).0, crypto::Signature::default(), 2, true)).collect(),
+        high_qc: qc_of(2),
+    };
+    let b5 = Block::new_from_key_with_tc(qc_of(2), Some(tc), name, 5, Vec::new(), &secret);
+    let mut found = detector.block(&b5);
+    for i in 0..3 {
+        found.extend(detector.timeout(timeout(4, 2, true, i)));
+        found.extend(detector.vote(vote(&b5, i)));
+    }
+    assert!(found.is_empty(), "{:?}", found);
+}
+
+#[test]
 fn cleanup_forgets_rounds_before_the_floor() {
     // The round-based cleanup drops the detection state (votes, timeouts, blocks, certificates) of rounds below
     // the floor, so it does not grow with the round number between (or without) handovers.
