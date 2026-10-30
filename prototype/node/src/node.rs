@@ -48,6 +48,7 @@ impl Node {
             Some(filename) => Parameters::read(&filename)?,
             None => Parameters::default(),
         };
+        parameters.consensus.check().map_err(ConfigError::InvalidParameters)?;
         parameters.consensus.censor |= experiment.censor;
         parameters.consensus.equivocate |= experiment.equivocate;
         parameters.consensus.lie_nr |= experiment.lie_nr;

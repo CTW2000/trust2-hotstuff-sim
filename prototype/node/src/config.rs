@@ -17,6 +17,9 @@ pub enum ConfigError {
 
     #[error("Failed to write config file '{file}': {message}")]
     WriteError { file: String, message: String },
+
+    #[error("Invalid parameters: {0}")]
+    InvalidParameters(String),
 }
 
 pub trait Export: Serialize + DeserializeOwned {

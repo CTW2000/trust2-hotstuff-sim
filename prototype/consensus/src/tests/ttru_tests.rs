@@ -9,6 +9,9 @@ struct Case {
     cap_ppm: u64,
     u_max_ppm: u64,
     base: Vec<f64>,
+    /// A boundary case where a cap gives way (gen_ttru_vectors.py).
+    #[serde(default)]
+    relaxed: bool,
 }
 
 fn cases() -> Vec<Case> {
@@ -40,7 +43,7 @@ fn base_weights_match_the_simulator() {
 
 #[test]
 fn caps_hold() {
-    for case in cases() {
+    for case in cases().into_iter().filter(|c| !c.relaxed) {
         let cls = classes(&case);
         let (cap, u_max) = (from_ppm(case.cap_ppm), from_ppm(case.u_max_ppm));
         let b = base_weights(&cls, &case.weights, cap, u_max);

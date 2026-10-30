@@ -15,8 +15,10 @@ pub mod messages_tests;
 
 /// At most this many AT accusations per block.
 pub const MAX_ACCUSATIONS: usize = 32;
-/// At most this many observed transactions per block; a full block is exempt from omissions.
-pub const MAX_OTXS: usize = 16;
+/// At most this many observed transactions per block (about 49 KB); a full block is exempt from omissions. Far above
+/// any load of the experiments, as the simulator's unbounded capacity. Observed transactions are unsigned, so this
+/// only keeps blocks bounded: a censor can still fill its block to earn the exemption (DESIGN.md §12.4).
+pub const MAX_OTXS: usize = 1024;
 /// At most this many omission proofs per block.
 pub const MAX_OMISSIONS: usize = 32;
 /// At most this many pieces of G1 evidence per block.

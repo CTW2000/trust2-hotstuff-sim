@@ -15,8 +15,8 @@ pub struct Parameters {
     /// Rounds per epoch, counted from the previous terminal block (0: a single epoch, no handover).
     #[serde(default = "default_epoch_length")]
     pub epoch_length: u64,
-    /// Entity cap of CapNorm, in ppm of the total weight (1_000_000: no cap).
-    #[serde(default = "default_ppm")]
+    /// Entity cap of CapNorm, in ppm of the total weight; at most L_max (`check`).
+    #[serde(default = "default_entity_cap_ppm")]
     pub entity_cap_ppm: u64,
     /// Cap on the uncertified class, in ppm (1_000_000: no cap).
     #[serde(default = "default_ppm")]
@@ -54,6 +54,10 @@ fn default_attest_guard() -> u64 {
     500
 }
 
+fn default_entity_cap_ppm() -> u64 {
+    50_000
+}
+
 fn default_l_max_ppm() -> u64 {
     100_000
 }
@@ -72,7 +76,7 @@ impl Default for Parameters {
             timeout_delay: 5_000,
             sync_retry_delay: 10_000,
             epoch_length: default_epoch_length(),
-            entity_cap_ppm: default_ppm(),
+            entity_cap_ppm: default_entity_cap_ppm(),
             class_cap_ppm: default_ppm(),
             l_max_ppm: default_l_max_ppm(),
             governance_malicious: false,
@@ -88,6 +92,18 @@ impl Default for Parameters {
 }
 
 impl Parameters {
+    /// The scheme requires cap <= L_max (方案 §3.3): a member above L_max could never be suspended, and at the head
+    /// of the strict FIFO suspension queue it would hold up everyone behind it.
+    pub fn check(&self) -> Result<(), String> {
+        match self.entity_cap_ppm <= self.l_max_ppm {
+            true => Ok(()),
+            false => Err(format!(
+                "entity cap of {} ppm is above L_max of {} ppm",
+                self.entity_cap_ppm, self.l_max_ppm
+            )),
+        }
+    }
+
     pub fn log(&self) {
         // NOTE: These log entries are used to compute performance.
         info!("Timeout delay set to {} rounds", self.timeout_delay);

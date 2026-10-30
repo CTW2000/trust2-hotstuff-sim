@@ -215,7 +215,7 @@ def main():
     ap.add_argument("--frame", type=int, default=0, help="number of booted nodes that withhold votes and claim NR = 1")
     ap.add_argument("--l-max-ppm", type=int, default=100_000, help="G1 suspension cap L_max in ppm")
     ap.add_argument("--governance-malicious", action="store_true", help="G1: an L4 without a fork evicts")
-    ap.add_argument("--entity-cap-ppm", type=int, default=1_000_000)
+    ap.add_argument("--entity-cap-ppm", type=int, default=50_000, help="CapNorm entity cap in ppm, at most L_max")
     ap.add_argument("--class-cap-ppm", type=int, default=1_000_000)
     ap.add_argument("--stakes", default="equal", help="base weights: equal, or lognormal:<sigma> (fixed seed)")
     ap.add_argument("--uncertified", type=int, default=0, help="number of uncertified members (class cap applies)")

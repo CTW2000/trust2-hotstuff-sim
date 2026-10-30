@@ -1,5 +1,6 @@
 use super::*;
 use crate::common::{committee, keys, EPOCH};
+use crate::config::Parameters;
 use crate::leader::leader;
 use crate::messages::{Accusation, Evidence, OmitProof, Otx, SignedTimeout, Timeout, Vote, QC};
 
@@ -71,6 +72,28 @@ fn single_epoch_ledger_keeps_only_a_window() {
         attestations: Vec::new(),
     };
     assert!(single.omission_holds(&proof));
+}
+
+#[test]
+fn cap_above_l_max_is_refused() {
+    // 6.9: the scheme requires cap <= L_max, and a node refuses to start without it.
+    let parameters = |cap, l_max| Parameters { entity_cap_ppm: cap, l_max_ppm: l_max, ..Parameters::default() };
+    assert!(Parameters::default().check().is_ok());
+    assert!(parameters(100_000, 100_000).check().is_ok());
+    assert!(parameters(100_001, 100_000).check().is_err());
+}
+
+#[test]
+fn every_member_fits_under_l_max() {
+    // 6.9: four members cannot respect a 5% cap, so CapNorm gives each of them 25%, above the 10% L_max. L_max rises
+    // with it: a double vote suspends its signer, instead of leaving it queued for good, ahead of everyone else.
+    let mut epochs = Epochs::new(&committee(), EpochConfig { entity_cap_ppm: 50_000, ..config(10) });
+    let cheat = keys().remove(0);
+    let vote = |hash: u8| Vote::new_from_key(Digest([hash; 32]), 5, cheat.0, &cheat.1);
+    let evidence = vec![Evidence::DoubleVote(vote(1), vote(2))];
+    epochs.record(&Block { epoch: EPOCH, round: 8, evidence, ..Block::default() });
+    epochs.enter_next(&block(EPOCH, 10));
+    assert_eq!(epochs.current().stake(&cheat.0), 0);
 }
 
 #[test]

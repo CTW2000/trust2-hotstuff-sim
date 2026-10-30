@@ -2,8 +2,8 @@
 //!
 //! Everything is integer fixed point (1.0 = `ONE`), so that every node derives the same table bit for bit.
 //! CapNorm gives every entity at most `cap` and the uncertified class at most `u_max` of the weight (and no
-//! more than its raw share), as `base_weights` in sim2/ttru.py with K = 0; the test vectors in
-//! tests/ttru_vectors.json come from that function (prototype/scripts/gen_ttru_vectors.py).
+//! more than its raw share, or than its entities can hold under the cap), as `base_weights` in sim2/ttru.py with
+//! K = 0; the test vectors in tests/ttru_vectors.json come from that function (prototype/scripts/gen_ttru_vectors.py).
 
 use serde::{Deserialize, Serialize};
 
@@ -67,9 +67,11 @@ pub fn cap_normalize(v: &[u128], cap: u128, total: u128) -> Vec<u128> {
     }
 }
 
-/// CapNorm of the chain's base weights `w` (stake, equal weights or governance-set weights): the
-/// uncertified class gets min(its raw share, u_max), each class is cap-normalized within its share.
-/// `cap` and `u_max` are fixed point (ONE = 1.0). The weights must sum to at most u64::MAX.
+/// CapNorm of the chain's base weights `w` (stake, equal weights or governance-set weights): the uncertified
+/// class gets min(its raw share, u_max, n_U · cap), the licensed class the rest, and each class is cap-normalized
+/// within its share, so the shares always sum to 1. If the licensed class cannot hold its share under the cap, its
+/// cap is relaxed (cap_normalize); with no licensed entity the uncertified class is the whole weight, relaxed
+/// likewise. `cap` and `u_max` are fixed point (ONE = 1.0). The weights must sum to at most u64::MAX.
 pub fn base_weights(classes: &[Class], w: &[u64], cap: u128, u_max: u128) -> Vec<u128> {
     assert_eq!(classes.len(), w.len());
     let total: u128 = w.iter().map(|x| *x as u128).sum();
@@ -82,9 +84,10 @@ pub fn base_weights(classes: &[Class], w: &[u64], cap: u128, u_max: u128) -> Vec
             .collect()
     };
     let (lic, unc) = (in_class(Class::Licensed), in_class(Class::Uncertified));
-    let unc_share = match total {
-        0 => 0,
-        _ => (unc.iter().sum::<u128>() * ONE / total).min(u_max),
+    let unc_share = match (total, lic.len()) {
+        (0, _) => 0,
+        (_, 0) => ONE,
+        _ => (unc.iter().sum::<u128>() * ONE / total).min(u_max).min(unc.len() as u128 * cap),
     };
     let mut lic_w = cap_normalize(&lic, cap, ONE - unc_share).into_iter();
     let mut unc_w = cap_normalize(&unc, cap, unc_share).into_iter();

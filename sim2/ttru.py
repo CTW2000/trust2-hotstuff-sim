@@ -2,8 +2,10 @@
 
 Base weight b = CapNorm(V), V_i = stake_i + pi * K for licensed entities (forfeitable value: stake
 plus the license value K discounted by the enforcement probability pi); the uncertified class gets
-min(its natural share, u_max) of the total, the licensed class the rest, and inside each class no
-entity exceeds the cap (water-filling; feasibility n_L * cap >= 1 - u_max is checked).
+min(its natural share, u_max, n_U * cap) of the total, the licensed class the rest, and inside each
+class no entity exceeds the cap (water-filling). The weights always sum to 1: if the licensed class
+cannot hold its share under the cap, its cap is relaxed to the smallest feasible value (方案 §3.3);
+with no licensed entity the uncertified class is the whole weight (and its cap is relaxed likewise).
 Voting shares per epoch: T = b * r * z normalized, where reputation r in [r_min, 1] is lowered by
 `step` in an epoch with at least one conviction of the replica by the leader rule (CusumExclusion
 "exclude" events of views <= B - lag, B the first view of the epoch), stays put while the replica is
@@ -57,10 +59,13 @@ def cap_normalize(w, cap, total=1.0):
 def base_weights(cls, s, K, pi, cap, u_max):
     V = s + np.where(cls == "L", pi * K, 0.0)
     unc = cls != "L"
-    U = min(V[unc].sum() / V.sum(), u_max)
+    n_L, n_U = int((~unc).sum()), int(unc.sum())
+    U = 1.0 if n_L == 0 else min(V[unc].sum() / V.sum(), u_max, n_U * cap)
     w = np.zeros(len(s))
-    w[~unc] = cap_normalize(V[~unc], cap, 1.0 - U)
-    w[unc] = cap_normalize(V[unc], cap, U)
+    if n_L > 0:
+        w[~unc] = cap_normalize(V[~unc], max(cap, (1.0 - U) / n_L), 1.0 - U)
+    if n_U > 0:
+        w[unc] = cap_normalize(V[unc], max(cap, U / n_U), U)
     return w
 
 
