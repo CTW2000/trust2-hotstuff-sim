@@ -268,6 +268,75 @@ async fn far_future_round_messages_are_dropped() {
 }
 
 #[tokio::test]
+async fn node_far_behind_catches_up_from_a_tc() {
+    // N2: a TC needs 2f+1 signatures, so a faulty member cannot forge one, and the acceptance window never drops
+    // it. A node still at round 1 that receives a valid TC of a round far beyond the window moves past it -- here
+    // it leads the next round, so it proposes. Were the TC dropped, a node that fell behind would stay stuck.
+    // The TC is of round target - 1, which must lie past the window ahead of round 1 (beyond 1 + ACCEPT_WINDOW).
+    let round1_leader = leader_keys(1).0;
+    let target = (3 + ACCEPT_WINDOW..).find(|r| leader_keys(*r).0 != round1_leader).unwrap();
+    let (name, secret) = leader_keys(target);
+    let store_path = ".db_test_node_far_behind_catches_up_from_a_tc";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee(), store_path);
+
+    let mut aggregator = Aggregator::new();
+    let tc = keys()
+        .into_iter()
+        .find_map(|(key, secret)| {
+            let timeout = Timeout::new_from_key(QC::genesis(), target - 1, false, key, &secret);
+            aggregator.add_timeout(timeout, &committee()).unwrap()
+        })
+        .unwrap();
+    tx_core.send(ConsensusMessage::TC(tc)).await.unwrap();
+
+    match tokio::time::timeout(Duration::from_secs(2), rx_proposer.recv()).await {
+        Ok(Some(ProposerMessage::Make { round, .. })) => assert_eq!(round, target),
+        other => panic!("the node did not catch up from the TC: {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn node_far_behind_catches_up_from_a_carried_qc() {
+    // N2: a message far beyond the window is dropped only after the certificate it carries is processed. A valid
+    // timeout of a far round carries its signer's high QC; the node catches up from that QC first, so its own next
+    // timeout is for the round after the QC, with that QC as high QC -- not for round 1, where it would be stuck.
+    let committee = committee_with_base_port(16_500);
+    let far = 2 + ACCEPT_WINDOW;
+    let hash = Digest([9; 32]);
+    let qc = QC {
+        hash: hash.clone(),
+        round: far - 1,
+        epoch: EPOCH,
+        votes: keys()
+            .iter()
+            .map(|(key, secret)| {
+                let vote = Vote::new_from_key(hash.clone(), far - 1, *key, secret);
+                (vote.author, vote.signature)
+            })
+            .collect(),
+    };
+    let mut members = keys();
+    let (sender, sender_secret) = members.remove(0);
+    let (public_key, secret_key) = members.remove(0);
+    let theirs = Timeout::new_from_key(qc.clone(), far, false, sender, &sender_secret);
+    // We hold no proposal for round `far`, so our own timeout reports NR = 1.
+    let ours = Timeout::new_from_key(qc, far, true, public_key, &secret_key);
+    let expected = bincode::serialize(&ConsensusMessage::Timeout(ours)).unwrap();
+
+    let store_path = ".db_test_node_far_behind_catches_up_from_a_carried_qc";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(public_key, secret_key, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Timeout(theirs)).await.unwrap();
+
+    let handles: Vec<_> = committee
+        .broadcast_addresses(&public_key)
+        .into_iter()
+        .map(|(_, address)| listener(address, Some(Bytes::from(expected.clone()))))
+        .collect();
+    assert!(try_join_all(handles).await.is_ok());
+}
+
+#[tokio::test]
 async fn nr_timeouts_make_an_accusation() {
     // G2: NR = 1 timeouts of a round from more than 2/3 of the weight go to the proposer as an AT accusation.
     let (leader1, leader2) = (leader_keys(1).0, leader_keys(2).0);

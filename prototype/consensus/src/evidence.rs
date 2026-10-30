@@ -53,7 +53,7 @@ impl Detector {
 
     /// The block a vote is for breaks the voting rule (Evidence::InvalidBlock checks the same).
     fn invalid(vote: &Vote, block: &Block) -> bool {
-        Evidence::InvalidBlock(vote.clone(), block.clone()).holds()
+        Evidence::InvalidBlock(vote.clone(), block.header()).holds()
     }
 
     /// Contradictions of a vote with what we hold.
@@ -79,7 +79,7 @@ impl Detector {
     /// E2 and E3 for a vote whose block we hold.
     fn check_vote_on_block(&mut self, vote: &Vote, block: &Block, found: &mut Vec<Evidence>) {
         if Self::invalid(vote, block) {
-            self.report(Evidence::InvalidBlock(vote.clone(), block.clone()), found);
+            self.report(Evidence::InvalidBlock(vote.clone(), block.header()), found);
         }
         let later: Vec<SignedTimeout> = self
             .timeouts
@@ -89,7 +89,7 @@ impl Detector {
             .cloned()
             .collect();
         if let Some(timeout) = later.into_iter().next() {
-            self.report(Evidence::Regression(vote.clone(), block.clone(), timeout), found);
+            self.report(Evidence::Regression(vote.clone(), block.header(), timeout), found);
         }
     }
 
@@ -143,7 +143,7 @@ impl Detector {
         for vote in earlier {
             if let Some(block) = self.blocks.get(&vote.hash) {
                 if timeout.high_qc_round < block.qc.round {
-                    let evidence = Evidence::Regression(vote, block.clone(), timeout.clone());
+                    let evidence = Evidence::Regression(vote, block.header(), timeout.clone());
                     self.report(evidence, &mut found);
                     break;
                 }

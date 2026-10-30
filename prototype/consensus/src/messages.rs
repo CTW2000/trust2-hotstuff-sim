@@ -5,7 +5,6 @@ use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use serde::{Deserialize, Serialize};
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::convert::TryInto;
 use std::fmt;
@@ -26,42 +25,6 @@ pub const MAX_EVIDENCE: usize = 16;
 /// transactions it is waiting to see included (DESIGN.md §12.4), so this bound is far above honest use; it
 /// keeps a single attestation small and the omission proofs built from attestations under the network frame.
 pub const MAX_ATTESTATION_OTXS: usize = 64;
-/// The deepest a block-in-evidence nesting may go when deserializing an (untrusted) message. Evidence::
-/// InvalidBlock and ::Regression embed a block, whose own evidence embeds further blocks; honest nodes
-/// produce only a couple of levels, so this bound is well above honest use. It is enforced while
-/// deserializing (see `bounded_evidence`) so that a deeply nested message cannot exhaust the stack.
-const MAX_EVIDENCE_DEPTH: u32 = 8;
-
-thread_local! {
-    /// How many blocks deep the evidence currently being deserialized is nested (reset per message, per thread).
-    static EVIDENCE_DEPTH: Cell<u32> = Cell::new(0);
-}
-
-/// Deserialize a block's evidence, refusing nesting beyond MAX_EVIDENCE_DEPTH. A block's evidence may embed
-/// another block (Evidence::InvalidBlock / ::Regression), whose own evidence is deserialized through this same
-/// function, so the counter bounds the block-in-evidence recursion and a malformed deeply nested message is
-/// rejected before it can exhaust the stack, rather than after (Block::verify runs only once this returns).
-fn bounded_evidence<'de, D>(deserializer: D) -> Result<Vec<Evidence>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    struct Guard;
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            EVIDENCE_DEPTH.with(|d| d.set(d.get() - 1));
-        }
-    }
-    let depth = EVIDENCE_DEPTH.with(|d| {
-        let next = d.get() + 1;
-        d.set(next);
-        next
-    });
-    let _guard = Guard;
-    if depth > MAX_EVIDENCE_DEPTH {
-        return Err(serde::de::Error::custom("block evidence nested too deeply"));
-    }
-    Vec::<Evidence>::deserialize(deserializer)
-}
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Block {
@@ -73,7 +36,6 @@ pub struct Block {
     pub otxs: Vec<Otx>,
     pub omissions: Vec<OmitProof>,
     /// G1 evidence (DESIGN.md §13).
-    #[serde(deserialize_with = "bounded_evidence")]
     pub evidence: Vec<Evidence>,
     pub author: PublicKey,
     pub round: Round,
@@ -171,40 +133,120 @@ impl Hash for Block {
     /// R1: the block digest (signed by the author, voted on by everyone) commits to every field, including
     /// the epoch and the embedded TC, so that a vote for the block is also a signature on its TC.
     fn digest(&self) -> Digest {
-        let mut hasher = Sha512::new();
-        hasher.update(self.epoch.to_le_bytes());
-        hasher.update(self.author.0);
-        hasher.update(self.round.to_le_bytes());
-        for x in &self.payload {
-            hasher.update(x);
-        }
-        hasher.update(&self.qc.hash);
-        hasher.update(self.qc.round.to_le_bytes());
-        match &self.tc {
-            None => hasher.update([0u8]),
-            Some(tc) => {
-                hasher.update([1u8]);
-                hasher.update(tc.digest());
-            }
-        }
-        hasher.update((self.accusations.len() as u64).to_le_bytes());
-        for accusation in &self.accusations {
-            hasher.update(accusation.digest());
-        }
-        hasher.update((self.otxs.len() as u64).to_le_bytes());
-        for x in &self.otxs {
-            hasher.update(x.id());
-        }
-        hasher.update((self.omissions.len() as u64).to_le_bytes());
-        for omission in &self.omissions {
-            hasher.update(omission.digest());
-        }
-        hasher.update((self.evidence.len() as u64).to_le_bytes());
-        for evidence in &self.evidence {
-            hasher.update(evidence.digest());
-        }
-        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+        block_digest(
+            self.epoch,
+            &self.author,
+            self.round,
+            &self.payload,
+            &self.qc.hash,
+            self.qc.round,
+            self.tc.as_ref(),
+            self.accusations.iter().map(|a| a.digest()),
+            self.otxs.iter().map(|x| x.id()),
+            self.omissions.iter().map(|o| o.digest()),
+            self.evidence.iter().map(|e| e.digest()),
+        )
     }
+}
+
+/// What a piece of evidence keeps of the block it is about: the inputs of the block digest, with the block's
+/// accusations, observed transactions, omission proofs and evidence given by their digests. It hashes to the
+/// block's digest, so the culprit's vote still binds it, and it has every field the evidence checks -- but no
+/// evidence of its own, so evidence never nests however often a block is reported inside another (N1).
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BlockHeader {
+    pub qc_hash: Digest,
+    pub qc_round: Round,
+    pub tc: Option<TC>,
+    pub author: PublicKey,
+    pub round: Round,
+    pub epoch: EpochNumber,
+    pub payload: Vec<Digest>,
+    pub accusations: Vec<Digest>,
+    pub otxs: Vec<Digest>,
+    pub omissions: Vec<Digest>,
+    pub evidence: Vec<Digest>,
+}
+
+impl Block {
+    pub fn header(&self) -> BlockHeader {
+        BlockHeader {
+            qc_hash: self.qc.hash.clone(),
+            qc_round: self.qc.round,
+            tc: self.tc.clone(),
+            author: self.author,
+            round: self.round,
+            epoch: self.epoch,
+            payload: self.payload.clone(),
+            accusations: self.accusations.iter().map(|a| a.digest()).collect(),
+            otxs: self.otxs.iter().map(|x| x.id()).collect(),
+            omissions: self.omissions.iter().map(|o| o.digest()).collect(),
+            evidence: self.evidence.iter().map(|e| e.digest()).collect(),
+        }
+    }
+}
+
+impl Hash for BlockHeader {
+    fn digest(&self) -> Digest {
+        block_digest(
+            self.epoch,
+            &self.author,
+            self.round,
+            &self.payload,
+            &self.qc_hash,
+            self.qc_round,
+            self.tc.as_ref(),
+            self.accusations.iter().cloned(),
+            self.otxs.iter().cloned(),
+            self.omissions.iter().cloned(),
+            self.evidence.iter().cloned(),
+        )
+    }
+}
+
+/// The block digest from its fields, the sub-messages given by their digests: Block and BlockHeader both hash
+/// through here, so a block and its header always have the same digest.
+#[allow(clippy::too_many_arguments)]
+fn block_digest(
+    epoch: EpochNumber,
+    author: &PublicKey,
+    round: Round,
+    payload: &[Digest],
+    qc_hash: &Digest,
+    qc_round: Round,
+    tc: Option<&TC>,
+    accusations: impl ExactSizeIterator<Item = Digest>,
+    otxs: impl ExactSizeIterator<Item = Digest>,
+    omissions: impl ExactSizeIterator<Item = Digest>,
+    evidence: impl ExactSizeIterator<Item = Digest>,
+) -> Digest {
+    fn list(hasher: &mut Sha512, digests: impl ExactSizeIterator<Item = Digest>) {
+        hasher.update((digests.len() as u64).to_le_bytes());
+        for digest in digests {
+            hasher.update(digest);
+        }
+    }
+    let mut hasher = Sha512::new();
+    hasher.update(epoch.to_le_bytes());
+    hasher.update(author.0);
+    hasher.update(round.to_le_bytes());
+    for x in payload {
+        hasher.update(x);
+    }
+    hasher.update(qc_hash);
+    hasher.update(qc_round.to_le_bytes());
+    match tc {
+        None => hasher.update([0u8]),
+        Some(tc) => {
+            hasher.update([1u8]);
+            hasher.update(tc.digest());
+        }
+    }
+    list(&mut hasher, accusations);
+    list(&mut hasher, otxs);
+    list(&mut hasher, omissions);
+    list(&mut hasher, evidence);
+    Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
 }
 
 impl fmt::Debug for Block {
@@ -799,11 +841,12 @@ pub enum Evidence {
     /// E1: two votes of one signer for the same (epoch, round) and different blocks.
     DoubleVote(Vote, Vote),
     /// E2: a vote for a block that breaks the voting rule: its round is neither the one after its QC nor
-    /// justified by its TC (structural check; the certificates' signatures are not needed).
-    InvalidBlock(Vote, Block),
+    /// justified by its TC (structural check; the certificates' signatures are not needed). The block is given
+    /// by its header, which hashes to the digest the vote signs.
+    InvalidBlock(Vote, BlockHeader),
     /// E3: a vote at round v1 for a block certifying round j, and a timeout of the same signer at a round
-    /// v2 >= v1 reporting a high QC below j.
-    Regression(Vote, Block, SignedTimeout),
+    /// v2 >= v1 reporting a high QC below j. The block is given by its header.
+    Regression(Vote, BlockHeader, SignedTimeout),
     /// NR self-contradiction: a vote and an NR = 1 timeout of one signer for the same (epoch, round).
     NrContradiction(Vote, SignedTimeout),
 }
@@ -851,15 +894,15 @@ impl Evidence {
                 a.author == b.author && a.epoch == b.epoch && a.round == b.round && a.hash != b.hash
             }
             Evidence::InvalidBlock(vote, block) => {
-                let adjacent = block.qc.round + 1 == block.round;
+                let adjacent = block.qc_round + 1 == block.round;
                 let justified = block.tc.as_ref().map_or(false, |tc| {
                     tc.round + 1 == block.round
-                        && block.qc.round >= tc.high_qc_rounds().into_iter().max().unwrap_or(0)
+                        && block.qc_round >= tc.high_qc_rounds().into_iter().max().unwrap_or(0)
                 });
                 vote.hash == block.digest()
                     && vote.round == block.round
                     && vote.epoch == block.epoch
-                    && (block.qc.round >= block.round || !(adjacent || justified))
+                    && (block.qc_round >= block.round || !(adjacent || justified))
             }
             Evidence::Regression(vote, block, timeout) => {
                 vote.hash == block.digest()
@@ -867,7 +910,7 @@ impl Evidence {
                     && timeout.author == vote.author
                     && timeout.epoch == vote.epoch
                     && timeout.round >= vote.round
-                    && timeout.high_qc_round < block.qc.round
+                    && timeout.high_qc_round < block.qc_round
             }
             Evidence::NrContradiction(vote, timeout) => {
                 timeout.author == vote.author

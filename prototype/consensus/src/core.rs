@@ -35,11 +35,11 @@ const MAX_DEFERRED: usize = 2_000;
 /// G1 evidence detection looks this many rounds back.
 const DETECT_WINDOW: Round = 300;
 
-/// A current-epoch consensus message for a round more than this far beyond ours is dropped. Honest nodes
-/// advance through the QC/TC chain and never sign one for a round so far ahead, so it is junk that would only
-/// grow the per-round aggregator / accuser / detector / inclusion maps. The window is generous -- well past
-/// any epoch length or honest round skew -- so it never drops a message a node legitimately catching up still
-/// needs (such a node advances via the certificate chain, not by aggregating votes hundreds of rounds ahead).
+/// A current-epoch consensus message for a round more than this far beyond ours is dropped, so that a faulty
+/// member cannot grow the per-round aggregator / accuser / detector / inclusion maps by signing messages for
+/// arbitrary future rounds. A node that fell behind still catches up: the certificate a far message carries (a
+/// block's QC, a timeout's high QC) is processed before the message is dropped, and a TC is never dropped --
+/// certificates need 2f+1 signatures, so a faulty member cannot forge them (handle_message).
 const ACCEPT_WINDOW: Round = 1_000;
 
 /// Experiment switches (not part of the protocol, DESIGN.md §13.3).
@@ -302,6 +302,13 @@ impl Core {
             .send(ProposerMessage::Accuse(accusation))
             .await
             .expect("Failed to send message to proposer");
+    }
+
+    /// Whether a message is for a round more than ACCEPT_WINDOW beyond ours. Never a TC: it is a certificate
+    /// (2f+1 signatures), so it cannot be forged to fill our maps, and it moves a node that fell behind forward.
+    fn beyond_window(&self, message: &ConsensusMessage) -> bool {
+        !matches!(message, ConsensusMessage::TC(_))
+            && round_of(message).map_or(false, |round| round > self.round.saturating_add(ACCEPT_WINDOW))
     }
 
     fn defer(&mut self, message: ConsensusMessage) {
@@ -994,15 +1001,26 @@ impl Core {
                 _ => (),
             }
         }
-        // 1.13: drop a current-epoch message whose round is implausibly far beyond ours, before it reaches the
-        // per-round aggregator / accuser / detector / inclusion maps (a later epoch's messages are bounded
-        // instead by the deferred buffer; an earlier epoch's are dropped below).
-        if epoch == self.epochs.epoch() {
-            if let Some(round) = round_of(&message) {
-                if round > self.round.saturating_add(ACCEPT_WINDOW) {
-                    debug!("Dropping a message for far-future round {} (we are at round {})", round, self.round);
-                    return Ok(());
+        // 1.13: a current-epoch message for a round implausibly far beyond ours. First catch up from the
+        // certificate it carries (that is how a node that fell behind jumps forward; a faulty member cannot forge
+        // one), then drop the message itself if it is still beyond the window, before it reaches the per-round
+        // aggregator / accuser / detector / inclusion maps. A later epoch's messages are bounded instead by the
+        // deferred buffer; an earlier epoch's are dropped below.
+        if epoch == self.epochs.epoch() && self.beyond_window(&message) {
+            // Check the message's own signature (one check) before its certificate (2f+1), as for a message
+            // within the window, so junk from a non-member stays cheap to drop.
+            match &message {
+                ConsensusMessage::Propose(block) if block.verify(self.committee()).is_ok() => {
+                    self.catch_up(&block.qc.clone()).await
                 }
+                ConsensusMessage::Timeout(timeout) if timeout.verify(self.committee()).is_ok() => {
+                    self.catch_up(&timeout.high_qc.clone()).await
+                }
+                _ => (),
+            }
+            if self.beyond_window(&message) {
+                debug!("Dropping a message for a far-future round (we are at round {})", self.round);
+                return Ok(());
             }
         }
         match message {

@@ -408,13 +408,13 @@ fn invalid_block_evidence() {
     // Round 5 extends a QC of round 1 without a TC: no honest node votes for it.
     let bad = Block::new_from_key(qc_of(1), leader_key.0, 5, Vec::new(), &leader_key.1);
     let vote = Vote::new_from_key(bad.digest(), 5, voter.0, &voter.1);
-    assert!(Evidence::InvalidBlock(vote, bad.clone()).verify().is_ok());
+    assert!(Evidence::InvalidBlock(vote, bad.header()).verify().is_ok());
 
     // A block of the next round after its QC is valid; a vote for another block proves nothing.
     let good = Block::new_from_key(qc_of(4), leader_key.0, 5, Vec::new(), &leader_key.1);
     let vote = Vote::new_from_key(good.digest(), 5, voter.0, &voter.1);
-    assert!(Evidence::InvalidBlock(vote.clone(), good).verify().is_err());
-    assert!(Evidence::InvalidBlock(vote, bad).verify().is_err());
+    assert!(Evidence::InvalidBlock(vote.clone(), good.header()).verify().is_err());
+    assert!(Evidence::InvalidBlock(vote, bad.header()).verify().is_err());
 }
 
 #[test]
@@ -423,7 +423,7 @@ fn regression_evidence() {
     // A vote at round 3 for a block certifying round 2, then a timeout at round >= 3 reporting hq 1 < 2.
     let block = Block::new_from_key(qc_of(2), leader_key.0, 3, Vec::new(), &leader_key.1);
     let vote = Vote::new_from_key(block.digest(), 3, voter.0, &voter.1);
-    let e3 = |timeout| Evidence::Regression(vote.clone(), block.clone(), timeout);
+    let e3 = |timeout| Evidence::Regression(vote.clone(), block.header(), timeout);
     assert!(e3(signed_timeout(4, 1, false, &voter)).verify().is_ok());
     assert!(e3(signed_timeout(3, 1, false, &voter)).verify().is_ok()); // the same round
     assert!(e3(signed_timeout(4, 2, false, &voter)).verify().is_err()); // hq not below j
@@ -465,29 +465,49 @@ fn block_digest_covers_evidence() {
 }
 
 #[test]
-fn block_evidence_nesting_is_bounded() {
-    // 8.9: Evidence::InvalidBlock / ::Regression embed a block whose own evidence embeds further blocks.
-    // Deserializing a message is bounded in depth, so a deeply nested (malformed) message is refused rather
-    // than exhausting the stack. A shallow nesting still round-trips.
+fn block_header_hashes_to_the_block_digest() {
+    // N1: evidence carries the header of the block it is about. The header must hash to the block's digest -- the
+    // culprit's vote is a signature on that digest -- for every field the digest covers.
     let (name, secret) = leader();
     let voter = keys().remove(0);
-    let nest = |depth: u32| {
-        let mut block = Block::default();
-        for _ in 0..depth {
-            let vote = Vote::new_from_key(block.digest(), block.round, voter.0, &voter.1);
-            block = Block::new_from_key_evidence(qc(), vec![Evidence::InvalidBlock(vote, block)], name, 6, &secret);
-        }
-        block
+    let a = Vote::new_from_key(Digest([1; 32]), 5, voter.0, &voter.1);
+    let b = Vote::new_from_key(Digest([2; 32]), 5, voter.0, &voter.1);
+    let otx = Otx { account: 1, nonce: 1, data: [3; 32] };
+    let block = Block {
+        tc: Some(tc(5, &[(qc(), false), (qc(), true), (qc(), false)])),
+        accusations: vec![Accusation { round: 3, epoch: EPOCH, votes: Vec::new() }],
+        otxs: vec![otx.clone()],
+        omissions: vec![OmitProof { round: 2, epoch: EPOCH, block: Digest([4; 32]), otx, attestations: Vec::new() }],
+        evidence: vec![Evidence::DoubleVote(a, b)],
+        payload: vec![Digest([5; 32])],
+        ..Block::new_from_key(qc(), name, 6, Vec::new(), &secret)
     };
+    assert_eq!(block.header().digest(), block.digest());
+    let mut moved = block.header();
+    moved.evidence.clear();
+    assert_ne!(moved.digest(), block.digest());
+}
 
-    let shallow = nest(2);
-    let bytes = bincode::serialize(&shallow).unwrap();
-    let back: Block = bincode::deserialize(&bytes).expect("shallow nesting round-trips");
-    assert_eq!(back.digest(), shallow.digest());
-
-    let deep = nest(MAX_EVIDENCE_DEPTH + 1);
-    let bytes = bincode::serialize(&deep).unwrap();
-    assert!(bincode::deserialize::<Block>(&bytes).is_err());
+#[test]
+fn reporting_a_block_as_evidence_does_not_nest() {
+    // N1: a block may report (in its evidence) a block that reports a block ... Evidence keeps only the reported
+    // block's header -- its own evidence as digests -- so every such block stays the same size and deserializes:
+    // an honest node can always report a block it accepted, and no message nests deep enough to hurt the stack.
+    // (Before, evidence embedded the whole block, so each report added a level; with a depth limit, a block at the
+    // limit was accepted but the honest block reporting it could no longer be deserialized by anyone.)
+    let (name, secret) = leader();
+    let voter = keys().remove(0);
+    let mut block = Block::default();
+    let mut sizes = Vec::new();
+    for _ in 0..50 {
+        let vote = Vote::new_from_key(block.digest(), block.round, voter.0, &voter.1);
+        block = Block::new_from_key_evidence(qc(), vec![Evidence::InvalidBlock(vote, block.header())], name, 6, &secret);
+        let bytes = bincode::serialize(&block).unwrap();
+        let back: Block = bincode::deserialize(&bytes).expect("every report deserializes");
+        assert_eq!(back.digest(), block.digest());
+        sizes.push(bytes.len());
+    }
+    assert!(sizes[1..].iter().all(|s| *s == sizes[1]), "size must not grow with the reporting depth: {:?}", sizes);
 }
 
 #[test]
