@@ -230,6 +230,17 @@ async fn far_future_block_does_not_turn_off_nr() {
     assert!(try_join_all(handles).await.is_ok());
 }
 
+#[test]
+fn periodic_cleanup_is_due_once_per_detection_window() {
+    // The round-based cleanup runs about once per DETECT_WINDOW rounds -- not on every advance -- and cleans to
+    // the start of the detection window, so the detection / accusation / inclusion state cannot grow with the
+    // round number between epoch handovers (and in a single-epoch run, where there is none).
+    assert_eq!(periodic_cleanup_floor(1, 0), None);
+    assert_eq!(periodic_cleanup_floor(DETECT_WINDOW, 0), Some(0));
+    assert_eq!(periodic_cleanup_floor(DETECT_WINDOW + 1, DETECT_WINDOW), None);
+    assert_eq!(periodic_cleanup_floor(2 * DETECT_WINDOW, DETECT_WINDOW), Some(DETECT_WINDOW));
+}
+
 #[tokio::test]
 async fn far_future_round_messages_are_dropped() {
     // 1.13: a current-epoch consensus message for a round implausibly far beyond ours is dropped before it

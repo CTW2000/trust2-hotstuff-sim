@@ -53,6 +53,23 @@ fn honest_traffic_gives_no_evidence() {
 }
 
 #[test]
+fn cleanup_forgets_rounds_before_the_floor() {
+    // The round-based cleanup drops the detection state (votes, timeouts, blocks, certificates) of rounds below
+    // the floor, so it does not grow with the round number between (or without) handovers.
+    let mut detector = Detector::new();
+    let b2 = block(1, 2);
+    detector.block(&b2);
+    detector.vote(vote(&b2, 0));
+    detector.timeout(timeout(2, 1, false, 1));
+    detector.qc(&qc_of(2));
+    assert!(!detector.votes.is_empty() && !detector.timeouts.is_empty());
+    assert!(!detector.blocks.is_empty() && !detector.certificates.is_empty());
+    detector.cleanup(3);
+    assert!(detector.votes.is_empty() && detector.timeouts.is_empty());
+    assert!(detector.blocks.is_empty() && detector.certificates.is_empty());
+}
+
+#[test]
 fn double_vote_is_reported_once_per_epoch() {
     let mut detector = Detector::new();
     let (a, b) = (block(1, 2), Block { payload: vec![Digest([9; 32])], ..block(1, 2) });

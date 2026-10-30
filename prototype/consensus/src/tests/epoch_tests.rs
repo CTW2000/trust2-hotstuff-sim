@@ -32,6 +32,13 @@ fn first_table_is_capnorm_of_the_base_weights() {
 }
 
 #[test]
+fn single_epoch_mode_has_no_handover() {
+    // length == 0 is a single-epoch run: no handover ever happens, which the round-based cleanup relies on.
+    assert!(Epochs::new(&committee(), config(0)).single_epoch());
+    assert!(!Epochs::new(&committee(), config(10)).single_epoch());
+}
+
+#[test]
 fn class_cap_limits_uncertified_members() {
     // Two of four equal members uncertified, class cap 25%: they share 0.25, the licensed share 0.75.
     let mut roster = committee();

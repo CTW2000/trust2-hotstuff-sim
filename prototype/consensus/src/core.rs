@@ -98,6 +98,8 @@ pub struct Core {
     requested: HashSet<Digest>,
     // A proposal for the round held back until we have the block certified by our high QC.
     pending_proposal: Option<(Round, Option<TC>)>,
+    // The round at the last round-based cleanup of the detection / accusation / inclusion state.
+    last_cleanup: Round,
 }
 
 impl Core {
@@ -149,6 +151,7 @@ impl Core {
                 replay: VecDeque::new(),
                 requested: HashSet::new(),
                 pending_proposal: None,
+                last_cleanup: 0,
             }
             .run()
             .await
@@ -614,6 +617,20 @@ impl Core {
         // Cleanup the vote aggregator.
         self.aggregator.cleanup(&self.round);
 
+        // Bound the detection / accusation / inclusion state by round between handovers. The detector's window
+        // is round-based in every mode. The accuser and inclusion are normally bounded by the cleanup at each
+        // epoch handover (which keeps the rounds not yet processed by the leader rule, up to done()); only a
+        // single-epoch run, with no handover, needs them bounded here, where their per-round state is never
+        // consumed and so can keep just the detection window.
+        if let Some(floor) = periodic_cleanup_floor(self.round, self.last_cleanup) {
+            self.last_cleanup = self.round;
+            self.detector.cleanup(floor);
+            if self.epochs.single_epoch() {
+                self.accuser.cleanup(floor);
+                self.inclusion.cleanup(floor);
+            }
+        }
+
         self.attest_round().await;
     }
 
@@ -1056,6 +1073,16 @@ fn epoch_of(message: &ConsensusMessage) -> u128 {
         ConsensusMessage::TC(tc) => tc.epoch,
         ConsensusMessage::Attest(attestation) => attestation.epoch,
         ConsensusMessage::SyncRequest(..) | ConsensusMessage::Otx(..) => 0,
+    }
+}
+
+/// When a round advance is far enough past the previous cleanup (`last`) to run the round-based cleanup again,
+/// the floor to clean to -- the start of the detection window. None until a full window has passed, so the
+/// cleanup runs about once per DETECT_WINDOW rounds rather than on every advance.
+fn periodic_cleanup_floor(round: Round, last: Round) -> Option<Round> {
+    match round >= last.saturating_add(DETECT_WINDOW) {
+        true => Some(round.saturating_sub(DETECT_WINDOW)),
+        false => None,
     }
 }
 

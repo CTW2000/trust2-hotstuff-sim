@@ -116,6 +116,22 @@ fn repeated_entries_do_not_inflate_the_quorum() {
 }
 
 #[test]
+fn cleanup_forgets_rounds_before_the_floor() {
+    // 1.13: the round-based cleanup drops attestations, certified blocks and made-proof marks of old rounds, so
+    // in a single-epoch run (no handover) this state does not grow with the round number.
+    let x = otx(1, 1);
+    let mut inclusion = Inclusion::new(GUARD, false);
+    inclusion.receive(x.clone(), Instant::now());
+    assert!(inclusion.certify(&block(5, vec![otx(2, 1)]), &committee()).is_empty());
+    assert_eq!(attest_all(&mut inclusion, 5, 3, &[x.id()]).len(), 1); // a proof is made, marking round 5
+    assert!(!inclusion.attestations.is_empty() && !inclusion.certified.is_empty() && !inclusion.made.is_empty());
+    inclusion.cleanup(6);
+    assert!(inclusion.attestations.is_empty(), "old attestations dropped");
+    assert!(inclusion.certified.is_empty(), "old certified blocks dropped");
+    assert!(inclusion.made.is_empty(), "old made-proof marks dropped");
+}
+
+#[test]
 fn pending_table_is_bounded() {
     // 8.5 / 1.13: the pending buffer has a ceiling. Once it is full, a new distinct observed transaction is
     // refused (neither forwarded, attested nor included) rather than letting a flood of distinct transactions

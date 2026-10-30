@@ -206,6 +206,13 @@ impl Epochs {
         self.current
     }
 
+    /// Whether this is a single-epoch run (no handover, `length == 0`). Then no table computation ever consumes
+    /// the accusations or inclusion attestations, so their per-round state may be bounded by the detection
+    /// window instead of being kept until a handover that never comes.
+    pub fn single_epoch(&self) -> bool {
+        self.config.length == 0
+    }
+
     /// The weight table of the current epoch.
     pub fn current(&self) -> &Committee {
         &self.tables[&self.current]
