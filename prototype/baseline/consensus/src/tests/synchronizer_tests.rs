@@ -68,9 +68,11 @@ async fn get_missing_parent_block() {
     let path = ".db_test_get_missing_parent_block";
     let _ = fs::remove_dir_all(path);
     let mut store = Store::new(path).unwrap();
-    // Baseline fix: the request goes to the other signers of the QC (here all three, the author among them).
-    // Upstream used the author's own key here, so the node asked itself.
+    // Baseline fix: the request goes to the other signers of the QC, not to the author of the child block (which may
+    // hold only the QC). Upstream used the author's own key here, so the node asked itself.
     let (name, _) = keys().remove(0);
+    let (signer, _) = keys().remove(1);
+    assert!(signer != block.author);
     let (tx_loopback, mut rx_loopback) = channel(1);
     let mut synchronizer = Synchronizer::new(
         name,
@@ -80,8 +82,9 @@ async fn get_missing_parent_block() {
         /* sync_retry_delay */ 10_000,
     );
 
-    // Spawn a listener to receive our sync request.
-    let address = committee.address(&block.author).unwrap();
+    // Spawn a listener to receive our sync request, at a signer that is not the author: asking the author alone, as
+    // upstream did, would not reach it.
+    let address = committee.address(&signer).unwrap();
     let message = ConsensusMessage::SyncRequest(parent_block.digest(), name);
     let expected = Bytes::from(bincode::serialize(&message).unwrap());
     let listener_handle = listener(address, Some(expected.clone()));
@@ -95,7 +98,8 @@ async fn get_missing_parent_block() {
     });
 
     // Ensure the other listeners correctly received the sync request.
-    assert!(listener_handle.await.is_ok());
+    let received = tokio::time::timeout(std::time::Duration::from_secs(2), listener_handle).await;
+    assert!(matches!(received, Ok(Ok(()))), "the signer was not asked for the block");
 
     // Ensure the synchronizer returns None, thus suspending the processing of the block.
     assert!(handle.await.is_ok());

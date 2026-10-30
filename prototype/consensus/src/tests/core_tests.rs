@@ -1,17 +1,35 @@
 use super::*;
 use crate::common::{chain, committee, committee_with_base_port, keys, listener, EPOCH};
 use crate::leader::LeaderElector;
-use crypto::SecretKey;
+use crypto::{SecretKey, Signature};
 use futures::future::try_join_all;
+use futures::stream::StreamExt as _;
 use std::fs;
+use std::net::SocketAddr;
 use std::time::Duration;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::channel;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 fn core(
     name: PublicKey,
     secret: SecretKey,
     committee: Committee,
     store_path: &str,
+) -> (
+    Sender<ConsensusMessage>,
+    Receiver<ProposerMessage>,
+    Receiver<Block>,
+) {
+    core_with_epochs(name, secret, committee, store_path, 100)
+}
+
+fn core_with_epochs(
+    name: PublicKey,
+    secret: SecretKey,
+    committee: Committee,
+    store_path: &str,
+    length: Round,
 ) -> (
     Sender<ConsensusMessage>,
     Receiver<ProposerMessage>,
@@ -42,7 +60,7 @@ fn core(
     });
 
     let epoch_config = EpochConfig {
-        length: 100,
+        length,
         entity_cap_ppm: 1_000_000,
         class_cap_ppm: 1_000_000,
         l_max_ppm: 100_000,
@@ -74,6 +92,57 @@ fn leader_keys(round: Round) -> (PublicKey, SecretKey) {
     keys()
         .into_iter()
         .find(|(public_key, _)| *public_key == leader)
+        .unwrap()
+}
+
+/// A listener that hands over the first `n` frames as they arrive, for checks that look at more than one frame or
+/// must act between two of them.
+fn frames(address: SocketAddr, n: usize) -> Receiver<Bytes> {
+    let (tx, rx) = channel(n);
+    tokio::spawn(async move {
+        let listener = TcpListener::bind(&address).await.unwrap();
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut transport = Framed::new(socket, LengthDelimitedCodec::new());
+        for _ in 0..n {
+            match transport.next().await {
+                Some(Ok(frame)) => tx.send(frame.freeze()).await.unwrap(),
+                _ => return,
+            }
+        }
+    });
+    rx
+}
+
+/// A QC for `block` signed by every member.
+fn qc_for(block: &Block) -> QC {
+    QC {
+        hash: block.digest(),
+        round: block.round,
+        epoch: EPOCH,
+        votes: signed_by(&keys(), block.digest(), block.round),
+    }
+}
+
+/// The votes of `signers` for `hash` at `round`, as a QC holds them.
+fn signed_by(signers: &[(PublicKey, SecretKey)], hash: Digest, round: Round) -> Vec<(PublicKey, Signature)> {
+    signers
+        .iter()
+        .map(|(key, secret)| {
+            let vote = Vote::new_from_key(hash.clone(), round, *key, secret);
+            (vote.author, vote.signature)
+        })
+        .collect()
+}
+
+/// The TC of `round` the members make, each reporting `high_qc` and NR = 0.
+fn tc_of(round: Round, high_qc: &QC, committee: &Committee) -> TC {
+    let mut aggregator = Aggregator::new();
+    keys()
+        .into_iter()
+        .find_map(|(key, secret)| {
+            let timeout = Timeout::new_from_key(high_qc.clone(), round, false, key, &secret);
+            aggregator.add_timeout(timeout, committee).unwrap()
+        })
         .unwrap()
 }
 
@@ -406,6 +475,149 @@ async fn honest_node_votes_for_a_block_justified_by_a_tc() {
 
     let next = committee.address(&leader_keys(4).0).unwrap();
     assert!(listener(next, Some(Bytes::from(expected))).await.is_ok());
+}
+
+#[tokio::test]
+async fn r3_a_second_timeout_of_a_round_repeats_the_first() {
+    // 12.9 / R3: a node signs one timeout per round. When its timer fires again in that round it resends the one it
+    // signed, even if the proposal has arrived since: a fresh one would report NR = 0 against the NR = 1 it signed.
+    let committee = committee_with_base_port(16_800);
+    let (l1, l2) = (leader_keys(1).0, leader_keys(2).0);
+    let (name, secret) = keys().into_iter().find(|(k, _)| *k != l1 && *k != l2).unwrap();
+    let timeout = Timeout::new_from_key(QC::genesis(), 1, true, name, &secret);
+    let expected = Bytes::from(bincode::serialize(&ConsensusMessage::Timeout(timeout)).unwrap());
+    let mut received = frames(committee.address(&l2).unwrap(), 2);
+
+    let store_path = ".db_test_r3_a_second_timeout_of_a_round_repeats_the_first";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+
+    assert_eq!(received.recv().await.unwrap(), expected, "no proposal yet: NR = 1");
+    let block = chain(vec![leader_keys(1)]).pop().unwrap();
+    tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+    assert_eq!(received.recv().await.unwrap(), expected, "the timer fired again in round 1");
+}
+
+#[tokio::test]
+async fn r6_a_tc_hands_over_its_high_qc() {
+    // 12.9 / R6: a node adopts the high QC a TC carries. A TC of round 2 carries a QC of round 1 the node never saw;
+    // the node leads round 3 and proposes on that QC, not on genesis.
+    let b1 = chain(vec![leader_keys(1)]).pop().unwrap();
+    let qc1 = qc_for(&b1);
+    let tc2 = tc_of(2, &qc1, &committee());
+    let (name, secret) = leader_keys(3);
+    let store_path = ".db_test_r6_a_tc_hands_over_its_high_qc";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee(), store_path);
+    tx_core.send(ConsensusMessage::TC(tc2)).await.unwrap();
+    match tokio::time::timeout(Duration::from_secs(2), rx_proposer.recv()).await {
+        Ok(Some(ProposerMessage::Make { round, qc, .. })) => assert_eq!((round, qc), (3, qc1)),
+        other => panic!("no proposal after the TC: {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn r6_a_tc_inside_a_block_hands_over_its_high_qc() {
+    // 12.9 / R6: likewise for the TC inside a block. The block of round 4 extends a QC of round 1 but carries a TC of
+    // round 3 reporting a QC of round 2. It breaks the voting rule, so nobody votes; the node still adopts the TC's
+    // high QC, so its timeout of round 4 reports the QC of round 2.
+    let committee = committee_with_base_port(16_900);
+    let (l4, l4_secret) = leader_keys(4);
+    let mut signers: Vec<_> = keys().into_iter().filter(|(k, _)| *k != l4).collect();
+    let (low, high) = (Digest([1; 32]), Digest([2; 32]));
+    let qc1 = QC { hash: low.clone(), round: 1, epoch: EPOCH, votes: signed_by(&signers, low, 1) };
+    let qc2 = QC { hash: high.clone(), round: 2, epoch: EPOCH, votes: signed_by(&keys(), high, 2) };
+    let tc3 = tc_of(3, &qc2, &committee);
+    let block = Block::new_from_key_with_tc(qc1, Some(tc3), l4, 4, Vec::new(), &l4_secret);
+
+    // The block's parent is missing, so the node asks the other signers of its QC for it. The leader of round 4 did
+    // not sign, so the first thing it hears from the node is the timeout.
+    let (name, secret) = signers.remove(0);
+    let timeout = Timeout::new_from_key(qc2, 4, false, name, &secret);
+    let expected = bincode::serialize(&ConsensusMessage::Timeout(timeout)).unwrap();
+    let store_path = ".db_test_r6_a_tc_inside_a_block_hands_over_its_high_qc";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+
+    let handle = listener(committee.address(&l4).unwrap(), Some(Bytes::from(expected)));
+    assert!(handle.await.is_ok());
+}
+
+#[tokio::test]
+async fn h3_no_vote_for_a_block_of_the_old_epoch() {
+    // 12.9 / H3: a node that entered the next epoch signs nothing of the old one. With epochs of 2 rounds, block 2 is
+    // terminal and its commit proof, the QC of round 3, comes inside block 4. So block 4 moves the node to the next
+    // epoch, which starts at round 4, while being a block of the old epoch itself: it gets no vote, and the first
+    // thing the next leader hears from the node is its timeout of round 4 in the new epoch.
+    let committee = committee_with_base_port(17_000);
+    let blocks = chain(vec![leader_keys(1), leader_keys(2), leader_keys(3), leader_keys(4)]);
+    let mut received = frames(committee.address(&leader_keys(5).0).unwrap(), 1);
+
+    // We lead round 2, so our first vote stays with us; the other two go to the leaders of rounds 3 and 4.
+    let (name, secret) = leader_keys(2);
+    let store_path = ".db_test_h3_no_vote_for_a_block_of_the_old_epoch";
+    let (tx_core, mut rx_proposer, mut rx_commit) =
+        core_with_epochs(name, secret, committee.clone(), store_path, 2);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tokio::spawn(async move { while rx_commit.recv().await.is_some() {} });
+    for block in blocks {
+        tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+    }
+
+    let first = received.recv().await.unwrap();
+    match bincode::deserialize(&first).unwrap() {
+        ConsensusMessage::Timeout(timeout) => assert_eq!((timeout.round, timeout.epoch), (4, EPOCH + 1)),
+        message => panic!("Unexpected message {:?}", message),
+    }
+}
+
+#[tokio::test]
+async fn commit_delivers_skipped_ancestors_oldest_first() {
+    // 12.9: after a gap in the chain one commit delivers every uncommitted ancestor, oldest first. In b1 <- b3 <- b4 <-
+    // b5 the 2-chain b3 <- b4 commits b3 and, with it, b1.
+    let b1 = chain(vec![leader_keys(1)]).pop().unwrap();
+    let on = |parent: &Block, round: Round| {
+        let (author, secret) = leader_keys(round);
+        Block::new_from_key(qc_for(parent), author, round, Vec::new(), &secret)
+    };
+    let b3 = on(&b1, 3);
+    let b4 = on(&b3, 4);
+    let b5 = on(&b4, 5);
+
+    let store_path = ".db_test_commit_delivers_skipped_ancestors_oldest_first";
+    let (name, secret) = keys().pop().unwrap();
+    let (tx_core, mut rx_proposer, mut rx_commit) = core(name, secret, committee(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    for block in vec![b1.clone(), b3.clone(), b4, b5] {
+        tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+    }
+    assert_eq!(rx_commit.recv().await.unwrap(), b1);
+    assert_eq!(rx_commit.recv().await.unwrap(), b3);
+}
+
+#[tokio::test]
+async fn a_commit_proof_inside_a_timeout_commits() {
+    // 12.9: a node commits as soon as it holds a commit proof, not when the next block arrives. Here the proof for
+    // block 1, the QC of round 2, comes in another member's timeout, and no later block does.
+    let b1 = chain(vec![leader_keys(1)]).pop().unwrap();
+    let (l2, l2_secret) = leader_keys(2);
+    let b2 = Block::new_from_key(qc_for(&b1), l2, 2, Vec::new(), &l2_secret);
+
+    let mut members = keys();
+    let (name, secret) = members.pop().unwrap();
+    let (other, other_secret) = members.pop().unwrap();
+    let timeout = Timeout::new_from_key(qc_for(&b2), 3, false, other, &other_secret);
+
+    let store_path = ".db_test_a_commit_proof_inside_a_timeout_commits";
+    let (tx_core, mut rx_proposer, mut rx_commit) = core(name, secret, committee(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Propose(b1.clone())).await.unwrap();
+    tx_core.send(ConsensusMessage::Propose(b2)).await.unwrap();
+    tx_core.send(ConsensusMessage::Timeout(timeout)).await.unwrap();
+    match tokio::time::timeout(Duration::from_secs(2), rx_commit.recv()).await {
+        Ok(Some(block)) => assert_eq!(block, b1),
+        other => panic!("nothing committed: {:?}", other),
+    }
 }
 
 #[tokio::test]

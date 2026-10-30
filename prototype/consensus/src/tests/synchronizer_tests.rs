@@ -161,3 +161,21 @@ fn holders_are_other_signers_of_the_qc() {
     let all = committee.broadcast_addresses(&name).len();
     assert_eq!(holders(&QC::genesis(), &committee, &name).len(), all);
 }
+
+#[test]
+fn holders_leave_out_members_that_did_not_sign() {
+    // 12.9: a QC signed by all four cannot tell "its other signers" from "everyone else". With a QC signed by three
+    // of the four, the fourth member is not asked: it may not hold the block at all.
+    let committee = committee();
+    let mut signers = keys();
+    let (outsider, _) = signers.pop().unwrap();
+    let name = signers[0].0;
+    let mut expected: Vec<_> = signers[1..].iter().map(|(k, _)| committee.address(k).unwrap()).collect();
+    let block = chain(signers).pop().unwrap();
+
+    let mut got = holders(&block.qc, &committee, &name);
+    expected.sort();
+    got.sort();
+    assert_eq!(got, expected);
+    assert!(!got.contains(&committee.address(&outsider).unwrap()));
+}

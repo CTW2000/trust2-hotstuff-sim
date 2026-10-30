@@ -79,6 +79,22 @@ struct LedgerBlock {
     keys: HashSet<(u64, u64)>,
 }
 
+/// The member that led `round`: by the table of the epoch its accusation was made in (`accused_in`), which is the
+/// table the accusers went by, or else by the table of the epoch the round falls in.
+fn leader_index(
+    tables: &BTreeMap<EpochNumber, Committee>,
+    first_rounds: &BTreeMap<EpochNumber, Round>,
+    members: &[(PublicKey, Authority)],
+    round: Round,
+    accused_in: Option<EpochNumber>,
+) -> Option<usize> {
+    let epoch = accused_in.or_else(|| {
+        first_rounds.iter().rev().find(|(_, first)| **first <= round).map(|(e, _)| *e)
+    })?;
+    let name = leader(tables.get(&epoch)?, round);
+    members.binary_search_by_key(&name, |(n, _)| *n).ok()
+}
+
 impl Epochs {
     /// `roster` is the committee of the configuration: `stake` is the base weight w_i.
     pub fn new(roster: &Committee, config: EpochConfig) -> Self {
@@ -269,11 +285,7 @@ impl Epochs {
         let before = self.reputation.r_ppm().to_vec();
         let (tables, first_rounds, members) = (&self.tables, &self.first_rounds, &self.members);
         let events = self.reputation.advance(horizon, |round, accused_in| {
-            let epoch = accused_in.or_else(|| {
-                first_rounds.iter().rev().find(|(_, first)| **first <= round).map(|(e, _)| *e)
-            })?;
-            let name = leader(tables.get(&epoch)?, round);
-            members.binary_search_by_key(&name, |(n, _)| *n).ok()
+            leader_index(tables, first_rounds, members, round, accused_in)
         });
         for event in events {
             let (what, k, round) = match event {

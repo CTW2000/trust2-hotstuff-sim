@@ -132,6 +132,33 @@ fn accusing(epoch: EpochNumber, round: Round, accused: &[Round]) -> Block {
 }
 
 #[test]
+fn accusations_count_against_the_leader_of_their_own_table() {
+    // 5.3: an accusation counts against the leader of its round in the table of the epoch it was made in, which is the
+    // table the accusers went by, not the one of the epoch the round falls in. They differ here: the third epoch
+    // change excludes the silent leader, and the new table hands its rounds to others.
+    let mut epochs = Epochs::new(&committee(), config(10));
+    let silent = leader(epochs.current(), 1);
+    for k in 1..=3 {
+        let table = epochs.current().clone();
+        let accused: Vec<Round> = (10 * k - 9..=10 * k).filter(|u| leader(&table, *u) == silent).collect();
+        epochs.record(&accusing(table.epoch, 10 * k, &accused));
+        epochs.enter_next(&block(table.epoch, 10 * k));
+    }
+    let new = epochs.epoch();
+    let old = new - 1;
+    let (old_table, new_table) = (&epochs.tables[&old], &epochs.tables[&new]);
+    assert!(!new_table.authorities[&silent].leader);
+
+    let first = epochs.first_rounds[&new];
+    let round = (first..first + 20).find(|u| leader(old_table, *u) != leader(new_table, *u)).unwrap();
+    let index = |name| epochs.members.binary_search_by_key(&name, |(n, _)| *n).ok();
+    let of = |accused_in| leader_index(&epochs.tables, &epochs.first_rounds, &epochs.members, round, accused_in);
+    assert_eq!(of(Some(old)), index(leader(old_table, round)));
+    assert_eq!(of(None), index(leader(new_table, round)));
+    assert_ne!(of(Some(old)), of(None));
+}
+
+#[test]
 fn silent_leader_loses_leadership_and_reputation() {
     // G2 (DESIGN.md §12.2): every round led by one member is accused. Once six accusations are processed it
     // is convicted at an epoch change: it no longer leads, and its reputation drops to 0.9 until the

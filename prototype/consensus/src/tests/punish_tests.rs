@@ -92,3 +92,28 @@ fn suspended_share_never_exceeds_l_max() {
         }
     }
 }
+
+#[test]
+fn repeats_count_only_within_the_lookback() {
+    // 5.6: a repeat raises the level only if the earlier offence went on chain within the last `lookback` (64) epochs.
+    // The vectors stop before that window is ever crossed. A second liveness offence 10 epochs after the first is
+    // L2; one 70 epochs after it is L1 again.
+    let levels = |gap: EpochNumber| -> Vec<u8> {
+        let (classes, weights) = (vec![Class::Licensed; 4], vec![1; 4]);
+        let (cap, u_max) = (from_ppm(1_000_000), from_ppm(1_000_000));
+        let mut punishment = Punishment::new(classes, weights, cap, u_max, PunishConfig::default());
+        punishment.record(0, Kind::Liveness, 1, 1, false, false);
+        punishment.record(0, Kind::Liveness, 1 + gap, 1 + gap, false, false);
+        let mut levels = Vec::new();
+        for k in 1..=gap + 3 {
+            for event in punishment.update(k) {
+                if let G1Event::Level(level, 0, _) = event {
+                    levels.push(*level);
+                }
+            }
+        }
+        levels
+    };
+    assert_eq!(levels(10), vec![1, 2]);
+    assert_eq!(levels(70), vec![1, 1]);
+}

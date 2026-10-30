@@ -3,6 +3,7 @@ use crate::common::{chain, committee, committee_with_base_port, keys, listener};
 use crypto::SecretKey;
 use futures::future::try_join_all;
 use std::fs;
+use std::time::Duration;
 use tokio::sync::mpsc::channel;
 
 fn core(
@@ -165,6 +166,69 @@ async fn commit_block() {
     match rx_commit.recv().await {
         Some(b) => assert_eq!(b, committed),
         _ => assert!(false),
+    }
+}
+
+/// A QC for `block` signed by every member.
+fn qc_for(block: &Block) -> QC {
+    let votes = keys()
+        .iter()
+        .map(|(key, secret)| {
+            let vote = Vote::new_from_key(block.digest(), block.round, *key, secret);
+            (vote.author, vote.signature)
+        })
+        .collect();
+    QC { hash: block.digest(), round: block.round, votes }
+}
+
+#[tokio::test]
+async fn commit_delivers_skipped_ancestors_oldest_first() {
+    // Baseline fix, as in the prototype: after a gap in the chain one commit delivers every uncommitted ancestor, oldest
+    // first (upstream delivered them newest first). In b1 <- b3 <- b4 <- b5 the 2-chain b3 <- b4 commits b3 and, with
+    // it, b1.
+    let b1 = chain(vec![leader_keys(1)]).pop().unwrap();
+    let on = |parent: &Block, round: Round| {
+        let (author, secret) = leader_keys(round);
+        Block::new_from_key(qc_for(parent), author, round, Vec::new(), &secret)
+    };
+    let b3 = on(&b1, 3);
+    let b4 = on(&b3, 4);
+    let b5 = on(&b4, 5);
+
+    let store_path = ".db_test_commit_delivers_skipped_ancestors_oldest_first";
+    let (name, secret) = keys().pop().unwrap();
+    let (tx_core, mut rx_proposer, mut rx_commit) = core(name, secret, committee(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    for block in vec![b1.clone(), b3.clone(), b4, b5] {
+        tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+    }
+    assert_eq!(rx_commit.recv().await.unwrap(), b1);
+    assert_eq!(rx_commit.recv().await.unwrap(), b3);
+}
+
+#[tokio::test]
+async fn a_commit_proof_inside_a_timeout_commits() {
+    // Baseline fix, as in the prototype: a node commits as soon as it holds a commit proof, not when the next block
+    // arrives. Here the proof for block 1, the QC of round 2, comes in another member's timeout, and no later block
+    // does.
+    let b1 = chain(vec![leader_keys(1)]).pop().unwrap();
+    let (l2, l2_secret) = leader_keys(2);
+    let b2 = Block::new_from_key(qc_for(&b1), l2, 2, Vec::new(), &l2_secret);
+
+    let mut members = keys();
+    let (name, secret) = members.pop().unwrap();
+    let (other, other_secret) = members.pop().unwrap();
+    let timeout = Timeout::new_from_key(qc_for(&b2), 3, other, &other_secret);
+
+    let store_path = ".db_test_a_commit_proof_inside_a_timeout_commits";
+    let (tx_core, mut rx_proposer, mut rx_commit) = core(name, secret, committee(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Propose(b1.clone())).await.unwrap();
+    tx_core.send(ConsensusMessage::Propose(b2)).await.unwrap();
+    tx_core.send(ConsensusMessage::Timeout(timeout)).await.unwrap();
+    match tokio::time::timeout(Duration::from_secs(2), rx_commit.recv()).await {
+        Ok(Some(block)) => assert_eq!(block, b1),
+        other => panic!("nothing committed: {:?}", other),
     }
 }
 
