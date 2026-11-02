@@ -1,0 +1,10 @@
+  nodes: Counter({'honest': 25, 'NR liar': 3, 'equivocator': 3})
+  evidence on the ledger (type, culprit role): {('NR', 'NR liar'): 458, ('E1', 'equivocator'): 330}
+  punished entities by role: {'NR liar': 3, 'equivocator': 3}
+    NR liar      oMPrNggci9QXisAr: L1@2 L2@3 queued@3 L3@4 L3@5 L3@6 L3@7 L3@8 L3@9 L3@10 L3@11 L3@12 L3@13 L3@14
+    NR liar      U2CzHE3pciVWYpEj: L1@2 L2@3 queued@3 L3@4 L3@5 L3@6 L3@7 L3@8 L3@9 L3@10 L3@11 L3@12 L3@13 L3@14
+    NR liar      e/NRiZtyLJQucobT: L1@2 L2@3 queued@3 L3@4 L3@5 L3@6 L3@7 L3@8 L3@9 L3@10 L3@11 L3@12 L3@13 L3@14
+    equivocator  2NeJqeFSxD9YIJ7v: L3@2 queued@2 suspended@2 released@34 L4@35 L4@36 L4@37 downgraded@37 queued@37 L4@38 L4@39 L4@40 downgraded@40 L4@41
+    equivocator  jeu/p6kvLdcoActK: L3@2 queued@2 suspended@2 released@34 L4@35 L4@36 L4@37 downgraded@37 queued@37 L4@38 L4@39 L4@40 downgraded@40 L4@41
+    equivocator  pib39uLhA7ThYn/Y: L3@2 queued@2 suspended@2 released@34 L4@35 L4@36 L4@37 downgraded@37 queued@37 L4@38 L4@39 L4@40 downgraded@40 L4@41
+  most entities suspended at once: 3
