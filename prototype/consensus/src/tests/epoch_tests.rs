@@ -316,3 +316,84 @@ fn g1_evidence_suspends_or_bars_at_an_epoch_change() {
     assert_eq!(epochs.current().stake(&cheat.0), 250_000);
     assert!(epochs.current().authorities[&cheat.0].leader);
 }
+
+/// The committee with its first two members, by key, bound into one entity.
+fn with_entity() -> (Committee, Vec<PublicKey>) {
+    let mut roster = committee();
+    let mut names: Vec<_> = roster.authorities.keys().cloned().collect();
+    names.sort();
+    for name in &names[..2] {
+        roster.authorities.get_mut(name).unwrap().entity = Some(7);
+    }
+    (roster, names)
+}
+
+#[test]
+fn an_entity_shares_one_cap() {
+    // Each of four members is below a cap of 40%, but the two of one owner hold 50% together: the cap applies to
+    // them as one, and the rest goes to the others. A base weight split over more nodes earns nothing.
+    let (roster, names) = with_entity();
+    let epochs = Epochs::new(&roster, EpochConfig { entity_cap_ppm: 400_000, ..config(10) });
+    let table = epochs.current();
+    assert_eq!(table.stake(&names[0]), 200_000);
+    assert_eq!(table.stake(&names[1]), 200_000);
+    assert_eq!(table.stake(&names[2]), 300_000);
+    assert_eq!(table.stake(&names[3]), 300_000);
+
+    let epochs = Epochs::new(&committee(), EpochConfig { entity_cap_ppm: 400_000, ..config(10) });
+    assert!(epochs.current().authorities.values().all(|a| a.stake == 250_000));
+}
+
+#[test]
+fn an_entity_splits_its_weight_by_base_weight() {
+    // Weights 2 and 1 of an entity capped at 50%; what the rounding leaves stays in the table.
+    let (mut roster, names) = with_entity();
+    roster.authorities.get_mut(&names[0]).unwrap().stake = 2;
+    let epochs = Epochs::new(&roster, EpochConfig { entity_cap_ppm: 500_000, ..config(10) });
+    let table = epochs.current();
+    assert_eq!(table.stake(&names[0]), 333_334);
+    assert_eq!(table.stake(&names[1]), 166_666);
+    assert_eq!(table.authorities.values().map(|a| a.stake as u64).sum::<u64>(), 1_000_000);
+}
+
+#[test]
+fn punishment_falls_on_the_whole_entity() {
+    // One member double votes: every member of its entity is suspended, and only them. The entity holds 20%, so
+    // this is not yet a correlated fault above 1/3.
+    let (mut roster, names) = with_entity();
+    for name in &names[2..] {
+        roster.authorities.get_mut(name).unwrap().stake = 4;
+    }
+    let mut epochs = Epochs::new(&roster, EpochConfig { l_max_ppm: 500_000, ..config(10) });
+    let cheat = keys().into_iter().find(|(name, _)| *name == names[1]).unwrap();
+    let vote = |hash: u8| Vote::new_from_key(Digest([hash; 32]), 5, cheat.0, &cheat.1);
+    let evidence = vec![Evidence::DoubleVote(vote(1), vote(2))];
+    epochs.record(&Block { epoch: EPOCH, round: 8, evidence, ..Block::default() });
+    epochs.enter_next(&block(EPOCH, 10));
+    let table = epochs.current();
+    for name in &names[..2] {
+        assert_eq!(table.stake(name), 0);
+        assert!(!table.authorities[name].leader);
+    }
+    for name in &names[2..] {
+        assert!(table.stake(name) > 0 && table.authorities[name].leader);
+    }
+}
+
+#[test]
+fn accusations_of_its_members_add_up_on_the_entity() {
+    // Accusations of rounds led by either member count against the one entity, and both stop leading.
+    let (roster, names) = with_entity();
+    let mut epochs = Epochs::new(&roster, config(10));
+    for k in 1..=6 {
+        let table = epochs.current().clone();
+        let end = 10 * k;
+        let accused: Vec<Round> = (end - 9..=end).filter(|u| names[..2].contains(&leader(&table, *u))).collect();
+        epochs.record(&accusing(table.epoch, end, &accused));
+        epochs.enter_next(&block(table.epoch, end));
+    }
+    let table = epochs.current();
+    assert!(names[..2].iter().all(|name| !table.authorities[name].leader));
+    assert!(names[2..].iter().all(|name| table.authorities[name].leader));
+    assert_eq!(epochs.reputation.r_ppm().len(), 3);
+}

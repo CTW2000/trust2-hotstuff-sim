@@ -198,9 +198,10 @@ pub fn qc() -> QC {
 }
 
 // Fixture.
-pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
+pub fn chain(leaders: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
     let mut latest_qc = QC::genesis();
-    keys.iter()
+    leaders
+        .iter()
         .enumerate()
         .map(|(i, key)| {
             // Make a block.
@@ -221,7 +222,7 @@ pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
                 votes: Vec::new(),
             };
             let digest = qc.digest();
-            let votes: Vec<_> = keys
+            let votes: Vec<_> = keys()
                 .iter()
                 .map(|(public_key, secret_key)| (*public_key, Signature::new(&digest, secret_key)))
                 .collect();

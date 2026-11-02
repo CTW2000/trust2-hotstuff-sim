@@ -19,13 +19,15 @@ class Key:
 
 
 class Committee:
-    def __init__(self, names, consensus_addr, transactions_addr, mempool_addr, stakes=None, certified=None):
+    def __init__(self, names, consensus_addr, transactions_addr, mempool_addr, stakes=None, certified=None,
+                 entities=None):
         inputs = [names, consensus_addr, transactions_addr, mempool_addr]
         assert all(isinstance(x, list) for x in inputs)
         assert all(isinstance(x, str) for y in inputs for x in y)
         assert len({len(x) for x in inputs}) == 1
 
         self.names = names
+        self.entities = entities
         self.consensus = consensus_addr
         self.front = transactions_addr
         self.mempool = mempool_addr
@@ -45,6 +47,8 @@ class Committee:
             node[n] = {'name': n, 'stake': self.stakes[i], 'address': a}
             if self.certified is not None:
                 node[n]['certified'] = self.certified[i]
+            if self.entities is not None and self.entities[i] is not None:
+                node[n]['entity'] = self.entities[i]
         return {'authorities': node, 'epoch': 1}
 
     def _build_mempool(self):
@@ -85,7 +89,7 @@ class Committee:
 
 
 class LocalCommittee(Committee):
-    def __init__(self, names, port, stakes=None, certified=None):
+    def __init__(self, names, port, stakes=None, certified=None, entities=None):
         assert isinstance(names, list) and all(
             isinstance(x, str) for x in names)
         assert isinstance(port, int)
@@ -93,7 +97,7 @@ class LocalCommittee(Committee):
         consensus = [f'127.0.0.1:{port + i}' for i in range(size)]
         front = [f'127.0.0.1:{port + i + size}' for i in range(size)]
         mempool = [f'127.0.0.1:{port + i + 2*size}' for i in range(size)]
-        super().__init__(names, consensus, front, mempool, stakes, certified)
+        super().__init__(names, consensus, front, mempool, stakes, certified, entities)
 
 
 class NodeParameters:

@@ -12,7 +12,6 @@ Run from prototype/benchmark/ (after `cargo build --release --features benchmark
     python3 run_local.py --nodes 4 --rate 50000 --duration 30 --warmup 10
 """
 import argparse
-import base64
 import fcntl
 import json
 import os
@@ -63,7 +62,11 @@ def base_weights(args):
         order = sorted(range(args.nodes), key=lambda i: (i % 3 != 2, i))
         uncertified = set(order[:args.uncertified])
         certified = [i not in uncertified for i in range(args.nodes)]
-    return stakes, certified
+    entities = None
+    if args.entity_size:                                     # the last booted nodes, where the switches start
+        up = args.nodes - args.faults
+        entities = [0 if i >= up - args.entity_size and i < up else None for i in range(args.nodes)]
+    return stakes, certified, entities
 
 
 def in_scope(args):
@@ -134,7 +137,6 @@ def run(args):
         procs.append(launch(cmd, PathMaker.client_log_file(i)))
     # Experiment switches, from the last booted node backwards: censors, equivocators, NR liars, invalid-block
     # leaders, then high-QC regressors.
-    # Censors may instead lead consecutive rounds (round robin follows the public keys' byte order).
     switches = {}
     tail = list(range(up - 1, -1, -1))
     roles = (("--censor", args.censor), ("--equivocate", args.equivocate), ("--lie-nr", args.lie_nr),
@@ -143,11 +145,6 @@ def run(args):
         for i in tail[:count]:
             switches.setdefault(i, []).append(flag)
         tail = tail[count:]
-    if args.censor_adjacent:
-        switches = {i: [f for f in fs if f != "--censor"] for i, fs in switches.items()}
-        order = sorted(range(up), key=lambda i: base64.b64decode(names[i]))
-        for i in order[:args.censor]:
-            switches.setdefault(i, []).append("--censor")
     for i in range(up):
         censor = "".join(" " + f for f in switches.get(i, []))
         cmd = (f"{node} {'-vvv' if args.debug else '-vv'} run --keys {key_files[i]} "
@@ -207,7 +204,6 @@ def main():
     ap.add_argument("--otx-rate", type=int, default=0, help="observed transactions per second (0: no observer)")
     ap.add_argument("--attest-guard", type=int, default=500, help="attestation guard in ms")
     ap.add_argument("--censor", type=int, default=0, help="number of booted nodes that censor victim accounts")
-    ap.add_argument("--censor-adjacent", action="store_true", help="censors lead consecutive rounds")
     ap.add_argument("--equivocate", type=int, default=0, help="number of booted nodes that vote twice (E1)")
     ap.add_argument("--lie-nr", type=int, default=0, help="number of booted nodes that lie about NR")
     ap.add_argument("--invalid-block", type=int, default=0, help="number of booted nodes that propose invalid blocks (E2)")
@@ -219,6 +215,7 @@ def main():
     ap.add_argument("--class-cap-ppm", type=int, default=1_000_000)
     ap.add_argument("--stakes", default="equal", help="base weights: equal, or lognormal:<sigma> (fixed seed)")
     ap.add_argument("--uncertified", type=int, default=0, help="number of uncertified members (class cap applies)")
+    ap.add_argument("--entity-size", type=int, default=0, help="the last booted nodes that belong to one entity")
     ap.add_argument("--cpu-quota", type=int, default=1200, help="percent of one core (1200 = 12 cores)")
     ap.add_argument("--mem-max", default="12G")
     ap.add_argument("--debug", action="store_true")

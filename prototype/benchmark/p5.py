@@ -169,8 +169,7 @@ def p3():
     for rep in (1, 2):
         for censor in (0, 10):
             config = dict(scenario="censor" if censor else "control", build="trust2", nodes=31, net="base",
-                          epoch_length=100, otx_rate=25, attest_guard=136, censor=censor,
-                          censor_adjacent=censor > 0, rep=rep)
+                          epoch_length=100, otx_rate=25, attest_guard=136, censor=censor, rep=rep)
             run("p3", config, 90)
 
 
@@ -218,6 +217,18 @@ def xc():
             config = dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=50, rep=rep,
                           **weighted, **faults)
             run("xc", config, 60)
+
+
+def xe():
+    """Entity binding (方案说明 §0): one owner runs 5 of 31 nodes, entity cap 5%. Bound into one entity they share the
+    cap and the punishments; counted as separate entities they hold 5/31 and only the signer is punished. Normal
+    case and one double-voting node (of the 5), base network."""
+    for rep in (1, 2):
+        for name, bound in (("separate", {}), ("bound", dict(entity_size=5))):
+            for faults in ({}, dict(equivocate=1)):
+                scenario = name + ("+equivocator" if faults else "")
+                run("xe", dict(scenario=scenario, build="trust2", nodes=31, net="base", epoch_length=50, rep=rep,
+                               **bound, **faults), 60)
 
 
 def report():
@@ -278,4 +289,4 @@ def compare_x2(rows):
 
 
 if __name__ == "__main__":
-    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "report": report}[sys.argv[1]]()
+    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "report": report}[sys.argv[1]]()

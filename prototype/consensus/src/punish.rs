@@ -154,6 +154,10 @@ impl Punishment {
         malicious: bool,
         fork: bool,
     ) {
+        // Evidence is valid for the look-back: older, it no longer punishes, as it no longer counts as a repeat.
+        if chain_epoch.saturating_sub(sign_epoch) > self.config.lookback as EpochNumber {
+            return;
+        }
         self.pending.push(Item {
             entity,
             kind,

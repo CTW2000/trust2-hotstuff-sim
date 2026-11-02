@@ -171,7 +171,8 @@ fn holders_leave_out_members_that_did_not_sign() {
     let (outsider, _) = signers.pop().unwrap();
     let name = signers[0].0;
     let mut expected: Vec<_> = signers[1..].iter().map(|(k, _)| committee.address(k).unwrap()).collect();
-    let block = chain(signers).pop().unwrap();
+    let mut block = chain(signers).pop().unwrap();
+    block.qc.votes.retain(|(signer, _)| *signer != outsider);
 
     let mut got = holders(&block.qc, &committee, &name);
     expected.sort();

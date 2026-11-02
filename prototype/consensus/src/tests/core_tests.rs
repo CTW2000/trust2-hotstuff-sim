@@ -463,18 +463,19 @@ async fn honest_node_votes_for_a_block_justified_by_a_tc() {
     let (l3, l3_secret) = leader_keys(3);
     let b3 = Block::new_from_key_with_tc(qc1, Some(tc2), l3, 3, Vec::new(), &l3_secret);
 
-    // We lead round 2, so our vote for b1 stays with us; our vote for b3 goes to the leader of round 4.
-    let (name, secret) = leader_keys(2);
+    // Our vote for b3 goes to the leader of round 4, which is not us (it may also get our vote for b1).
+    let next = leader_keys(4).0;
+    let (name, secret) = keys().into_iter().find(|(key, _)| *key != next).unwrap();
     let vote = Vote::new_from_key(b3.digest(), 3, name, &secret);
     let expected = bincode::serialize(&ConsensusMessage::Vote(vote)).unwrap();
+    let mut received = frames(committee.address(&next).unwrap(), 2);
     let store_path = ".db_test_honest_node_votes_for_a_block_justified_by_a_tc";
     let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
     tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
     tx_core.send(ConsensusMessage::Propose(b1)).await.unwrap();
     tx_core.send(ConsensusMessage::Propose(b3)).await.unwrap();
 
-    let next = committee.address(&leader_keys(4).0).unwrap();
-    assert!(listener(next, Some(Bytes::from(expected))).await.is_ok());
+    while received.recv().await.expect("no vote for the block") != Bytes::from(expected.clone()) {}
 }
 
 #[tokio::test]
@@ -551,10 +552,12 @@ async fn h3_no_vote_for_a_block_of_the_old_epoch() {
     // thing the next leader hears from the node is its timeout of round 4 in the new epoch.
     let committee = committee_with_base_port(17_000);
     let blocks = chain(vec![leader_keys(1), leader_keys(2), leader_keys(3), leader_keys(4)]);
-    let mut received = frames(committee.address(&leader_keys(5).0).unwrap(), 1);
 
-    // We lead round 2, so our first vote stays with us; the other two go to the leaders of rounds 3 and 4.
-    let (name, secret) = leader_keys(2);
+    // A vote for block 4 would go to the leader of round 5 in the new table. That leader may also get our votes for
+    // the earlier blocks, so listen for what comes before the timeout.
+    let next = LeaderElector::new(Committee { epoch: EPOCH + 1, ..committee.clone() }).get_leader(5);
+    let mut received = frames(committee.address(&next).unwrap(), 4);
+    let (name, secret) = keys().into_iter().find(|(key, _)| *key != next).unwrap();
     let store_path = ".db_test_h3_no_vote_for_a_block_of_the_old_epoch";
     let (tx_core, mut rx_proposer, mut rx_commit) =
         core_with_epochs(name, secret, committee.clone(), store_path, 2);
@@ -564,10 +567,16 @@ async fn h3_no_vote_for_a_block_of_the_old_epoch() {
         tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
     }
 
-    let first = received.recv().await.unwrap();
-    match bincode::deserialize(&first).unwrap() {
-        ConsensusMessage::Timeout(timeout) => assert_eq!((timeout.round, timeout.epoch), (4, EPOCH + 1)),
-        message => panic!("Unexpected message {:?}", message),
+    loop {
+        let frame = received.recv().await.unwrap();
+        match bincode::deserialize(&frame).unwrap() {
+            ConsensusMessage::Timeout(timeout) => {
+                assert_eq!((timeout.round, timeout.epoch), (4, EPOCH + 1));
+                break;
+            }
+            ConsensusMessage::Vote(vote) => assert!(vote.round < 4, "a vote for a block of the old epoch"),
+            message => panic!("Unexpected message {:?}", message),
+        }
     }
 }
 

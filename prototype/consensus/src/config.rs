@@ -145,6 +145,10 @@ pub struct Authority {
     /// Certified (licensed) entity; uncertified ones share at most the class cap.
     #[serde(default = "default_true")]
     pub certified: bool,
+    /// The entity of this member: members of one beneficial owner share its cap and its punishments (None: an
+    /// entity of its own).
+    #[serde(default)]
+    pub entity: Option<u32>,
     /// G2: may lead in this epoch (false while excluded by the leader rule); set by the weight table, not by
     /// the configuration.
     #[serde(default = "default_true")]
@@ -181,6 +185,7 @@ impl Committee {
                         stake,
                         address,
                         certified: true,
+                        entity: None,
                         leader: true,
                     };
                     (name, authority)

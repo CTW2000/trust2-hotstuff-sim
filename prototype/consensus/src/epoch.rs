@@ -54,7 +54,10 @@ pub struct Epochs {
     config: EpochConfig,
     /// Members in a fixed order with their addresses and classes (from the configuration).
     members: Vec<(PublicKey, Authority)>,
-    /// G2 state from the ledger, by member index; holds the CapNorm base weights.
+    /// The entity of each member. CapNorm, G1 and G2 work on entities; a table splits each entity's weight among
+    /// its members.
+    entity_of: Vec<usize>,
+    /// G2 state from the ledger, by entity; holds the CapNorm base weights.
     reputation: Reputation,
     /// G1 graded punishment from the ledger; its base shares change only when a fork culprit is evicted.
     punishment: Punishment,
@@ -95,6 +98,34 @@ fn leader_index(
     members.binary_search_by_key(&name, |(n, _)| *n).ok()
 }
 
+/// The entity of each member, numbered in the order of their first members.
+fn entities(members: &[(PublicKey, Authority)]) -> Vec<usize> {
+    let mut known = HashMap::new();
+    let mut count = 0;
+    members
+        .iter()
+        .map(|(_, a)| {
+            let mut new = || {
+                count += 1;
+                count - 1
+            };
+            match a.entity {
+                Some(id) => *known.entry(id).or_insert_with(new),
+                None => new(),
+            }
+        })
+        .collect()
+}
+
+/// The members of an entity.
+fn members_of<'a>(
+    members: &'a [(PublicKey, Authority)],
+    entity_of: &'a [usize],
+    entity: usize,
+) -> impl Iterator<Item = &'a PublicKey> {
+    members.iter().zip(entity_of).filter(move |(_, e)| **e == entity).map(|((name, _), _)| name)
+}
+
 impl Epochs {
     /// `roster` is the committee of the configuration: `stake` is the base weight w_i.
     pub fn new(roster: &Committee, config: EpochConfig) -> Self {
@@ -104,18 +135,21 @@ impl Epochs {
             .map(|(name, a)| (*name, a.clone()))
             .collect();
         members.sort_by_key(|(name, _)| *name);
-        let classes: Vec<_> = members
-            .iter()
-            .map(|(_, a)| match a.certified {
-                true => Class::Licensed,
-                false => Class::Uncertified,
-            })
-            .collect();
-        let weights: Vec<u64> = members.iter().map(|(_, a)| a.stake as u64).collect();
+        let entity_of = entities(&members);
+        let count = entity_of.iter().max().map_or(0, |e| e + 1);
+        let mut classes = vec![Class::Licensed; count];
+        let mut weights = vec![0u64; count];
+        for ((_, a), e) in members.iter().zip(&entity_of) {
+            weights[*e] += a.stake as u64;
+            if !a.certified {
+                classes[*e] = Class::Uncertified;
+            }
+        }
         let (cap, u_max) = (ttru::from_ppm(config.entity_cap_ppm), ttru::from_ppm(config.class_cap_ppm));
         let base = ttru::base_weights(&classes, &weights, cap, u_max);
-        for ((name, _), b) in members.iter().zip(&base) {
+        for ((name, a), e) in members.iter().zip(&entity_of) {
             // NOTE: this log entry is used to weigh the reputation cuts by base weight (benchmark/p5.py).
+            let b = base[*e] * a.stake as u128 / (weights[*e] as u128).max(1);
             info!("T_tru base weight of {} is {} ppm", name, b * ttru::PPM / ttru::ONE);
         }
         let largest = base.iter().copied().max().unwrap_or(0);
@@ -130,6 +164,7 @@ impl Epochs {
         let mut epochs = Self {
             config,
             members,
+            entity_of,
             reputation: Reputation::new(base, G2Config::default()),
             punishment,
             current: roster.epoch,
@@ -150,7 +185,7 @@ impl Epochs {
     /// suspensions (z, G1); leadership barred by the G2 exclusions and by G1 (L1, suspended, queued, evicted).
     fn make_table(&self, epoch: EpochNumber) -> Committee {
         let z = self.punishment.z();
-        let stakes = self.reputation.stakes_on(self.punishment.base(), &z);
+        let stakes = self.split(&self.reputation.stakes_on(self.punishment.base(), &z));
         let excluded = self.reputation.excluded();
         let bars = self.punishment.bars();
         Committee {
@@ -160,9 +195,10 @@ impl Epochs {
                 .enumerate()
                 .zip(stakes)
                 .map(|((i, (name, a)), stake)| {
+                    let e = self.entity_of[i];
                     let authority = Authority {
                         stake: stake as Stake,
-                        leader: !excluded[i] && !bars[i],
+                        leader: !excluded[e] && !bars[e],
                         ..a.clone()
                     };
                     (*name, authority)
@@ -171,6 +207,30 @@ impl Epochs {
             epoch,
             handover: None,
         }
+    }
+
+    /// The stakes of the members: each entity's stake, in proportion to their base weights.
+    fn split(&self, stakes: &[u64]) -> Vec<u64> {
+        let mut totals = vec![0u64; stakes.len()];
+        for ((_, a), e) in self.members.iter().zip(&self.entity_of) {
+            totals[*e] += a.stake as u64;
+        }
+        let mut left = stakes.to_vec();
+        let mut split: Vec<u64> = self
+            .members
+            .iter()
+            .zip(&self.entity_of)
+            .map(|((_, a), e)| {
+                let stake = stakes[*e] * a.stake as u64 / totals[*e].max(1);
+                left[*e] -= stake;
+                stake
+            })
+            .collect();
+        // What the rounding leaves goes to the first member of the entity.
+        for (i, e) in self.entity_of.iter().enumerate() {
+            split[i] += std::mem::take(&mut left[*e]);
+        }
+        split
     }
 
     /// A committed block, in chain order: the AT accusations it carries, and the omission proofs that hold on
@@ -198,7 +258,7 @@ impl Epochs {
                 info!("G1: {:?} on the ledger", evidence);
                 let kind = if evidence.is_safety() { Kind::Safety } else { Kind::Liveness };
                 let malicious = self.config.governance_malicious;
-                self.punishment.record(i, kind, evidence.epoch(), block.epoch, malicious, false);
+                self.punishment.record(self.entity_of[i], kind, evidence.epoch(), block.epoch, malicious, false);
             }
         }
         for x in &block.otxs {
@@ -288,8 +348,9 @@ impl Epochs {
         let horizon = (terminal.round + 1).saturating_sub(self.reputation.config().lag);
         let before = self.reputation.r_ppm().to_vec();
         let (tables, first_rounds, members) = (&self.tables, &self.first_rounds, &self.members);
+        let entity_of = &self.entity_of;
         let events = self.reputation.advance(horizon, |round, accused_in| {
-            leader_index(tables, first_rounds, members, round, accused_in)
+            leader_index(tables, first_rounds, members, round, accused_in).map(|i| entity_of[i])
         });
         for event in events {
             let (what, k, round) = match event {
@@ -298,13 +359,17 @@ impl Epochs {
                 Event::Queue(k, u) => ("convicted, queued", k, u),
                 Event::Drop(k, u) => ("dropped from the queue", k, u),
             };
-            info!("G2: {} {} at round {}", self.members[*k].0, what, round);
+            for name in members_of(members, entity_of, *k) {
+                info!("G2: {} {} at round {}", name, what, round);
+            }
         }
         let done = self.reputation.done();
         self.committed = self.committed.split_off(&(done + 1));
         for (k, (old, new)) in before.iter().zip(self.reputation.r_ppm()).enumerate() {
             if old != new {
-                info!("G2: reputation of {} is {} ppm", self.members[k].0, new);
+                for name in members_of(&self.members, &self.entity_of, k) {
+                    info!("G2: reputation of {} is {} ppm", name, new);
+                }
             }
         }
 
@@ -319,7 +384,9 @@ impl Epochs {
                 G1Event::Evict(i, k) => ("evicted".to_string(), i, k),
                 G1Event::Downgrade(i, k) => ("downgraded by governance".to_string(), i, k),
             };
-            info!("G1: {} {} at epoch {}", self.members[i].0, what, k);
+            for name in members_of(&self.members, &self.entity_of, i) {
+                info!("G1: {} {} at epoch {}", name, what, k);
+            }
         }
 
         // The child of the terminal block still belongs to this epoch (the commit proof certifies it, at the

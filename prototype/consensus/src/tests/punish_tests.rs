@@ -133,3 +133,17 @@ fn one_member_of_a_small_committee_is_not_correlated() {
     assert_eq!(levels(&[0]), vec![2]);
     assert_eq!(levels(&[0, 1]).last(), Some(&3));
 }
+
+#[test]
+fn evidence_older_than_the_lookback_does_not_punish() {
+    // Signed in epoch 1. Put on the ledger within the 64 epochs of the look-back it counts, later it does not.
+    let levels = |chain_epoch: EpochNumber| -> usize {
+        let (classes, weights) = (vec![Class::Licensed; 4], vec![1; 4]);
+        let mut punishment = Punishment::new(classes, weights, ONE, ONE, PunishConfig::default());
+        punishment.record(0, Kind::Safety, 1, chain_epoch, false, false);
+        let events = punishment.update(chain_epoch + 1);
+        events.iter().filter(|e| matches!(e, G1Event::Level(..))).count()
+    };
+    assert_eq!(levels(65), 1);
+    assert_eq!(levels(66), 0);
+}

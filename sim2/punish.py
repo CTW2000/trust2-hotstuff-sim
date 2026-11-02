@@ -84,6 +84,8 @@ class GradedPunishment:
 
     # ---- evidence intake -------------------------------------------------------------------------
     def _add(self, i, kind, es, ec, mal=True, fork=False):
+        if ec - es > self.lookback:                     # evidence is valid for the look-back
+            return
         key = (int(i), kind, int(es))
         if key in self.windows:
             it = self.items[self.windows[key]]
