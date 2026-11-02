@@ -1,5 +1,5 @@
 use super::*;
-use crate::common::{block, committee, keys, qc, EPOCH};
+use crate::common::{block, committee, keys, qc, signed_otx, unsigned_otx, EPOCH};
 use crypto::SecretKey;
 use crypto::generate_keypair;
 use rand::rngs::StdRng;
@@ -239,8 +239,8 @@ fn block_accusations_are_bounded() {
 
 // ---- G2: inclusion attestations (prototype/DESIGN.md §12.4) ------------------------------------------------
 
-fn otx(account: u64, nonce: u64, tag: u8) -> Otx {
-    Otx { account, nonce, data: [tag; 32] }
+fn otx(owner: u8, nonce: u64, tag: u8) -> Otx {
+    signed_otx(owner, nonce, tag)
 }
 
 // Attestations of round `round` by the first three fixture keys, each listing the given observed transactions.
@@ -289,11 +289,11 @@ fn attestation_list_is_bounded_and_distinct() {
     // The bound keeps one attestation (and the omission proofs built from it) small; distinct entries make "the
     // weight listing x" the same counted per entry (Inclusion::omissions) or per author (OmitProof::verify).
     let (name, secret) = keys().remove(0);
-    let distinct: Vec<Digest> = (0..MAX_ATTESTATION_OTXS as u64).map(|n| otx(1, n, 0).id()).collect();
+    let distinct: Vec<Digest> = (0..MAX_ATTESTATION_OTXS as u64).map(|n| unsigned_otx(1, n, 0).id()).collect();
     assert!(Attestation::new_from_key(4, distinct.clone(), name, &secret).verify(&committee()).is_ok());
 
     let mut over = distinct;
-    over.push(otx(1, MAX_ATTESTATION_OTXS as u64, 0).id());
+    over.push(unsigned_otx(1, MAX_ATTESTATION_OTXS as u64, 0).id());
     assert!(matches!(
         Attestation::new_from_key(4, over, name, &secret).verify(&committee()),
         Err(ConsensusError::MalformedAttestation(4))
@@ -491,7 +491,7 @@ fn block_header_hashes_to_the_block_digest() {
     let voter = keys().remove(0);
     let a = Vote::new_from_key(Digest([1; 32]), 5, voter.0, &voter.1);
     let b = Vote::new_from_key(Digest([2; 32]), 5, voter.0, &voter.1);
-    let otx = Otx { account: 1, nonce: 1, data: [3; 32] };
+    let otx = unsigned_otx(1, 1, 3);
     let block = Block {
         tc: Some(tc(5, &[(qc(), false), (qc(), true), (qc(), false)])),
         accusations: vec![Accusation { round: 3, epoch: EPOCH, votes: Vec::new() }],
@@ -542,4 +542,34 @@ fn handover_leader_may_propose_without_weight() {
     assert!(block.verify(&committee).is_ok());
     let later = Block::new_from_key(qc(), name, 4, Vec::new(), &secret);
     assert!(later.verify(&committee).is_err());
+}
+
+#[test]
+fn a_transaction_must_be_signed_by_its_owner() {
+    // Without the owner's key nobody can make a transaction of that owner, so a censor cannot void a victim's
+    // transaction with a conflicting one of its own making.
+    let real = otx(1, 7, 0);
+    assert!(real.verify().is_ok());
+    let forged = Otx { data: [9; 32], ..real.clone() };
+    assert!(forged.verify().is_err());
+    let (mallory, secret) = keys().remove(0);
+    let claimed = Otx { owner: real.owner, ..Otx::new_from_key(mallory, 7, [9; 32], &secret) };
+    assert!(claimed.verify().is_err());
+
+    let (name, secret) = leader();
+    let carrying = |x: Otx| Block { otxs: vec![x], ..Block::new_from_key(qc(), name, 6, Vec::new(), &secret) };
+    let signed = |block: Block| Block { signature: Signature::new(&block.digest(), &secret), ..block };
+    assert!(signed(carrying(real.clone())).verify(&committee()).is_ok());
+    assert!(signed(carrying(forged.clone())).verify(&committee()).is_err());
+
+    // A proof of a forged transaction fails even with every attestation in order.
+    let proof = |x: Otx| {
+        let attestations = attestations(2, &vec![vec![x.id()]; 3])
+            .into_iter()
+            .map(|a| (a.author, a.signature, a.otxs))
+            .collect();
+        OmitProof { round: 2, epoch: EPOCH, block: Digest([4; 32]), otx: x, attestations }
+    };
+    assert!(proof(real).verify(&committee()).is_ok());
+    assert!(proof(forged).verify(&committee()).is_err());
 }

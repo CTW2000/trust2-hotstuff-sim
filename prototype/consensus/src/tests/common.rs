@@ -16,6 +16,17 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 // Epoch of the fixture committee.
 pub const EPOCH: EpochNumber = 100;
 
+// An observed transaction of owner `owner`, signed by it; `tag` tells apart two with the same nonce.
+pub fn signed_otx(owner: u8, nonce: u64, tag: u8) -> Otx {
+    let (name, secret) = generate_keypair(&mut StdRng::from_seed([owner + 1; 32]));
+    Otx::new_from_key(name, nonce, [tag; 32], &secret)
+}
+
+// The same without a signature, for what does not check it. The account of owner `n` is divisible by 4 if `n` is.
+pub fn unsigned_otx(owner: u8, nonce: u64, tag: u8) -> Otx {
+    Otx { owner: PublicKey([owner; 32]), nonce, data: [tag; 32], signature: Signature::default() }
+}
+
 // Fixture.
 pub fn keys() -> Vec<(PublicKey, SecretKey)> {
     let mut rng = StdRng::from_seed([0; 32]);

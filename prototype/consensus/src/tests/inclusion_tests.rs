@@ -1,10 +1,10 @@
 use super::*;
-use crate::common::{committee, keys, EPOCH};
+use crate::common::{committee, keys, signed_otx, unsigned_otx, EPOCH};
 
 const GUARD: Duration = Duration::from_millis(100);
 
-fn otx(account: u64, nonce: u64) -> Otx {
-    Otx { account, nonce, data: [0; 32] }
+fn otx(owner: u8, nonce: u64) -> Otx {
+    unsigned_otx(owner, nonce, 0)
 }
 
 fn block(round: Round, otxs: Vec<Otx>) -> Block {
@@ -56,7 +56,7 @@ fn leader_selects_oldest_first_without_conflicts() {
 
 #[test]
 fn certified_block_omitting_a_due_transaction_gives_a_proof() {
-    let x = otx(1, 1);
+    let x = signed_otx(1, 1, 0);
     let check = |inclusion: &mut Inclusion, certified: Block| -> Vec<OmitProof> {
         let mut proofs = attest_all(inclusion, 5, 3, &[x.id()]);
         proofs.extend(inclusion.certify(&certified, &committee()));
@@ -82,13 +82,15 @@ fn certified_block_omitting_a_due_transaction_gives_a_proof() {
     assert!(inclusion.certify(&b5, &committee()).is_empty());
     assert_eq!(attest_all(&mut inclusion, 5, 3, &[x.id()]).len(), 1);
 
-    // No proof: included, two thirds not exceeded, block full, conflicting transaction in it or before it.
+    // A full block excuses nothing: what is due always fits.
+    let full: Vec<_> = (1..=MAX_OTXS as u64).map(|n| otx(9, n)).collect();
+    assert_eq!(check(&mut fresh(), block(5, full)).len(), 1);
+
+    // No proof: included, two thirds not exceeded, conflicting transaction in it or before it.
     assert!(check(&mut fresh(), block(5, vec![x.clone()])).is_empty());
     let mut inclusion = fresh();
     assert!(attest_all(&mut inclusion, 5, 2, &[x.id()]).is_empty());
     assert!(inclusion.certify(&b5, &committee()).is_empty());
-    let full: Vec<_> = (0..MAX_OTXS as u64).map(|n| otx(9, n)).collect();
-    assert!(check(&mut fresh(), block(5, full)).is_empty());
     let rival = Otx { data: [7; 32], ..x.clone() };
     assert!(check(&mut fresh(), block(5, vec![rival.clone()])).is_empty());
     let mut inclusion = fresh();
@@ -225,4 +227,45 @@ fn censor_ignores_victim_transactions() {
     assert!(inclusion.receive(other.clone(), t0));
     assert_eq!(inclusion.select(), vec![other.clone()]);
     assert_eq!(inclusion.to_attest(t0 + GUARD), vec![other.id()]);
+}
+
+#[test]
+fn the_watermark_spends_nonces_and_frees_what_it_covers() {
+    let (old, older, kept) = (otx(1, 4), otx(1, 2), otx(2, 4));
+    let mut inclusion = Inclusion::new(GUARD, false);
+    let t0 = Instant::now();
+    assert!(inclusion.receive(old.clone(), t0));
+    assert!(inclusion.receive(kept.clone(), t0));
+
+    // Nonce 5 of the owner is committed: its lower nonces are spent, pending or not, and only its own are.
+    let b5 = block(5, vec![otx(1, 5)]);
+    inclusion.certify(&b5, &committee());
+    inclusion.commit(&b5, t0);
+    assert_eq!(inclusion.select(), vec![kept.clone()]);
+    assert!(!inclusion.receive(older, t0));
+    assert!(!inclusion.receive(otx(1, 5), t0));
+    assert!(inclusion.receive(otx(1, 6), t0));
+
+    // Past the settled rounds nothing is left of them but the watermark.
+    inclusion.cleanup(6);
+    assert!(inclusion.included.is_empty() && inclusion.taken.is_empty());
+    assert!(!inclusion.known.contains_key(&old.id()));
+    assert!(inclusion.known.contains_key(&kept.id()));
+}
+
+#[test]
+fn a_spent_transaction_of_an_abandoned_block_stays_out() {
+    // Block 3 holds nonce 4 of an owner whose nonce 5 is already settled. When block 3 is abandoned, nothing of it is
+    // pending again: that nonce is spent.
+    let (spent, kept) = (otx(1, 4), otx(2, 1));
+    let t0 = Instant::now();
+    let mut inclusion = Inclusion::new(GUARD, false);
+    inclusion.receive(spent.clone(), t0);
+    inclusion.receive(kept.clone(), t0);
+    let b3 = block(3, vec![spent, kept.clone()]);
+    inclusion.certify(&b3, &committee());
+    let b2 = block(2, vec![otx(1, 5)]);
+    inclusion.commit(&b2, t0);
+    inclusion.commit(&block(4, vec![]), t0);
+    assert_eq!(inclusion.select(), vec![kept]);
 }

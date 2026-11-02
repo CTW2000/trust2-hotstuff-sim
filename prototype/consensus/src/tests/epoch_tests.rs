@@ -1,8 +1,8 @@
 use super::*;
-use crate::common::{committee, keys, EPOCH};
+use crate::common::{committee, keys, unsigned_otx, EPOCH};
 use crate::config::Parameters;
 use crate::leader::leader;
-use crate::messages::{Accusation, Evidence, OmitProof, Otx, SignedTimeout, Timeout, Vote, QC};
+use crate::messages::{Accusation, Evidence, OmitProof, Otx, SignedTimeout, Timeout, Vote, MAX_OTXS, QC};
 
 fn config(length: Round) -> EpochConfig {
     EpochConfig {
@@ -62,7 +62,7 @@ fn single_epoch_ledger_keeps_only_a_window() {
     assert!(single.reputation.facts().len() as Round <= SINGLE_EPOCH_LEDGER_WINDOW + 1);
     assert_eq!(multi.committed.len() as Round, rounds);
 
-    let x = Otx { account: 1, nonce: 1, data: [0; 32] };
+    let x = unsigned_otx(1, 1, 0);
     let recent = rounds - 10;
     let proof = OmitProof {
         round: recent,
@@ -255,8 +255,8 @@ fn with_otxs(round: Round, otxs: Vec<Otx>) -> Block {
 fn omission_proofs_are_checked_on_the_ledger() {
     // G2 (DESIGN.md §12.4): an omission proof of round 5 counts only if the committed block of round 5 is the
     // one it names and leaves the transaction out without an exemption, and it was not included earlier.
-    let otx = |account, nonce, tag| Otx { account, nonce, data: [tag; 32] };
-    let (x, rival) = (otx(1, 1, 0), otx(1, 1, 1));
+    let otx = unsigned_otx;
+    let (x, rival) = (otx(1, 3, 0), otx(1, 3, 1));
     let counts = |earlier: Vec<Block>, b5: Option<Block>, named: Option<Digest>| -> bool {
         let mut epochs = Epochs::new(&committee(), config(100));
         for b in earlier.iter().chain(b5.iter()) {
@@ -272,11 +272,27 @@ fn omission_proofs_are_checked_on_the_ledger() {
     assert!(!counts(vec![], Some(b5.clone()), Some(Digest::default())), "another block");
     assert!(!counts(vec![], None, Some(b5.digest())), "no committed block of the round");
     assert!(!counts(vec![], Some(with_otxs(5, vec![x.clone()])), None), "included");
-    let full: Vec<_> = (0..MAX_OTXS as u64).map(|n| otx(9, n, 0)).collect();
-    assert!(!counts(vec![], Some(with_otxs(5, full)), None), "full block");
+    let full: Vec<_> = (1..=MAX_OTXS as u64).map(|n| otx(9, n, 0)).collect();
+    assert!(counts(vec![], Some(with_otxs(5, full)), None), "a full block excuses nothing");
     assert!(!counts(vec![], Some(with_otxs(5, vec![rival.clone()])), None), "conflicting transaction in it");
     assert!(!counts(vec![with_otxs(3, vec![x.clone()])], Some(b5.clone()), None), "included earlier");
-    assert!(!counts(vec![with_otxs(4, vec![rival])], Some(b5), None), "conflict included earlier");
+    assert!(!counts(vec![with_otxs(4, vec![rival])], Some(b5.clone()), None), "conflict included earlier");
+    assert!(!counts(vec![with_otxs(3, vec![otx(1, 7, 0)])], Some(b5.clone()), None), "nonce spent earlier");
+    assert!(counts(vec![with_otxs(3, vec![otx(1, 2, 0)])], Some(b5), None), "a lower nonce spends nothing above it");
+    assert!(counts(vec![], Some(with_otxs(5, vec![otx(1, 7, 0)])), None), "a higher nonce in the block excuses nothing");
+}
+
+#[test]
+fn the_watermark_outlives_the_blocks_it_covers() {
+    // The ledger keeps no record per transaction: once a round is processed, one number per owner stands for it.
+    let mut epochs = Epochs::new(&committee(), config(10));
+    epochs.record(&with_otxs(3, vec![unsigned_otx(1, 5, 0), unsigned_otx(1, 2, 0), unsigned_otx(2, 1, 0)]));
+    for k in 1..=3 {
+        epochs.enter_next(&block(EPOCH + k - 1, 10 * k as Round));
+    }
+    assert!(epochs.committed.is_empty());
+    assert_eq!(epochs.watermark.len(), 2);
+    assert_eq!(epochs.watermark[&unsigned_otx(1, 0, 0).owner], 5);
 }
 
 #[test]

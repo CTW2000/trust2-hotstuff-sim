@@ -1,5 +1,5 @@
 use super::*;
-use crate::common::{chain, committee, committee_with_base_port, keys, listener, EPOCH};
+use crate::common::{chain, committee, committee_with_base_port, keys, listener, signed_otx, EPOCH};
 use crate::leader::LeaderElector;
 use crypto::{SecretKey, Signature};
 use futures::future::try_join_all;
@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::channel;
+use tokio::time::{sleep, timeout};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 fn core(
@@ -629,12 +630,169 @@ async fn a_commit_proof_inside_a_timeout_commits() {
     }
 }
 
+/// The leader of round 1 on `store`, not running: each call stands for one run of the same node.
+fn node_on(store: Store) -> Core {
+    node_with_proposer(store).0
+}
+
+fn node_with_proposer(store: Store) -> (Core, Receiver<ProposerMessage>) {
+    let (name, secret) = leader_keys(1);
+    let (tx_loopback, rx_loopback) = channel(1);
+    let (tx_mempool, _rx_mempool) = channel(1);
+    let (_tx_message, rx_message) = channel(1);
+    let (tx_proposer, rx_proposer) = channel(1);
+    let (tx_commit, _rx_commit) = channel(1);
+    let synchronizer = Synchronizer::new(name, committee(), store.clone(), tx_loopback.clone(), 100_000);
+    let core = Core::new(
+        name,
+        committee(),
+        EpochConfig {
+            length: 0,
+            entity_cap_ppm: 1_000_000,
+            class_cap_ppm: 1_000_000,
+            l_max_ppm: 100_000,
+            governance_malicious: false,
+        },
+        Inclusion::new(Duration::from_millis(500), false),
+        Faults::default(),
+        SignatureService::new(secret),
+        store.clone(),
+        MempoolDriver::new(store, tx_mempool, tx_loopback),
+        synchronizer,
+        /* timeout_delay */ 100,
+        rx_message,
+        rx_loopback,
+        tx_proposer,
+        tx_commit,
+    );
+    (core, rx_proposer)
+}
+
+fn store_at(path: &str) -> Store {
+    let _ = fs::remove_dir_all(path);
+    Store::new(path).unwrap()
+}
+
+#[tokio::test]
+async fn r8_a_restarted_node_does_not_vote_twice() {
+    // A leader that sends two blocks of one round: the vote for the first is remembered across a restart.
+    let store = store_at(".db_test_r8_a_restarted_node_does_not_vote_twice");
+    let (leader, secret) = leader_keys(1);
+    let block = Block::new_from_key(QC::genesis(), leader, 1, vec![Digest([1; 32])], &secret);
+    let rival = Block::new_from_key(QC::genesis(), leader, 1, vec![Digest([2; 32])], &secret);
+
+    let mut first = node_on(store.clone());
+    assert!(first.make_vote(&block).await.is_some());
+
+    let mut second = node_on(store.clone());
+    assert!(second.make_vote(&rival).await.is_some(), "without the store a new run would vote again");
+    let mut second = node_on(store);
+    assert!(second.restore().await);
+    assert_eq!((second.round, second.last_voted_round), (1, 1));
+    assert!(second.make_vote(&rival).await.is_none());
+}
+
+#[tokio::test]
+async fn r8_a_restarted_node_reports_nr_0_after_voting() {
+    // It voted in the round, so its first timeout after the restart must not claim that no proposal arrived.
+    let store = store_at(".db_test_r8_a_restarted_node_reports_nr_0_after_voting");
+    let (leader, secret) = leader_keys(1);
+    let block = Block::new_from_key(QC::genesis(), leader, 1, Vec::new(), &secret);
+    assert!(node_on(store.clone()).make_vote(&block).await.is_some());
+
+    let mut restarted = node_on(store);
+    assert!(restarted.restore().await);
+    restarted.local_timeout_round().await.unwrap();
+    let timeout = restarted.last_timeout.clone().unwrap();
+    assert_eq!((timeout.round, timeout.nr), (1, false));
+}
+
+#[tokio::test]
+async fn r8_a_restarted_node_resends_its_timeout() {
+    // R3 across a restart: the timeout of the round, not a second one that could say something else.
+    let store = store_at(".db_test_r8_a_restarted_node_resends_its_timeout");
+    let mut first = node_on(store.clone());
+    first.local_timeout_round().await.unwrap();
+    let signed = first.last_timeout.clone().unwrap();
+    assert!(signed.nr);
+
+    let mut restarted = node_on(store);
+    assert!(restarted.restore().await);
+    assert_eq!(restarted.last_timeout.as_ref().map(|t| t.digest()), Some(signed.digest()));
+    restarted.local_timeout_round().await.unwrap();
+    assert_eq!(restarted.last_timeout.as_ref().unwrap().digest(), signed.digest());
+
+    // Until the chain is replayed the table is behind the epoch of what was signed.
+    let later = Timeout { epoch: EPOCH + 1, ..signed };
+    restarted.last_timeout = Some(later.clone());
+    restarted.local_timeout_round().await.unwrap();
+    assert_eq!(restarted.last_timeout.unwrap().digest(), later.digest());
+}
+
+#[tokio::test]
+async fn r8_a_restarted_leader_does_not_propose_again() {
+    // The leader of round 1 proposes when it boots, but not if it has been through that round before.
+    let store = store_at(".db_test_r8_a_restarted_leader_does_not_propose_again");
+    let (mut fresh, mut rx_proposer) = node_with_proposer(store.clone());
+    tokio::spawn(async move { fresh.run().await });
+    assert!(matches!(rx_proposer.recv().await, Some(ProposerMessage::Make { .. })));
+    sleep(Duration::from_millis(150)).await; // its timeout of round 1 is remembered
+
+    let (mut restarted, mut rx_proposer) = node_with_proposer(store);
+    tokio::spawn(async move { restarted.run().await });
+    assert!(timeout(Duration::from_millis(50), rx_proposer.recv()).await.is_err());
+}
+
+#[tokio::test]
+async fn r8_the_high_qc_survives_a_restart() {
+    let store = store_at(".db_test_r8_the_high_qc_survives_a_restart");
+    let b1 = chain(vec![leader_keys(1)]).pop().unwrap();
+    let qc = qc_for(&b1);
+    let mut first = node_on(store.clone());
+    first.update_high_qc(&qc);
+    first.last_voted_round = 5;
+    first.remember().await;
+
+    let mut restarted = node_on(store);
+    assert!(restarted.restore().await);
+    assert_eq!(restarted.high_qc.round, 1);
+    assert_eq!(restarted.round, 5);
+}
+
+#[tokio::test]
+async fn r8_a_fresh_store_is_a_fresh_start() {
+    let mut node = node_on(store_at(".db_test_r8_a_fresh_store_is_a_fresh_start"));
+    assert!(!node.restore().await);
+    assert_eq!((node.round, node.last_voted_round), (1, 0));
+}
+
+#[tokio::test]
+async fn a_forged_transaction_is_neither_kept_nor_forwarded() {
+    let committee = committee_with_base_port(17_300);
+    let (name, secret) = keys().pop().unwrap();
+    let peer = keys().remove(0).0;
+    let mut received = frames(committee.address(&peer).unwrap(), 1);
+    let store_path = ".db_test_a_forged_transaction_is_neither_kept_nor_forwarded";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+
+    let real = signed_otx(1, 1, 0);
+    let forged = Otx { data: [9; 32], ..real.clone() };
+    tx_core.send(ConsensusMessage::Otx(forged)).await.unwrap();
+    tx_core.send(ConsensusMessage::Otx(real.clone())).await.unwrap();
+
+    match bincode::deserialize(&received.recv().await.unwrap()).unwrap() {
+        ConsensusMessage::Otx(x) => assert_eq!(x, real),
+        message => panic!("Unexpected message {:?}", message),
+    }
+}
+
 #[tokio::test]
 async fn a_transaction_of_an_abandoned_block_is_proposed_again() {
     // 2.1: block 1 holds x and gets certified, but the TC of round 2 does not report that QC and the chain goes on
     // from genesis. The QCs of blocks 3 and 4 commit block 3: block 1 is abandoned, and the leader of round 6, which
     // had counted x as included, proposes it again.
-    let x = Otx { account: 1, nonce: 1, data: [0; 32] };
+    let x = signed_otx(1, 1, 0);
     let (l1, l1_secret) = leader_keys(1);
     let b1 = Block::new_from_key_full(
         QC::genesis(),

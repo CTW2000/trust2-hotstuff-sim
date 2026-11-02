@@ -1,7 +1,7 @@
 use crate::config::{Committee, EpochNumber, Stake};
 use crate::consensus::Round;
 use crate::error::{ConsensusError, ConsensusResult};
-use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
+use crypto::{Digest, Hash, PublicKey, SecretKey, Signature, SignatureService};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use serde::{Deserialize, Serialize};
@@ -15,9 +15,8 @@ pub mod messages_tests;
 
 /// At most this many AT accusations per block.
 pub const MAX_ACCUSATIONS: usize = 32;
-/// At most this many observed transactions per block (about 49 KB); a full block is exempt from omissions. Far above
-/// any load of the experiments, as the simulator's unbounded capacity. Observed transactions are unsigned, so this
-/// only keeps blocks bounded: a censor can still fill its block to earn the exemption (DESIGN.md §12.4).
+/// At most this many observed transactions per block (about 140 KB). A full block gets no exemption from omission
+/// proofs: attestations list at most MAX_ATTESTATION_OTXS, far fewer, so what is due always fits (DESIGN.md §12.4).
 pub const MAX_OTXS: usize = 1024;
 /// At most this many omission proofs per block.
 pub const MAX_OMISSIONS: usize = 32;
@@ -122,6 +121,9 @@ impl Block {
                 && self.evidence.len() <= MAX_EVIDENCE,
             ConsensusError::MalformedBlock(self.digest())
         );
+        for x in &self.otxs {
+            x.verify()?;
+        }
 
         // Check the signature. The embedded QC and TC may belong to the previous epoch (the first block of
         // an epoch carries the commit proof of the last one): the caller verifies them, and the accusations,
@@ -649,26 +651,53 @@ impl fmt::Debug for Accusation {
     }
 }
 
-/// An observed transaction (G2 inclusion attestations, DESIGN.md §12.4). Two with the same account and nonce
-/// conflict: at most one of them is valid.
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+/// An observed transaction (G2 inclusion attestations, DESIGN.md §12.4), signed by its owner. Two with the same
+/// owner and nonce conflict: at most one of them is valid, and once a nonce is on the ledger every nonce of that
+/// owner up to it is spent.
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Otx {
-    pub account: u64,
+    pub owner: PublicKey,
     pub nonce: u64,
     pub data: [u8; 32],
+    pub signature: Signature,
 }
 
+impl PartialEq for Otx {
+    fn eq(&self, other: &Self) -> bool {
+        self.id() == other.id()
+    }
+}
+
+impl Eq for Otx {}
+
 impl Otx {
+    pub fn new_from_key(owner: PublicKey, nonce: u64, data: [u8; 32], secret: &SecretKey) -> Self {
+        let otx = Self { owner, nonce, data, signature: Signature::default() };
+        let signature = Signature::new(&otx.id(), secret);
+        Self { signature, ..otx }
+    }
+
     pub fn id(&self) -> Digest {
         let mut hasher = Sha512::new();
-        hasher.update(self.account.to_le_bytes());
+        hasher.update(b"OTX");
+        hasher.update(self.owner.0);
         hasher.update(self.nonce.to_le_bytes());
         hasher.update(self.data);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 
-    pub fn key(&self) -> (u64, u64) {
-        (self.account, self.nonce)
+    pub fn key(&self) -> (PublicKey, u64) {
+        (self.owner, self.nonce)
+    }
+
+    /// A number for the owner's account (the experiments pick their victims by it).
+    pub fn account(&self) -> u64 {
+        u64::from_le_bytes(self.owner.0[..8].try_into().unwrap())
+    }
+
+    pub fn verify(&self) -> ConsensusResult<()> {
+        self.signature.verify(&self.id(), &self.owner)?;
+        Ok(())
     }
 }
 
@@ -761,6 +790,7 @@ pub struct OmitProof {
 impl OmitProof {
     pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
         check_epoch(self.epoch, committee)?;
+        self.otx.verify()?;
 
         let id = self.otx.id();
         let mut weight = 0;

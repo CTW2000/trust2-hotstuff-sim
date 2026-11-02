@@ -15,7 +15,7 @@
 use crate::config::{Authority, Committee, EpochNumber, Stake};
 use crate::consensus::Round;
 use crate::leader::leader;
-use crate::messages::{Block, OmitProof, MAX_OTXS};
+use crate::messages::{Block, OmitProof};
 use crate::punish::{G1Event, Kind, PunishConfig, Punishment};
 use crate::reputation::{Event, G2Config, Reputation};
 use crate::ttru::{self, Class};
@@ -68,10 +68,9 @@ pub struct Epochs {
     /// First round of each kept epoch (a round's leader comes from the table of its epoch).
     first_rounds: BTreeMap<EpochNumber, Round>,
     /// G2 inclusion attestations on the ledger (DESIGN.md §12.4): committed blocks of the rounds not yet
-    /// processed, and the round where each observed transaction and conflict key was first included.
+    /// processed, and for the rounds before them the highest nonce of each owner.
     committed: BTreeMap<Round, LedgerBlock>,
-    included: HashMap<Digest, Round>,
-    taken: HashMap<(u64, u64), Round>,
+    watermark: HashMap<PublicKey, u64>,
 }
 
 /// What an omission proof is checked against: a committed block's digest and observed transactions.
@@ -79,7 +78,7 @@ struct LedgerBlock {
     digest: Digest,
     author: PublicKey,
     otxs: HashSet<Digest>,
-    keys: HashSet<(u64, u64)>,
+    keys: HashSet<(PublicKey, u64)>,
 }
 
 /// The member that led `round`: by the table of the epoch its accusation was made in (`accused_in`), which is the
@@ -172,8 +171,7 @@ impl Epochs {
             tables: BTreeMap::new(),
             first_rounds: BTreeMap::new(),
             committed: BTreeMap::new(),
-            included: HashMap::new(),
-            taken: HashMap::new(),
+            watermark: HashMap::new(),
         };
         let first = epochs.make_table(roster.epoch);
         epochs.tables.insert(roster.epoch, first);
@@ -261,45 +259,63 @@ impl Epochs {
                 self.punishment.record(self.entity_of[i], kind, evidence.epoch(), block.epoch, malicious, false);
             }
         }
-        for x in &block.otxs {
-            self.included.entry(x.id()).or_insert(block.round);
-            self.taken.entry(x.key()).or_insert(block.round);
-        }
+        let entry = LedgerBlock {
+            digest: block.digest(),
+            author: block.author,
+            otxs: block.otxs.iter().map(|x| x.id()).collect(),
+            keys: block.otxs.iter().map(|x| x.key()).collect(),
+        };
         if block.round > self.reputation.done() {
-            let entry = LedgerBlock {
-                digest: block.digest(),
-                author: block.author,
-                otxs: block.otxs.iter().map(|x| x.id()).collect(),
-                keys: block.otxs.iter().map(|x| x.key()).collect(),
-            };
             self.committed.insert(block.round, entry);
+        } else {
+            self.raise_watermark(&entry);
         }
         // A single-epoch run has no handover to process these facts and then forget them (enter_next), so keep
         // only the recent rounds. The horizon comes from the ledger (the block just recorded), so every node
         // keeps the same.
         if self.single_epoch() {
             let horizon = block.round.saturating_sub(SINGLE_EPOCH_LEDGER_WINDOW);
-            self.committed = self.committed.split_off(&horizon);
+            self.forget_blocks_before(horizon);
             self.reputation.forget_before(horizon);
         }
     }
 
-    /// An omission proof holds if the committed block of its round is the certified block it names, which
-    /// leaves the transaction out without an exemption (not full, no conflicting transaction in it), and the
-    /// transaction and its conflict key were not included earlier.
+    fn raise_watermark(&mut self, block: &LedgerBlock) {
+        for (owner, nonce) in &block.keys {
+            let highest = self.watermark.entry(*owner).or_insert(0);
+            *highest = (*highest).max(*nonce);
+        }
+    }
+
+    /// Committed blocks before `round` are only kept as the watermark from here on.
+    fn forget_blocks_before(&mut self, round: Round) {
+        let kept = self.committed.split_off(&round);
+        for (_, block) in std::mem::replace(&mut self.committed, kept) {
+            self.raise_watermark(&block);
+        }
+    }
+
+    /// An omission proof holds if the committed block of its round is the certified block it names and leaves the
+    /// transaction out: not in it, no conflicting transaction in it, and still valid, its nonce above its owner's
+    /// highest before that block. A higher nonce in the block itself does not excuse it: the leader could have
+    /// included both.
     fn omission_holds(&self, omission: &OmitProof) -> bool {
         let block = match self.committed.get(&omission.round) {
             Some(block) => block,
             None => return false,
         };
-        let earlier = |r: Option<&Round>| r.map_or(false, |r| *r < omission.round);
         let (id, key) = (omission.otx.id(), omission.otx.key());
+        let earlier = self.committed.range(..omission.round).flat_map(|(_, b)| b.keys.iter());
+        let highest = earlier
+            .filter(|(owner, _)| *owner == key.0)
+            .map(|(_, nonce)| *nonce)
+            .chain(self.watermark.get(&key.0).copied())
+            .max()
+            .unwrap_or(0);
         block.digest == omission.block
-            && block.otxs.len() < MAX_OTXS
             && !block.otxs.contains(&id)
             && !block.keys.contains(&key)
-            && !earlier(self.included.get(&id))
-            && !earlier(self.taken.get(&key))
+            && key.1 > highest
     }
 
     /// Rounds up to here have been processed by the leader rule; accusations of them come too late.
@@ -363,8 +379,7 @@ impl Epochs {
                 info!("G2: {} {} at round {}", name, what, round);
             }
         }
-        let done = self.reputation.done();
-        self.committed = self.committed.split_off(&(done + 1));
+        self.forget_blocks_before(self.reputation.done() + 1);
         for (k, (old, new)) in before.iter().zip(self.reputation.r_ppm()).enumerate() {
             if old != new {
                 for name in members_of(&self.members, &self.entity_of, k) {

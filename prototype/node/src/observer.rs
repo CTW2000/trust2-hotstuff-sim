@@ -5,6 +5,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use clap::Parser;
 use consensus::{ConsensusMessage, Otx};
+use crypto::generate_production_keypair;
 use env_logger::Env;
 use futures::future::join_all;
 use futures::sink::SinkExt as _;
@@ -57,15 +58,16 @@ async fn main() -> Result<()> {
     let mut connections = HashMap::new();
     let mut rng = rand::thread_rng();
     let mut ticker = interval(Duration::from_micros(1_000_000 / cli.rate.max(1)));
-    for nonce in 0.. {
+    let owners: Vec<_> = (0..cli.accounts).map(|_| generate_production_keypair()).collect();
+    let mut nonces = vec![0; owners.len()];
+    loop {
         ticker.tick().await;
-        let otx = Otx {
-            account: rng.gen_range(0, cli.accounts),
-            nonce,
-            data: rng.gen(),
-        };
+        let i = rng.gen_range(0, owners.len());
+        nonces[i] += 1;
+        let (owner, secret) = &owners[i];
+        let otx = Otx::new_from_key(*owner, nonces[i], rng.gen(), secret);
         // NOTE: This log entry is used to measure the inclusion delay of observed transactions.
-        info!("Observed transaction {} account {}", otx.id(), otx.account);
+        info!("Observed transaction {} account {}", otx.id(), otx.account());
         let message = Bytes::from(bincode::serialize(&ConsensusMessage::Otx(otx))?);
         for address in cli.nodes.choose_multiple(&mut rng, fanout) {
             if !connections.contains_key(address) {
@@ -86,5 +88,4 @@ async fn main() -> Result<()> {
             }
         }
     }
-    Ok(())
 }

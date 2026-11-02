@@ -21,7 +21,7 @@ Model
   pair (the other becomes invalid once one is included); a censoring colluder leader drops the
   victim transactions. A block counts as including x once it is certified (qc_exists[u]).
 * omit(u): block u is certified and some due, non-exempt transaction is not in it. Exempt: the
-  block is full (capacity), or x is invalid (its conflicting partner is in this block or an
+  x is invalid (its conflicting partner is in this block or an
   earlier certified one) -- both checkable from the chain. exempt=False switches the exemptions
   off (control group).
 
@@ -54,8 +54,10 @@ class TxConfig:
     threshold: str = "q"              # "q" (2f+1) or "f+1"; weighted voting (cfg.vote_weights): "w" = attesting
                                       # share strictly above 2/3, "w13" = above 1/3 (the f+1 analogue, control)
     capacity: int = None              # block capacity in transactions; None = unbounded
+    attest_cap: int = None            # at most this many transactions per attestation, oldest first; None = unbounded
     exempt: bool = True               # master switch of the exemptions
-    exempt_full: bool = True          # a full block is exempt
+    exempt_full: bool = False         # a full block is exempt (not with attest_cap well below capacity: what is
+                                      # due always fits, and the exemption could be earned by filling the block)
     exempt_invalid: bool = True       # an invalid transaction (conflicting partner included) is exempt
     adversary: TxAdversary = field(default_factory=TxAdversary)
     seed: int = 0
@@ -187,6 +189,12 @@ class TxLayer:
             weighted = self.t.threshold in ("w", "w13")
             wv = np.asarray(cfg.vote_weights(st, u), float) if weighted else np.ones(cfg.n)
             att = hold <= (entry - s["dg"])[None, :]
+            if t.attest_cap is not None:
+                for j in range(cfg.n):
+                    listed = np.flatnonzero(att[:, j])
+                    if len(listed) > t.attest_cap:
+                        oldest_first = listed[np.argsort(hold[listed, j], kind="stable")]
+                        att[oldest_first[t.attest_cap:], j] = False
             ok_h = (att[:, st.honest] * wv[st.honest][None, :]).sum(axis=1)
             nb = float(wv[st.byz & st.alive].sum())
             for i, x in enumerate(pend):

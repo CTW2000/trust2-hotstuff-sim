@@ -5,8 +5,10 @@
 //! - On entering a round we attest the pending ones held for at least the guard Δ_g.
 //! - As leader we include the pending ones we hold, oldest first, at most MAX_OTXS, never two conflicting.
 //! - When a block we hold is certified, a transaction listed by attestations of its round from more than 2/3
-//!   of the weight that the block leaves out, without an exemption (full block, or a conflicting transaction
-//!   already included), gives an omission proof for the ledger.
+//!   of the weight that the block leaves out, without an exemption (a conflicting transaction already included),
+//!   gives an omission proof for the ledger.
+//! - What the settled chain holds is kept as one watermark per owner, the highest nonce: anything at or below it
+//!   is spent, so nothing else about included transactions has to outlive the rounds that can still be proved.
 //! - A certified block can still be abandoned (a TC extended an older QC). Once the chain has passed its round,
 //!   what it held counts as never included and is pending again.
 //!
@@ -27,7 +29,7 @@ pub mod inclusion_tests;
 
 /// The censor's victims: one account in four (the simulator's victim_frac = 0.25).
 pub fn victim(otx: &Otx) -> bool {
-    otx.account % 4 == 0
+    otx.account() % 4 == 0
 }
 
 /// A ceiling on the pending observed transactions one node buffers: once reached, new distinct transactions
@@ -45,9 +47,11 @@ pub struct Inclusion {
     arrivals: u64,
     /// Every observed transaction we hold, pending or not (an omission proof carries the transaction).
     known: HashMap<Digest, Otx>,
-    /// Seen in a certified block: ids and conflict keys, with the round of that block.
+    /// Seen in a certified block of a recent round: ids and conflict keys, with the round of that block.
     included: HashMap<Digest, Round>,
-    taken: HashMap<(u64, u64), Round>,
+    taken: HashMap<(PublicKey, u64), Round>,
+    /// The highest nonce of each owner on the settled chain.
+    watermark: HashMap<PublicKey, u64>,
     /// Attestations of recent rounds: (epoch, round) -> author -> (signature, list).
     attestations: BTreeMap<(EpochNumber, Round), HashMap<PublicKey, (Signature, Vec<Digest>)>>,
     /// Certified blocks of recent rounds (late attestations are checked against them).
@@ -68,6 +72,7 @@ impl Inclusion {
             known: HashMap::new(),
             included: HashMap::new(),
             taken: HashMap::new(),
+            watermark: HashMap::new(),
             attestations: BTreeMap::new(),
             certified: BTreeMap::new(),
             made: HashSet::new(),
@@ -75,10 +80,20 @@ impl Inclusion {
         }
     }
 
+    /// Whether we already hold this transaction (it then needs no signature check).
+    pub fn knows(&self, otx: &Otx) -> bool {
+        self.known.contains_key(&otx.id())
+    }
+
+    /// Whether the settled chain has spent this nonce of its owner.
+    fn spent(&self, otx: &Otx) -> bool {
+        spent(&self.watermark, otx)
+    }
+
     /// An observed transaction from a client or a node: whether it is new to us (then we forward it).
     pub fn receive(&mut self, otx: Otx, now: Instant) -> bool {
         let id = otx.id();
-        if (self.censor && victim(&otx)) || self.known.contains_key(&id) {
+        if (self.censor && victim(&otx)) || self.known.contains_key(&id) || self.spent(&otx) {
             return false;
         }
         if self.included.contains_key(&id) {
@@ -172,6 +187,12 @@ impl Inclusion {
         if !self.certified.contains_key(&block.round) {
             self.mark(block);
         }
+        for x in &block.otxs {
+            let nonce = self.watermark.entry(x.owner).or_insert(0);
+            *nonce = (*nonce).max(x.nonce);
+        }
+        let watermark = &self.watermark;
+        self.pending.retain(|_, (otx, _, _)| !spent(watermark, otx));
     }
 
     /// Undo what abandoned blocks marked, then put back what is free again: first in line, as it has waited longest,
@@ -218,9 +239,6 @@ impl Inclusion {
             Some(attestations) => attestations,
             None => return Vec::new(),
         };
-        if block.otxs.len() >= MAX_OTXS {
-            return Vec::new(); // a full block is exempt
-        }
         let in_block: HashSet<_> = block.otxs.iter().map(|x| x.id()).collect();
         let keys_in_block: HashSet<_> = block.otxs.iter().map(|x| x.key()).collect();
 
@@ -278,5 +296,14 @@ impl Inclusion {
         let settled = round.min(self.settled + 1);
         self.certified.retain(|r, _| *r >= settled);
         self.made.retain(|(_, r, _)| *r >= round);
+        // What is forgotten here is covered by the watermark: the rounds below are settled.
+        self.included.retain(|_, r| *r >= settled);
+        self.taken.retain(|_, r| *r >= settled);
+        let (pending, included, watermark) = (&self.pending, &self.included, &self.watermark);
+        self.known.retain(|id, otx| pending.contains_key(id) || included.contains_key(id) || !spent(watermark, otx));
     }
+}
+
+fn spent(watermark: &HashMap<PublicKey, u64>, otx: &Otx) -> bool {
+    watermark.get(&otx.owner).map_or(false, |nonce| otx.nonce <= *nonce)
 }

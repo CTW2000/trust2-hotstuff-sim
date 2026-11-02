@@ -36,6 +36,8 @@ const MAX_DEFERRED_BYTES: usize = 64 << 20;
 /// At most this many blocks of a later epoch requested at a time (cleared when we enter a new epoch).
 const MAX_REQUESTED: usize = 2_000;
 
+/// R8: where the store keeps what a restart must not forget.
+const SAFETY_STATE: &[u8] = b"safety_state";
 /// G1 evidence detection looks this many rounds back.
 const DETECT_WINDOW: Round = 300;
 
@@ -161,41 +163,76 @@ impl Core {
         tx_commit: Sender<Block>,
     ) {
         tokio::spawn(async move {
-            Self {
+            Self::new(
                 name,
-                epochs: Epochs::new(&committee, epoch_config),
+                committee,
+                epoch_config,
+                inclusion,
+                faults,
                 signature_service,
                 store,
                 mempool_driver,
                 synchronizer,
+                timeout_delay,
                 rx_message,
                 rx_loopback,
                 tx_proposer,
                 tx_commit,
-                round: 1,
-                last_voted_round: 0,
-                last_committed_round: 0,
-                high_qc: QC::genesis(),
-                prev_high_qc: QC::genesis(),
-                ready_round: 0,
-                last_timeout: None,
-                timer: Timer::new(timeout_delay),
-                aggregator: Aggregator::new(),
-                accuser: Accuser::new(),
-                inclusion,
-                last_certified: 0,
-                detector: Detector::new(),
-                faults,
-                network: SimpleSender::new(),
-                deferred: Deferred::default(),
-                replay: VecDeque::new(),
-                requested: HashSet::new(),
-                pending_proposal: None,
-                last_cleanup: 0,
-            }
+            )
             .run()
             .await
         });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        name: PublicKey,
+        committee: Committee,
+        epoch_config: EpochConfig,
+        inclusion: Inclusion,
+        faults: Faults,
+        signature_service: SignatureService,
+        store: Store,
+        mempool_driver: MempoolDriver,
+        synchronizer: Synchronizer,
+        timeout_delay: u64,
+        rx_message: Receiver<ConsensusMessage>,
+        rx_loopback: Receiver<Block>,
+        tx_proposer: Sender<ProposerMessage>,
+        tx_commit: Sender<Block>,
+    ) -> Self {
+        Self {
+            name,
+            epochs: Epochs::new(&committee, epoch_config),
+            signature_service,
+            store,
+            mempool_driver,
+            synchronizer,
+            rx_message,
+            rx_loopback,
+            tx_proposer,
+            tx_commit,
+            round: 1,
+            last_voted_round: 0,
+            last_committed_round: 0,
+            high_qc: QC::genesis(),
+            prev_high_qc: QC::genesis(),
+            ready_round: 0,
+            last_timeout: None,
+            timer: Timer::new(timeout_delay),
+            aggregator: Aggregator::new(),
+            accuser: Accuser::new(),
+            inclusion,
+            last_certified: 0,
+            detector: Detector::new(),
+            faults,
+            network: SimpleSender::new(),
+            deferred: Deferred::default(),
+            replay: VecDeque::new(),
+            requested: HashSet::new(),
+            pending_proposal: None,
+            last_cleanup: 0,
+        }
     }
 
     async fn store_block(&mut self, block: &Block) {
@@ -257,6 +294,9 @@ impl Core {
 
     /// G2: an observed transaction from a client or a node; forwarded to everyone on first receipt.
     async fn handle_otx(&mut self, otx: Otx) -> ConsensusResult<()> {
+        if !self.inclusion.knows(&otx) {
+            otx.verify()?;
+        }
         if self.inclusion.receive(otx.clone(), Instant::now()) {
             let addresses = self
                 .committee()
@@ -409,10 +449,39 @@ impl Core {
             return None;
         }
 
-        // Ensure we won't vote for contradicting blocks.
+        // Ensure we won't vote for contradicting blocks, even after a restart.
         self.increase_last_voted_round(block.round);
-        // TODO [issue #15]: Write to storage preferred_round and last_voted_round.
+        self.remember().await;
         Some(Vote::new(block, self.name, self.signature_service.clone()).await)
+    }
+
+    /// R8: what a restart must not forget goes to the store before anything we sign leaves this node. Reading it back
+    /// waits for the write: the store handles its commands in order. This survives a crash of the process, not a loss
+    /// of power (no fsync).
+    async fn remember(&mut self) {
+        let state = (self.last_voted_round, &self.high_qc, &self.last_timeout);
+        let bytes = bincode::serialize(&state).expect("Failed to serialize the safety state");
+        self.store.write(SAFETY_STATE.to_vec(), bytes).await;
+        let _ = self.store.read(SAFETY_STATE.to_vec()).await;
+    }
+
+    /// R8: pick up what a previous run remembered, if there was one. We stay in the last round we signed in and sign
+    /// nothing that contradicts it: its timeout is resent as it was, and a first timeout after a vote reports NR = 0.
+    /// The table stays behind until the chain has been replayed, as for any node that fell far behind.
+    async fn restore(&mut self) -> bool {
+        let bytes = match self.store.read(SAFETY_STATE.to_vec()).await {
+            Ok(Some(bytes)) => bytes,
+            _ => return false,
+        };
+        let (last_voted_round, high_qc, last_timeout): (Round, QC, Option<Timeout>) =
+            bincode::deserialize(&bytes).expect("Failed to deserialize the safety state");
+        info!("Restored the safety state of round {}", last_voted_round);
+        self.last_voted_round = last_voted_round;
+        self.high_qc = high_qc;
+        self.last_timeout = last_timeout;
+        self.round = last_voted_round.max(1);
+        self.ready_round = last_voted_round;
+        true
     }
 
     async fn commit(&mut self, block: Block) -> ConsensusResult<()> {
@@ -511,7 +580,8 @@ impl Core {
         // Make a timeout message. R3: sign at most one timeout per round; if the timer fires again in the
         // same round, resend the one we already signed. N6: NR when no usable proposal arrived this round.
         let epoch = self.epochs.epoch();
-        let resent = matches!(&self.last_timeout, Some(t) if t.round == self.round && t.epoch == epoch);
+        // After a restart the table is behind until the chain is replayed: the timeout may be of a later epoch.
+        let resent = matches!(&self.last_timeout, Some(t) if t.round == self.round && t.epoch >= epoch);
         let timeout = match &self.last_timeout {
             Some(timeout) if resent => timeout.clone(),
             _ => {
@@ -526,6 +596,7 @@ impl Core {
                 .await;
                 debug!("Created {:?}", timeout);
                 self.last_timeout = Some(timeout.clone());
+                self.remember().await;
                 timeout
             }
         };
@@ -1100,7 +1171,8 @@ impl Core {
         // Upon booting, generate the very first block (if we are the leader).
         // Also, schedule a timer in case we don't hear from the leader.
         self.timer.reset();
-        if self.name == leader(self.committee(), self.round) {
+        let restored = self.restore().await;
+        if !restored && self.name == leader(self.committee(), self.round) {
             self.generate_proposal(None).await;
         }
 

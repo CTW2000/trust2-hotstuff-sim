@@ -37,7 +37,7 @@ def main():
         for f0 in (3, 10):
             for thr in ("q", "f+1"):
                 for name, a in adv.items():
-                    kw = dict(rate=3.6, capacity=4) if name == "conflict" else {}
+                    kw = dict(rate=3.6, capacity=16, attest_cap=4) if name == "conflict" else {}
                     st, s, hon = run(f0, TxConfig(threshold=thr, adversary=a, **kw), proto)
                     if hon != 0.0:
                         bad += 1
@@ -54,11 +54,18 @@ def main():
     controls = [("no guard, framing", 10, TxConfig(delta_g=0.0, adversary=TxAdversary(frame=1.0))),
                 ("no invalid exemption, conflicting pairs", 6,
                  TxConfig(exempt_invalid=False, adversary=TxAdversary(conflict=0.5))),
-                ("no full-block exemption, overload", 6, TxConfig(rate=8, capacity=4, exempt_full=False))]
+                ("no attestation cap, overload", 6, TxConfig(rate=8, capacity=4))]
     for name, f0, tc in controls:
         _, _, hon = run(f0, tc)
         print(f"control ({name}): honest-led views flagged {hon:.3f}")
         if hon < 0.05:
+            bad += 1
+    # With attestations listing far fewer transactions than a block holds, a full block needs no exemption: an
+    # honest leader always fits what is due, also in overload.
+    for rate in (8, 40):
+        _, _, hon = run(6, TxConfig(rate=rate, capacity=16, attest_cap=4))
+        print(f"overload, rate {rate}, capacity 16, attestations of 4: honest-led views flagged {hon:.3f}")
+        if hon != 0.0:
             bad += 1
     # closed loop with "omit" evidence: leaders from final facts
     net = Network(NetConfig(n=N, seed=2, regions=3, jitter_max_ms=2.0))

@@ -1,10 +1,11 @@
 //! X1 (prototype/DESIGN.md §14.3): serialized message sizes, the cost of verifying G1/G2 evidence, and the cost of
 //! an epoch change. Prints one JSON object per committee size.
 //! Run:  cargo test --release -p consensus overhead -- --ignored --nocapture
+use crate::common::signed_otx;
 use crate::config::Committee;
 use crate::epoch::{EpochConfig, Epochs};
 use crate::messages::{
-    Accusation, Attestation, Block, Evidence, OmitProof, Otx, SignedTimeout, Timeout, Vote, QC, TC,
+    Accusation, Attestation, Block, Evidence, OmitProof, SignedTimeout, Timeout, Vote, QC, TC,
 };
 use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
@@ -107,7 +108,7 @@ fn overhead() {
         };
         let vote = signed_vote(hash.clone(), 5, &keys[0]);
         let accusation = Accusation::from_tc(&tc(quorum, &qc5, 6, true), &committee).unwrap();
-        let x = Otx { account: 1, nonce: 1, data: [0; 32] };
+        let x = signed_otx(1, 1, 0);
         let attestations: Vec<_> = quorum
             .iter()
             .map(|key| attestation(6, vec![x.id()], key))
