@@ -484,6 +484,28 @@ impl Core {
         true
     }
 
+    /// R8: the ledger and the tables are in memory, the chain is in the store. Commit it up to the last commit proof
+    /// we can find there: nothing of a later epoch can be processed before that, and waiting for the network to lead a
+    /// fetch back to the first epoch can take very long.
+    async fn replay(&mut self) -> ConsensusResult<()> {
+        let digest = self.high_qc.hash.clone();
+        let mut b1 = match self.read_block(&digest).await? {
+            Some(block) => block,
+            None => return Ok(()),
+        };
+        while b1.qc != QC::genesis() {
+            let b0 = match self.read_block(&b1.qc.hash).await? {
+                Some(block) => block,
+                None => return Ok(()),
+            };
+            if b0.round + 1 == b1.round {
+                return self.commit(b0).await;
+            }
+            b1 = b0;
+        }
+        Ok(())
+    }
+
     async fn commit(&mut self, block: Block) -> ConsensusResult<()> {
         if self.last_committed_round >= block.round {
             return Ok(());
@@ -1172,7 +1194,10 @@ impl Core {
         // Also, schedule a timer in case we don't hear from the leader.
         self.timer.reset();
         let restored = self.restore().await;
-        if !restored && self.name == leader(self.committee(), self.round) {
+        if restored {
+            let result = self.replay().await;
+            Self::log_result(result);
+        } else if self.name == leader(self.committee(), self.round) {
             self.generate_proposal(None).await;
         }
 

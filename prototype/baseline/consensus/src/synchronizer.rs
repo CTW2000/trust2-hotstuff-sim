@@ -102,8 +102,11 @@ impl Synchronizer {
                         Err(e) => error!("{}", e)
                     },
                     () = &mut timer => {
-                        // This implements the 'perfect point to point link' abstraction.
-                        for (digest, timestamp) in &requests {
+                        // This implements the 'perfect point to point link' abstraction. A block in `pending` has
+                        // arrived and waits for its own parent, so only the oldest block of each gap is missing. A node
+                        // far behind has thousands of the former: asking for them all would overflow the sender and
+                        // lose the requests that matter.
+                        for (digest, timestamp) in requests.iter().filter(|(digest, _)| !pending.contains(*digest)) {
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .expect("Failed to measure time")

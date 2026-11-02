@@ -36,6 +36,21 @@ fn core_with_epochs(
     Receiver<ProposerMessage>,
     Receiver<Block>,
 ) {
+    let _ = fs::remove_dir_all(store_path);
+    core_on(name, secret, committee, Store::new(store_path).unwrap(), length)
+}
+
+fn core_on(
+    name: PublicKey,
+    secret: SecretKey,
+    committee: Committee,
+    store: Store,
+    length: Round,
+) -> (
+    Sender<ConsensusMessage>,
+    Receiver<ProposerMessage>,
+    Receiver<Block>,
+) {
     let (tx_core, rx_core) = channel(1);
     let (tx_loopback, rx_loopback) = channel(1);
     let (tx_proposer, rx_proposer) = channel(1);
@@ -43,8 +58,6 @@ fn core_with_epochs(
     let (tx_commit, rx_commit) = channel(1);
 
     let signature_service = SignatureService::new(secret);
-    let _ = fs::remove_dir_all(store_path);
-    let store = Store::new(store_path).unwrap();
     let mempool_driver = MempoolDriver::new(store.clone(), tx_mempool, tx_loopback.clone());
     let synchronizer = Synchronizer::new(
         name,
@@ -757,6 +770,33 @@ async fn r8_the_high_qc_survives_a_restart() {
     assert!(restarted.restore().await);
     assert_eq!(restarted.high_qc.round, 1);
     assert_eq!(restarted.round, 5);
+}
+
+#[tokio::test]
+async fn r8_a_restarted_node_replays_its_own_chain() {
+    // The ledger and the tables are in memory, the chain is in the store. A restarted node rebuilds them at once and
+    // without the network: nothing of a later epoch can be processed before that.
+    // Round 4 timed out, so the highest QC does not prove a commit: the last proof is the QC of round 3 for B3, over
+    // its parent B2, and B3 itself must stay uncommitted.
+    let mut store = store_at(".db_test_r8_a_restarted_node_replays_its_own_chain");
+    let mut blocks = chain(vec![leader_keys(1), leader_keys(2), leader_keys(3)]);
+    let (leader, secret) = leader_keys(5);
+    blocks.push(Block::new_from_key(qc_for(&blocks[2]), leader, 5, Vec::new(), &secret));
+    for block in &blocks {
+        store.write(block.digest().to_vec(), bincode::serialize(block).unwrap()).await;
+    }
+    let mut first = node_on(store.clone());
+    first.update_high_qc(&qc_for(&blocks[3]));
+    first.last_voted_round = 5;
+    first.remember().await;
+
+    let (name, secret) = keys().pop().unwrap();
+    let (_tx_core, _rx_proposer, mut rx_commit) = core_on(name, secret, committee_with_base_port(17_400), store, 100);
+    for expected in &blocks[..2] {
+        let committed = timeout(Duration::from_secs(1), rx_commit.recv()).await;
+        assert_eq!(committed.expect("nothing was replayed").unwrap(), *expected);
+    }
+    assert!(timeout(Duration::from_millis(50), rx_commit.recv()).await.is_err(), "a block without a commit proof");
 }
 
 #[tokio::test]

@@ -1,7 +1,10 @@
 use super::*;
 use crate::common::{block, chain, committee, committee_with_base_port, keys, listener};
+use futures::future::join_all;
 use std::fs;
+use tokio::net::TcpListener;
 use tokio::time::timeout;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 #[tokio::test]
 async fn get_existing_parent_block() {
@@ -179,4 +182,54 @@ fn holders_leave_out_members_that_did_not_sign() {
     got.sort();
     assert_eq!(got, expected);
     assert!(!got.contains(&committee.address(&outsider).unwrap()));
+}
+
+// Everything sent to `address` for a while, in order.
+async fn record(address: SocketAddr, duration: Duration) -> Vec<Bytes> {
+    let listener = TcpListener::bind(address).await.unwrap();
+    let (socket, _) = listener.accept().await.unwrap();
+    let mut transport = Framed::new(socket, LengthDelimitedCodec::new());
+    let mut received = Vec::new();
+    let end = Instant::now() + duration;
+    while let Ok(Some(Ok(frame))) = timeout(end.saturating_duration_since(Instant::now()), transport.next()).await {
+        received.push(frame.freeze());
+    }
+    received
+}
+
+#[tokio::test]
+async fn a_retry_asks_only_for_what_is_missing() {
+    // A block waits for its parent, which we hold and which waits for its own parent: only the oldest is missing.
+    // A node that fell far behind has thousands of such blocks. Asking again for all of them overflows the sender
+    // and loses the one request that matters, every time.
+    let (name, _) = keys().remove(0);
+    let committee = committee_with_base_port(12_200);
+    let mut chain = chain(keys());
+    let child = chain.pop().unwrap();
+    let parent = chain.pop().unwrap();
+    let missing = chain.pop().unwrap();
+
+    let path = ".db_test_a_retry_asks_only_for_what_is_missing";
+    let _ = fs::remove_dir_all(path);
+    let store = Store::new(path).unwrap();
+    let (tx_loopback, _rx_loopback) = channel(1);
+    let peers: Vec<_> = committee.broadcast_addresses(&name).into_iter().map(|(_, x)| x).collect();
+    let recorders: Vec<_> = peers
+        .into_iter()
+        .map(|address| tokio::spawn(record(address, Duration::from_millis(TIMER_ACCURACY + 1_000))))
+        .collect();
+    let mut synchronizer = Synchronizer::new(name, committee, store, tx_loopback, /* sync_retry_delay */ 0);
+
+    assert!(synchronizer.get_parent_block(&child).await.unwrap().is_none());
+    assert!(synchronizer.get_parent_block(&parent).await.unwrap().is_none());
+
+    let request = |digest: Digest| {
+        Bytes::from(bincode::serialize(&ConsensusMessage::SyncRequest(digest, name)).unwrap())
+    };
+    let (held, gap) = (request(parent.digest()), request(missing.digest()));
+    for received in join_all(recorders).await {
+        let received = received.unwrap();
+        assert_eq!(received.iter().filter(|x| **x == held).count(), 1, "a block we hold was asked for again");
+        assert_eq!(received.iter().filter(|x| **x == gap).count(), 2, "the missing block was not asked for again");
+    }
 }
