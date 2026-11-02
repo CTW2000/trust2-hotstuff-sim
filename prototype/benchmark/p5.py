@@ -1,7 +1,7 @@
 """P5 experiment driver (prototype/DESIGN.md §14.3). Runs run_local.py over a matrix, one run at a time (the runner
 holds the lab server's lock and resource limits), and appends one CSV row per run to results-p5/<experiment>.csv;
 `report` summarizes every CSV into results-p5/<experiment>.md (median and range over the repetitions).
-Run from prototype/benchmark/:  python3 p5.py x2 | x3 | p3 | x4 | report
+Run from prototype/benchmark/:  python3 p5.py x2 | x3 | p3 | x4 | xr | report
 """
 import csv
 import os
@@ -231,6 +231,15 @@ def xe():
                                **bound, **faults), 60)
 
 
+def xr():
+    """Silent leaders and late messages again, five runs per build: keys are new in each run, so the draw gives another
+    leader schedule each time, and the two runs of X3 understate the spread."""
+    for rep in range(1, 6):
+        for name, faults in (("silent", dict(faults=3)), ("late", dict(late_p=0.1))):
+            for build in ("baseline", "trust2"):
+                run("xr", dict(scenario=name, build=build, nodes=31, net="base", epoch_length=50, rep=rep, **faults), 90)
+
+
 def report():
     for path in sorted(glob(f"{OUT}/*.csv")):
         with open(path) as fh:
@@ -289,4 +298,4 @@ def compare_x2(rows):
 
 
 if __name__ == "__main__":
-    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "report": report}[sys.argv[1]]()
+    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "report": report}[sys.argv[1]]()
