@@ -3,7 +3,7 @@ use crate::error::NetworkError;
 use bytes::Bytes;
 use futures::sink::SinkExt as _;
 use futures::stream::StreamExt as _;
-use log::{info, warn};
+use log::{debug, info, warn};
 use rand::prelude::SliceRandom as _;
 use rand::rngs::SmallRng;
 use rand::SeedableRng as _;
@@ -11,6 +11,7 @@ use crate::delay;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::{sleep_until, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
@@ -54,8 +55,11 @@ impl SimpleSender {
     pub async fn send(&mut self, address: SocketAddr, data: Bytes) {
         // Try to re-use an existing connection if possible.
         if let Some(tx) = self.connections.get(&address) {
-            if tx.send(data.clone()).await.is_ok() {
-                return;
+            match tx.try_send(data.clone()) {
+                Ok(()) => return,
+                // A peer that does not keep up must not hold back the caller, and with it every other peer.
+                Err(TrySendError::Full(_)) => return debug!("Dropped a message to {}: it does not keep up", address),
+                Err(TrySendError::Closed(_)) => (),
             }
         }
 

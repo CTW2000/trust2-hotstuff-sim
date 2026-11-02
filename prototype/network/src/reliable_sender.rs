@@ -22,6 +22,10 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 #[path = "tests/reliable_sender_tests.rs"]
 pub mod reliable_sender_tests;
 
+/// A message on its way that is still in the buffer this long after it was due has not left because the peer
+/// stopped reading: it no longer stands for bytes on the wire.
+const STUCK_AFTER: Duration = Duration::from_secs(1);
+
 /// Convenient alias for cancel handlers returned to the caller task.
 pub type CancelHandler = oneshot::Receiver<Bytes>;
 
@@ -144,7 +148,7 @@ impl Connection {
         let mut delay = self.retry_delay;
         let mut retry = 0;
         loop {
-            match TcpStream::connect(self.address).await {
+            match self.connect().await {
                 Ok(stream) => {
                     info!("Outgoing connection established with {}", self.address);
 
@@ -171,11 +175,8 @@ impl Connection {
                                 break 'waiter;
                             },
 
-                            // Drain the channel into the buffer to not saturate the channel and block the caller task.
-                            // The caller is responsible to cleanup the buffer through the cancel handlers.
                             Some(InnerMessage{data, cancel_handler}) = self.receiver.recv() => {
-                                self.enqueue(data, cancel_handler);
-                                self.buffer.retain(|(_, handler, _, _)| !handler.is_closed());
+                                self.stash(data, cancel_handler);
                             }
                         }
                     }
@@ -184,10 +185,46 @@ impl Connection {
         }
     }
 
+    /// Connect to the peer. That can take long if the peer does not answer: keep draining the channel meanwhile.
+    async fn connect(&mut self) -> std::io::Result<TcpStream> {
+        let connecting = TcpStream::connect(self.address);
+        tokio::pin!(connecting);
+        loop {
+            tokio::select! {
+                result = &mut connecting => return result,
+                Some(InnerMessage{data, cancel_handler}) = self.receiver.recv() => {
+                    self.stash(data, cancel_handler);
+                }
+            }
+        }
+    }
+
+    /// Drain the channel into the buffer to not saturate the channel and block the caller task.
+    /// The caller is responsible to cleanup the buffer through the cancel handlers.
+    fn stash(&mut self, data: Bytes, handler: oneshot::Sender<Bytes>) {
+        self.enqueue(data, handler);
+        self.buffer.retain(|(_, handler, at, on_its_way)| !Self::cancelled(handler, *at, *on_its_way));
+    }
+
     fn enqueue(&mut self, data: Bytes, handler: oneshot::Sender<Bytes>) {
         let at = delay::due(&self.address, data.len());
         let index = delay::position(&self.buffer, at, |(_, _, due, _)| *due);
         self.buffer.insert(index, (data, handler, at, delay::enabled()));
+    }
+
+    /// Whether a message has been cancelled, and is not already on its way.
+    fn cancelled(handler: &oneshot::Sender<Bytes>, at: Instant, on_its_way: bool) -> bool {
+        handler.is_closed() && !(on_its_way && Instant::now() < at + STUCK_AFTER)
+    }
+
+    /// Skip the cancelled messages at the front of the buffer.
+    fn skip_cancelled(&mut self) {
+        while let Some((_, handler, at, on_its_way)) = self.buffer.front() {
+            if !Self::cancelled(handler, *at, *on_its_way) {
+                break;
+            }
+            self.buffer.pop_front();
+        }
     }
 
     /// Transmit messages once we have established a connection.
@@ -197,43 +234,44 @@ impl Connection {
         let mut pending_replies = VecDeque::new();
 
         let (mut writer, mut reader) = Framed::new(stream, LengthDelimitedCodec::new()).split();
-        let error = 'connection: loop {
-            // Try to send all messages of the buffer that are due.
-            while let Some((_, handler, at, on_its_way)) = self.buffer.front() {
-                // Skip messages that have been cancelled, unless they are already on their way.
-                if handler.is_closed() && !*on_its_way {
-                    self.buffer.pop_front();
-                    continue;
-                }
-                if *at > Instant::now() {
-                    break;
-                }
-                let (data, handler, _, _) = self.buffer.pop_front().unwrap();
 
-                // Try to send the message.
-                match writer.send(data.clone()).await {
-                    Ok(()) => {
-                        // The message has been sent, we remove it from the buffer and add it to
-                        // `pending_replies` while we wait for an ACK.
-                        pending_replies.push_back((data, handler));
-                    }
-                    Err(e) => {
-                        // We failed to send the message, we put it back into the buffer.
-                        self.buffer.push_front((data, handler, Instant::now(), false));
-                        break 'connection NetworkError::FailedToSendMessage(self.address, e);
-                    }
+        // Writes run beside the loop below, one at a time. A peer that stops reading blocks them, and the loop must
+        // keep draining the channel all the same, or the caller's broadcast blocks and no other peer gets anything.
+        let (tx_write, mut rx_write) = channel::<Bytes>(1);
+        let writes = async move {
+            loop {
+                let data = rx_write.recv().await.expect("Failed to receive message to write");
+                if let Err(e) = writer.send(data).await {
+                    return e;
                 }
             }
+        };
+        tokio::pin!(writes);
+
+        let error = 'connection: loop {
+            self.skip_cancelled();
+            let next = self.buffer.front().map(|(_, _, at, _)| *at);
+            let due = next.map_or(false, |at| at <= Instant::now());
 
             // Check if there are any new messages to send, if the next one is due, or if we get an ACK for messages we
             // already sent.
-            let next = self.buffer.front().map_or_else(|| Instant::now() + Duration::from_secs(3600), |(_, _, at, _)| *at);
             tokio::select! {
+                e = &mut writes => {
+                    // We failed to send a message: it is still in `pending_replies`, we will try to send it again.
+                    break 'connection NetworkError::FailedToSendMessage(self.address, e);
+                },
+                permit = tx_write.reserve(), if due => {
+                    // The message is on its way, we remove it from the buffer and add it to `pending_replies` while we
+                    // wait for an ACK.
+                    let (data, handler, _, _) = self.buffer.pop_front().unwrap();
+                    permit.expect("Failed to reserve a write").send(data.clone());
+                    pending_replies.push_back((data, handler));
+                },
                 Some(InnerMessage{data, cancel_handler}) = self.receiver.recv() => {
                     // Add the message to the buffer of messages to send.
                     self.enqueue(data, cancel_handler);
                 },
-                () = sleep_until(next), if !self.buffer.is_empty() => {},
+                () = sleep_until(next.unwrap_or_else(Instant::now)), if next.is_some() && !due => {},
                 response = reader.next() => {
                     let (data, handler) = match pending_replies.pop_front() {
                         Some(message) => message,

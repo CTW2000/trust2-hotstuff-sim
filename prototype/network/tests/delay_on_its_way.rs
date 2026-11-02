@@ -8,7 +8,7 @@ use futures::stream::StreamExt as _;
 use network::ReliableSender;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
-use tokio::time::{timeout, Duration};
+use tokio::time::{timeout, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 #[tokio::test]
@@ -23,17 +23,18 @@ async fn a_cancelled_message_in_the_delay_queue_is_still_sent() {
     std::env::set_var("TTRU_DELAYS", &path);
     std::env::set_var("TTRU_NODE", "0");
 
-    // Listen first: while it cannot connect, the sender purges cancelled messages.
     let listener = TcpListener::bind(address).await.unwrap();
     let mut sender = ReliableSender::new();
 
     // The caller cancels at once, while the message waits out the 50 ms of its link.
+    let sent = Instant::now();
     drop(sender.send(address, Bytes::from("block")).await);
 
     let (socket, _) = timeout(Duration::from_secs(2), listener.accept()).await.expect("no connection").unwrap();
     let mut transport = Framed::new(socket, LengthDelimitedCodec::new());
     let frame = timeout(Duration::from_secs(2), transport.next()).await.expect("the cancelled message was dropped");
     assert_eq!(frame.unwrap().unwrap().freeze(), Bytes::from("block"));
+    assert!(sent.elapsed() >= Duration::from_millis(50), "the message left before it was due");
     transport.send(Bytes::from("Ack")).await.unwrap();
     std::fs::remove_file(&path).unwrap();
 }
