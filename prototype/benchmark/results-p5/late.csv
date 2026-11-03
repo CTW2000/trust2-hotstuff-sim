@@ -1,0 +1,100 @@
+batch,code,group,run,scenario,epoch_length,e2e_latency_ms,consensus_latency_ms,timeouts,top_round,stalls,stalls_near_boundary,invalid_signatures
+pilot,94ecc37,baseline,base_1,late,50,655,398,23,610,23,3,0
+pilot,94ecc37,baseline,base_2,late,50,555,337,17,660,19,1,0
+pilot,94ecc37,trust2,t2_1,late,50,436,278,10,714,12,2,90
+pilot,94ecc37,trust2,t2_2,late,50,711,394,26,599,23,6,256
+pilot,tc-fix-only,trust2,fix_1,late,50,657,425,21,599,24,3,0
+pilot,tc-fix-only,trust2,fix_2,late,50,512,309,14,668,16,1,0
+pilot,tc-fix-only,trust2,fix_3,late,50,658,388,26,598,22,1,0
+pilot,tc-fix-only,trust2,fix_4,late,50,575,349,15,658,15,3,0
+pilot,tc-fix-only,trust2,fix_5,late,50,680,386,26,597,23,7,0
+pilot,4d19846,trust2,fetch_1,late,50,903,496,36,489,36,4,0
+pilot,4d19846,trust2,fetch_2,late,50,473,298,10,724,10,3,0
+pilot,4d19846,trust2,fetch_3,late,50,681,398,24,588,26,6,0
+pilot,4d19846,trust2,fetch_4,late,50,656,352,26,600,24,3,0
+pilot,4d19846,trust2,fetch_5,late,50,608,378,19,669,17,6,0
+interleaved-1,baseline,baseline,B_1,late,50,649,409,20,626,22,5,0
+interleaved-1,baseline,baseline,B_2,late,50,461,283,12,721,14,3,0
+interleaved-1,baseline,baseline,B_3,late,50,599,362,21,640,22,1,0
+interleaved-1,baseline,baseline,B_4,late,50,611,393,17,647,19,2,0
+interleaved-1,baseline,baseline,B_5,late,50,493,301,14,702,14,2,0
+interleaved-1,baseline,baseline,B_6,late,50,532,331,15,672,17,3,0
+interleaved-1,baseline,baseline,B_7,late,50,682,438,21,627,23,2,0
+interleaved-1,baseline,baseline,B_8,late,50,552,343,17,673,17,1,0
+interleaved-1,baseline,baseline,B_9,late,50,561,335,16,683,15,4,0
+interleaved-1,baseline,baseline,B_10,late,50,570,339,19,641,22,4,0
+interleaved-1,4d19846,trust2,T_1,late,50,647,376,25,605,25,1,0
+interleaved-1,4d19846,trust2,T_2,late,50,894,539,31,552,29,4,0
+interleaved-1,4d19846,trust2,T_3,late,50,696,385,29,560,28,3,0
+interleaved-1,4d19846,trust2,T_4,late,50,847,475,34,540,34,6,0
+interleaved-1,4d19846,trust2,T_5,late,50,709,396,29,543,31,5,0
+interleaved-1,4d19846,trust2,T_6,late,50,766,430,28,570,27,7,0
+interleaved-1,4d19846,trust2,T_7,late,50,594,368,18,647,18,1,0
+interleaved-1,4d19846,trust2,T_8,late,50,625,375,21,615,22,6,0
+interleaved-1,4d19846,trust2,T_9,late,50,570,329,17,661,17,2,0
+interleaved-1,4d19846,trust2,T_10,late,50,790,435,31,538,31,9,0
+interleaved-1,4d19846,trust2 round robin,R_1,late,50,823,467,27,589,27,5,0
+interleaved-1,4d19846,trust2 round robin,R_2,late,50,656,358,24,626,22,3,0
+interleaved-1,4d19846,trust2 round robin,R_3,late,50,692,405,23,598,26,1,0
+interleaved-1,4d19846,trust2 round robin,R_4,late,50,686,379,26,573,27,2,0
+interleaved-1,4d19846,trust2 round robin,R_5,late,50,593,365,19,636,22,4,0
+interleaved-1,4d19846,trust2 round robin,R_6,late,50,727,441,24,607,24,0,0
+interleaved-1,4d19846,trust2 round robin,R_7,late,50,628,379,19,648,17,2,0
+interleaved-1,4d19846,trust2 round robin,R_8,late,50,579,342,20,623,22,5,0
+interleaved-1,4d19846,trust2 round robin,R_9,late,50,873,532,30,555,31,4,0
+interleaved-1,4d19846,trust2 round robin,R_10,late,50,760,428,26,560,28,8,0
+interleaved-1,4d19846,trust2,L_1,late,100,668,399,21,634,21,0,0
+interleaved-1,4d19846,trust2,L_2,late,100,703,386,29,555,30,5,0
+interleaved-1,4d19846,trust2,L_3,late,100,630,374,21,615,24,4,0
+interleaved-1,4d19846,trust2,L_4,late,100,647,382,21,631,22,2,0
+interleaved-1,4d19846,trust2,L_5,late,100,522,318,15,674,16,0,0
+interleaved-1,4d19846,trust2,L_6,late,100,705,401,27,554,31,0,0
+interleaved-1,4d19846,trust2,L_7,late,100,686,420,21,630,20,2,0
+interleaved-1,4d19846,trust2,L_8,late,100,596,367,18,662,16,1,0
+interleaved-1,4d19846,trust2,L_9,late,100,537,321,14,685,14,3,0
+interleaved-1,4d19846,trust2,L_10,late,100,605,361,19,628,20,2,0
+interleaved-2,baseline,baseline,B_1,late,50,448,282,9,753,8,1,0
+interleaved-2,baseline,baseline,B_2,late,50,558,354,15,663,16,2,0
+interleaved-2,baseline,baseline,B_3,late,50,567,345,17,644,19,3,0
+interleaved-2,baseline,baseline,B_4,late,50,535,334,15,685,15,1,0
+interleaved-2,baseline,baseline,B_5,late,50,525,323,15,695,15,1,0
+interleaved-2,baseline,baseline,B_6,late,50,557,337,17,640,21,4,0
+interleaved-2,baseline,baseline,B_7,late,50,523,331,13,680,15,2,0
+interleaved-2,baseline,baseline,B_8,late,50,524,325,13,692,13,4,0
+interleaved-2,baseline,baseline,B_9,late,50,531,327,17,669,17,2,0
+interleaved-2,baseline,baseline,B_10,late,50,575,335,20,626,22,3,0
+interleaved-2,10c2b6f,trust2,T_1,late,50,542,330,17,649,18,1,0
+interleaved-2,10c2b6f,trust2,T_2,late,50,666,391,25,617,22,3,0
+interleaved-2,10c2b6f,trust2,T_3,late,50,734,453,24,615,23,7,0
+interleaved-2,10c2b6f,trust2,T_4,late,50,723,441,24,619,21,3,0
+interleaved-2,10c2b6f,trust2,T_5,late,50,570,351,17,656,17,3,0
+interleaved-2,10c2b6f,trust2,T_6,late,50,652,364,26,580,27,1,0
+interleaved-2,10c2b6f,trust2,T_7,late,50,576,348,22,621,20,4,0
+interleaved-2,10c2b6f,trust2,T_8,late,50,581,331,20,659,19,3,0
+interleaved-2,10c2b6f,trust2,T_9,late,50,599,356,19,636,20,2,0
+interleaved-2,10c2b6f,trust2,T_10,late,50,699,416,24,617,23,6,0
+interleaved-2,10c2b6f,trust2,L_1,late,100,555,325,16,669,17,1,0
+interleaved-2,10c2b6f,trust2,L_2,late,100,539,307,15,692,15,1,0
+interleaved-2,10c2b6f,trust2,L_3,late,100,676,429,22,613,23,0,0
+interleaved-2,10c2b6f,trust2,L_4,late,100,729,452,26,583,26,1,0
+interleaved-2,10c2b6f,trust2,L_5,late,100,580,362,17,658,17,0,0
+interleaved-2,10c2b6f,trust2,L_6,late,100,496,307,11,706,12,1,0
+interleaved-2,10c2b6f,trust2,L_7,late,100,589,342,18,637,21,2,0
+interleaved-2,10c2b6f,trust2,L_8,late,100,785,469,28,572,28,2,0
+interleaved-2,10c2b6f,trust2,L_9,late,100,614,362,20,644,19,1,0
+interleaved-2,10c2b6f,trust2,L_10,late,100,654,391,23,625,23,1,0
+round-robin-final,10c2b6f,trust2 round robin,R_1,late,50,615,393,22,640,20,4,0
+round-robin-final,10c2b6f,trust2 round robin,R_2,late,50,680,408,21,596,22,5,0
+round-robin-final,10c2b6f,trust2 round robin,R_3,late,50,615,384,20,656,19,3,0
+round-robin-final,10c2b6f,trust2 round robin,R_4,late,50,722,415,28,582,28,3,0
+round-robin-final,10c2b6f,trust2 round robin,R_5,late,50,517,309,16,671,16,2,0
+round-robin-final,10c2b6f,trust2 round robin,R_6,late,50,577,324,22,644,23,7,0
+round-robin-final,10c2b6f,trust2 round robin,R_7,late,50,678,422,23,630,23,6,0
+round-robin-final,10c2b6f,trust2 round robin,R_8,late,50,678,374,27,591,27,3,0
+round-robin-final,10c2b6f,trust2 round robin,R_9,late,50,572,328,21,632,22,5,0
+round-robin-final,10c2b6f,trust2 round robin,R_10,late,50,732,403,28,584,27,8,0
+silent-final,10c2b6f,trust2,S_1,silent (3),50,1414,623,43,454,49,5,0
+silent-final,10c2b6f,trust2,S_2,silent (3),50,949,437,26,573,35,5,0
+silent-final,10c2b6f,trust2,S_3,silent (3),50,1100,471,41,487,45,2,0
+silent-final,10c2b6f,trust2,S_4,silent (3),50,862,368,30,560,37,2,0
+silent-final,10c2b6f,trust2,S_5,silent (3),50,702,299,26,575,35,2,0
