@@ -21,10 +21,10 @@ use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, info, warn};
 use network::SimpleSender;
 use std::cmp::max;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 #[path = "tests/core_tests.rs"]
@@ -35,6 +35,10 @@ const MAX_DEFERRED_BYTES: usize = 64 << 20;
 
 /// At most this many blocks of a later epoch requested at a time (cleared when we enter a new epoch).
 const MAX_REQUESTED: usize = 2_000;
+
+/// A block of a later epoch is asked for again only after this long (the request or the replies may be late). Asking
+/// on every copy of every reply would multiply the requests: each reply is itself a block of the later epoch.
+const REQUEST_AGAIN_AFTER: Duration = Duration::from_millis(1_000);
 
 /// R8: where the store keeps what a restart must not forget.
 const SAFETY_STATE: &[u8] = b"safety_state";
@@ -136,8 +140,8 @@ pub struct Core {
     // Messages of the next epoch, and those to handle again after entering a new epoch.
     deferred: Deferred,
     replay: VecDeque<ConsensusMessage>,
-    // Blocks of a later epoch already requested (cleared when we enter a new epoch).
-    requested: HashSet<Digest>,
+    // Blocks of a later epoch already requested, and when (cleared when we enter a new epoch).
+    requested: HashMap<Digest, Instant>,
     // A proposal for the round held back until we have the block certified by our high QC.
     pending_proposal: Option<(Round, Option<TC>)>,
     // The round at the last round-based cleanup of the detection / accusation / inclusion state.
@@ -229,7 +233,7 @@ impl Core {
             network: SimpleSender::new(),
             deferred: Deferred::default(),
             replay: VecDeque::new(),
-            requested: HashSet::new(),
+            requested: HashMap::new(),
             pending_proposal: None,
             last_cleanup: 0,
         }
@@ -425,16 +429,29 @@ impl Core {
         }
     }
 
+    fn asked_recently(&self, digest: &Digest) -> bool {
+        matches!(self.requested.get(digest), Some(at) if at.elapsed() < REQUEST_AGAIN_AFTER)
+    }
+
+    /// Whether to ask for a block of a later epoch now (and note that we do): not asked for in the last
+    /// REQUEST_AGAIN_AFTER, and within MAX_REQUESTED blocks.
+    fn ask_now(&mut self, digest: &Digest) -> bool {
+        if self.asked_recently(digest) || (!self.requested.contains_key(digest) && self.requested.len() >= MAX_REQUESTED) {
+            return false;
+        }
+        self.requested.insert(digest.clone(), Instant::now());
+        true
+    }
+
     /// After catching up from the QC a timeout or TC of a later `epoch` carries, we may still be behind for want of
     /// the block it certifies, without which we cannot tell whether it is the commit proof. Fetch that block now
-    /// (once) rather than wait for a block of the new epoch to ask for it: a stalling round brings none, and the
-    /// others may be counting on our vote.
+    /// rather than wait for a block of the new epoch to ask for it: a stalling round brings none, and the others may
+    /// be counting on our vote.
     async fn fetch_if_behind(&mut self, epoch: EpochNumber, qc: &QC) {
-        if epoch <= self.epochs.epoch() || self.requested.contains(&qc.hash) || self.requested.len() >= MAX_REQUESTED {
+        if epoch <= self.epochs.epoch() || self.asked_recently(&qc.hash) {
             return;
         }
-        if matches!(self.read_block(&qc.hash).await, Ok(None)) && self.verify_qc(qc).is_ok() {
-            self.requested.insert(qc.hash.clone());
+        if matches!(self.read_block(&qc.hash).await, Ok(None)) && self.verify_qc(qc).is_ok() && self.ask_now(&qc.hash) {
             self.request_certified(qc).await;
         }
     }
@@ -1051,7 +1068,9 @@ impl Core {
             self.catch_up(&block.qc).await;
             if block.epoch > self.epochs.epoch() {
                 self.defer(block.author, ConsensusMessage::Propose(block.clone()));
-                self.request_certified(&block.qc).await;
+                if self.ask_now(&block.qc.hash) {
+                    self.request_certified(&block.qc).await;
+                }
                 return Ok(());
             }
         }
@@ -1188,7 +1207,7 @@ impl Core {
                 // Votes of the next epoch can reach us before the block they vote for (which carries the
                 // commit proof that moves us there), and that block may be lost: ask the voter for it.
                 if let ConsensusMessage::Vote(vote) = &m {
-                    if self.requested.len() < MAX_REQUESTED && self.requested.insert(vote.hash.clone()) {
+                    if self.ask_now(&vote.hash) {
                         self.request_block(vote.hash.clone(), vote.author).await;
                     }
                 }

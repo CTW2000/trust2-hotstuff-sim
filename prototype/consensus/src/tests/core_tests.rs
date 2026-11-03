@@ -1003,6 +1003,42 @@ async fn a_block_of_the_next_epoch_asks_the_signers_of_its_qc() {
 }
 
 #[tokio::test]
+async fn copies_of_a_block_of_the_next_epoch_ask_for_its_parent_once() {
+    // Each reply to such a request is itself a block of the next epoch, and it comes from several signers: asking
+    // again on every copy multiplied the requests into a storm that kept a lagging node behind.
+    let committee = committee_with_base_port(17_700);
+    let mut members = keys();
+    let (name, secret) = members.remove(0);
+    let parent = Digest([4; 32]);
+    let qc = QC { hash: parent.clone(), round: 9, epoch: EPOCH, votes: signed_by(&members, parent.clone(), 9) };
+    let signer = members[1].0;
+    let (author, author_secret) = members.remove(0);
+    let mut block = Block::new_from_key(qc, author, 10, Vec::new(), &author_secret);
+    block.epoch = EPOCH + 1;
+    block.signature = Signature::new(&block.digest(), &author_secret);
+    let expected = Bytes::from(bincode::serialize(&ConsensusMessage::SyncRequest(parent, name)).unwrap());
+
+    let mut received = frames(committee.address(&signer).unwrap(), 16);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let store_path = ".db_test_copies_of_a_block_of_the_next_epoch_ask_for_its_parent_once";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    for _ in 0..3 {
+        tx_core.send(ConsensusMessage::Propose(block.clone())).await.unwrap();
+    }
+    let mut asks = 0;
+    let _ = timeout(Duration::from_millis(500), async {
+        while let Some(frame) = received.recv().await {
+            if frame == expected {
+                asks += 1;
+            }
+        }
+    })
+    .await;
+    assert_eq!(asks, 1);
+}
+
+#[tokio::test]
 async fn a_timeout_of_the_next_epoch_fetches_the_block_its_qc_certifies() {
     // The commit proof of the terminal block can reach a lagging node inside a timeout of the next epoch, when no
     // block comes (the round is stalling, and its vote may be the one missing). Without the block it certifies the
