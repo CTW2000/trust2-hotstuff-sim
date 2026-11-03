@@ -1,7 +1,7 @@
 """P5 experiment driver (prototype/DESIGN.md §14.3). Runs run_local.py over a matrix, one run at a time (the runner
 holds the lab server's lock and resource limits), and appends one CSV row per run to results-p5/<experiment>.csv;
 `report` summarizes every CSV into results-p5/<experiment>.md (median and range over the repetitions).
-Run from prototype/benchmark/:  python3 p5.py x2 | x3 | p3 | x4 | xr | report
+Run from prototype/benchmark/:  python3 p5.py x2 | x3 | p3 | x4 | xr | xt | report
 """
 import csv
 import os
@@ -112,7 +112,8 @@ def run(experiment, config, duration):
     row.update(
         consensus_tps=round(tps), consensus_latency_ms=round(parser._consensus_latency() * 1000),
         e2e_tps=round(e2e_tps), e2e_latency_ms=round(parser._end_to_end_latency() * 1000),
-        timeouts=parser.timeouts, timeout_rounds=len(lag["timeout_rounds"]), top_round=lag["top_round"],
+        timeouts=parser.timeouts, client_misses=parser.misses, timeout_rounds=len(lag["timeout_rounds"]),
+        top_round=lag["top_round"],
         rounds_per_s=round(lag["top_round"] / (duration + WARMUP), 1), epochs=lag["epochs"],
         lag_median_ms=round(lag["lag_median_ms"]), lag_max_ms=round(lag["lag_max_ms"]),
     )
@@ -240,13 +241,26 @@ def xr():
                 run("xr", dict(scenario=name, build=build, nodes=31, net="base", epoch_length=50, rep=rep, **faults), 90)
 
 
+def xt():
+    """Throughput against latency: the input rate up to and past the knee, base network, both builds, three runs. The
+    rates come from a probe; nodes and clients share one server, so the knee is where it runs out of CPU."""
+    rates = {4: (50_000, 100_000, 200_000, 300_000, 350_000, 400_000),
+             10: (25_000, 50_000, 100_000, 150_000, 175_000, 200_000),
+             31: (20_000, 30_000, 40_000, 50_000, 60_000, 70_000)}
+    for rep in (1, 2, 3):
+        for nodes, sweep in rates.items():
+            for rate in sweep:
+                for build in ("baseline", "trust2"):
+                    run("xt", dict(build=build, nodes=nodes, net="base", rate=rate, epoch_length=100, rep=rep), 30)
+
+
 def report():
     for path in sorted(glob(f"{OUT}/*.csv")):
         with open(path) as fh:
             rows = list(csv.DictReader(fh))
         if not rows:
             continue
-        metrics = [k for k in rows[0] if k not in ("scenario", "build", "nodes", "net", "epoch_length", "rep",
+        metrics = [k for k in rows[0] if k not in ("scenario", "build", "nodes", "net", "rate", "epoch_length", "rep",
                                                    "faults", "frame", "lie_nr", "equivocate", "otx_rate",
                                                    "attest_guard", "censor", "censor_adjacent", "late_p",
                                                    "stakes", "uncertified", "entity_cap_ppm", "class_cap_ppm")]
@@ -298,4 +312,4 @@ def compare_x2(rows):
 
 
 if __name__ == "__main__":
-    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "report": report}[sys.argv[1]]()
+    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "report": report}[sys.argv[1]]()
