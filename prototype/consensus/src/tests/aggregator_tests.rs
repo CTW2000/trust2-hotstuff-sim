@@ -1,5 +1,5 @@
 use super::*;
-use crate::common::{committee, keys, qc, vote};
+use crate::common::{committee, keys, qc, vote, EPOCH};
 use crate::messages::{Accusation, Timeout};
 
 #[test]
@@ -72,6 +72,33 @@ fn make_tc_keeps_highest_qc_and_nr() {
     assert_eq!(tc.high_qc, qc());
     assert_eq!(tc.nr_weight(&committee()), 2);
     assert!(tc.verify(&committee()).is_ok());
+}
+
+#[test]
+fn timeouts_of_two_epochs_do_not_mix() {
+    // A node that enters the next epoch during a round already holds that round's timeouts of the old epoch;
+    // the timeouts it gets afterwards are of the new one. A TC of both carries one epoch, so the signatures of
+    // the other fail at every receiver and the TC, and the block that embeds it, are rejected.
+    let mut aggregator = Aggregator::new();
+    let mut next = committee();
+    next.epoch = EPOCH + 1;
+    let timeout_in = |epoch, (name, secret): &(PublicKey, crypto::SecretKey)| {
+        let mut timeout = Timeout::new_from_key(QC::genesis(), 2, false, *name, secret);
+        timeout.epoch = epoch;
+        timeout.signature = Signature::new(&timeout.digest(), secret);
+        timeout
+    };
+    let keys = keys();
+    for key in &keys[..2] {
+        assert!(aggregator.add_timeout(timeout_in(EPOCH, key), &committee()).unwrap().is_none());
+    }
+    assert!(aggregator.add_timeout(timeout_in(EPOCH + 1, &keys[2]), &next).unwrap().is_none());
+    assert!(aggregator.add_timeout(timeout_in(EPOCH + 1, &keys[0]), &next).unwrap().is_none());
+    let tc = aggregator
+        .add_timeout(timeout_in(EPOCH + 1, &keys[1]), &next)
+        .unwrap()
+        .expect("three timeouts of the new epoch make a TC");
+    assert!(tc.verify(&next).is_ok());
 }
 
 #[test]

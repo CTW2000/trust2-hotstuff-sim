@@ -12,7 +12,7 @@ use crate::messages::{
     Vote, QC, TC,
 };
 use crate::proposer::ProposerMessage;
-use crate::synchronizer::Synchronizer;
+use crate::synchronizer::{holders, Synchronizer, SYNC_FANOUT};
 use crate::timer::Timer;
 use async_recursion::async_recursion;
 use bytes::Bytes;
@@ -407,11 +407,35 @@ impl Core {
         }
     }
 
+    /// Ask a few signers of `qc` for the block it certifies, as the synchronizer asks for a missing parent: each of
+    /// them stored the block before voting for it, so one late request or reply does not hold us up. Here the
+    /// missing block decides the epoch (H3), which the synchronizer does not see.
+    async fn request_certified(&mut self, qc: &QC) {
+        let addresses = holders(qc, self.committee(), &self.name);
+        let message = bincode::serialize(&ConsensusMessage::SyncRequest(qc.hash.clone(), self.name))
+            .expect("Failed to serialize sync request");
+        self.network.lucky_broadcast(addresses, Bytes::from(message), SYNC_FANOUT).await;
+    }
+
     /// A QC (of an epoch we know) embedded in a message of a later epoch may be the commit proof of our
     /// terminal block: process it, which commits and enters the next epoch (H3).
     async fn catch_up(&mut self, qc: &QC) {
         if self.verify_qc(qc).is_ok() {
             self.process_qc(qc).await;
+        }
+    }
+
+    /// After catching up from the QC a timeout or TC of a later `epoch` carries, we may still be behind for want of
+    /// the block it certifies, without which we cannot tell whether it is the commit proof. Fetch that block now
+    /// (once) rather than wait for a block of the new epoch to ask for it: a stalling round brings none, and the
+    /// others may be counting on our vote.
+    async fn fetch_if_behind(&mut self, epoch: EpochNumber, qc: &QC) {
+        if epoch <= self.epochs.epoch() || self.requested.contains(&qc.hash) || self.requested.len() >= MAX_REQUESTED {
+            return;
+        }
+        if matches!(self.read_block(&qc.hash).await, Ok(None)) && self.verify_qc(qc).is_ok() {
+            self.requested.insert(qc.hash.clone());
+            self.request_certified(qc).await;
         }
     }
 
@@ -774,9 +798,7 @@ impl Core {
         if self.epochs.may_end(qc.round) && missing {
             debug!("Proposal for round {} waits for {}", self.round, qc.hash);
             self.pending_proposal = Some((self.round, tc));
-            if let Some(author) = self.epochs.get(qc.epoch).map(|c| leader(c, qc.round)) {
-                self.request_block(qc.hash.clone(), author).await;
-            }
+            self.request_certified(&qc).await;
             return;
         }
         self.generate_proposal(tc).await;
@@ -1029,7 +1051,7 @@ impl Core {
             self.catch_up(&block.qc).await;
             if block.epoch > self.epochs.epoch() {
                 self.defer(block.author, ConsensusMessage::Propose(block.clone()));
-                self.request_block(block.qc.hash.clone(), block.author).await;
+                self.request_certified(&block.qc).await;
                 return Ok(());
             }
         }
@@ -1128,10 +1150,14 @@ impl Core {
                 debug!("Dropping a message of later epoch {} not signed by a member", epoch);
                 return Ok(());
             }
-            match &message {
-                ConsensusMessage::Timeout(timeout) => self.catch_up(&timeout.high_qc.clone()).await,
-                ConsensusMessage::TC(tc) => self.catch_up(&tc.high_qc.clone()).await,
-                _ => (),
+            let carried = match &message {
+                ConsensusMessage::Timeout(timeout) => Some(timeout.high_qc.clone()),
+                ConsensusMessage::TC(tc) => Some(tc.high_qc.clone()),
+                _ => None,
+            };
+            if let Some(qc) = carried {
+                self.catch_up(&qc).await;
+                self.fetch_if_behind(epoch, &qc).await;
             }
         }
         // 1.13: a current-epoch message for a round implausibly far beyond ours. First catch up from the

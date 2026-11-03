@@ -11,9 +11,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 pub mod aggregator_tests;
 
 /// Votes and timeouts are added after verification against the table of their epoch, which is passed in.
+/// Timeouts are kept apart by epoch as well as round: a node that enters the next epoch during a round gets
+/// timeouts of both, and a TC carries a single epoch (votes are apart already, their digest includes it).
 pub struct Aggregator {
     votes_aggregators: HashMap<Round, HashMap<Digest, Box<QCMaker>>>,
-    timeouts_aggregators: HashMap<Round, Box<TCMaker>>,
+    timeouts_aggregators: HashMap<(EpochNumber, Round), Box<TCMaker>>,
 }
 
 impl Aggregator {
@@ -47,14 +49,14 @@ impl Aggregator {
 
         // Add the new timeout to our aggregator and see if we have a TC.
         self.timeouts_aggregators
-            .entry(timeout.round)
+            .entry((timeout.epoch, timeout.round))
             .or_insert_with(|| Box::new(TCMaker::new()))
             .append(timeout, committee)
     }
 
     pub fn cleanup(&mut self, round: &Round) {
         self.votes_aggregators.retain(|k, _| k >= round);
-        self.timeouts_aggregators.retain(|k, _| k >= round);
+        self.timeouts_aggregators.retain(|(_, k), _| k >= round);
     }
 }
 

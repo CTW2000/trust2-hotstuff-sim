@@ -962,6 +962,72 @@ async fn a_block_of_a_far_epoch_still_asks_for_its_parent() {
     assert_eq!(received.recv().await.unwrap(), Bytes::from(expected));
 }
 
+/// Whether `expected` is among the first frames a listener gets within two seconds (our own timeouts may come
+/// first when the timer fires before the message is handled).
+async fn asked(mut received: Receiver<Bytes>, expected: Bytes) -> bool {
+    let found = async {
+        while let Some(frame) = received.recv().await {
+            if frame == expected {
+                return true;
+            }
+        }
+        false
+    };
+    timeout(Duration::from_secs(2), found).await.unwrap_or(false)
+}
+
+#[tokio::test]
+async fn a_block_of_the_next_epoch_asks_the_signers_of_its_qc() {
+    // A node that missed the terminal block or its child cannot enter the next epoch, nor vote in it, until it has
+    // them. It asks a few signers of the QC, as the synchronizer does, not only the author of the block: one late
+    // request or reply would hold its votes back for the whole delay.
+    let committee = committee_with_base_port(17_500);
+    let mut members = keys();
+    let (name, secret) = members.remove(0);
+    let parent = Digest([6; 32]);
+    let qc = QC { hash: parent.clone(), round: 9, epoch: EPOCH, votes: signed_by(&members, parent.clone(), 9) };
+    let signer = members[1].0;
+    let (author, author_secret) = members.remove(0);
+    let mut block = Block::new_from_key(qc, author, 10, Vec::new(), &author_secret);
+    block.epoch = EPOCH + 1;
+    block.signature = Signature::new(&block.digest(), &author_secret);
+    let expected = bincode::serialize(&ConsensusMessage::SyncRequest(parent, name)).unwrap();
+
+    let received = frames(committee.address(&signer).unwrap(), 4);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let store_path = ".db_test_a_block_of_the_next_epoch_asks_the_signers_of_its_qc";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+    assert!(asked(received, Bytes::from(expected)).await, "a signer of the QC is asked");
+}
+
+#[tokio::test]
+async fn a_timeout_of_the_next_epoch_fetches_the_block_its_qc_certifies() {
+    // The commit proof of the terminal block can reach a lagging node inside a timeout of the next epoch, when no
+    // block comes (the round is stalling, and its vote may be the one missing). Without the block it certifies the
+    // node cannot enter the epoch: it asks the signers of the QC for it at once.
+    let committee = committee_with_base_port(17_600);
+    let mut members = keys();
+    let (name, secret) = members.remove(0);
+    let hash = Digest([5; 32]);
+    let high_qc = QC { hash: hash.clone(), round: 9, epoch: EPOCH, votes: signed_by(&members, hash.clone(), 9) };
+    let signer = members[2].0;
+    let (author, author_secret) = members.remove(0);
+    let mut stalled = Timeout::new_from_key(high_qc, 10, false, author, &author_secret);
+    stalled.epoch = EPOCH + 1;
+    stalled.signature = Signature::new(&stalled.digest(), &author_secret);
+    let expected = bincode::serialize(&ConsensusMessage::SyncRequest(hash, name)).unwrap();
+
+    let received = frames(committee.address(&signer).unwrap(), 4);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let store_path = ".db_test_a_timeout_of_the_next_epoch_fetches_the_block_its_qc_certifies";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Timeout(stalled)).await.unwrap();
+    assert!(asked(received, Bytes::from(expected)).await, "a signer of the QC is asked");
+}
+
 #[tokio::test]
 async fn nr_timeouts_make_an_accusation() {
     // G2: NR = 1 timeouts of a round from more than 2/3 of the weight go to the proposer as an AT accusation.
