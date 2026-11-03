@@ -3,14 +3,16 @@
 //! - H1: the terminal block G_e of epoch e is the first block of epoch e on the chain whose round is at
 //!   least s_e + length, where s_e is the round of G_{e-1} (0 for the first epoch). The predicate only
 //!   looks at the block, so it is a function of the chain prefix.
-//! - The table of epoch e+1 is a deterministic function of the ledger up to G_e: the AT accusations on it
-//!   drive the G2 leader rule and the reputations (reputation.rs, DESIGN.md §12.2), which give each
-//!   member's stake (CapNorm of the base weights times r, within the budget) and whether it may lead; the G1
-//!   evidence on it drives the graded punishment (punish.rs, DESIGN.md §13): suspension (z = 0), bars from
-//!   leading, eviction.
-//! - H3: a node enters epoch e+1 when it first holds a commit proof of G_e (Core::commit); from then on it
-//!   signs no message of an older epoch. The tables of the last few epochs are kept to verify old blocks
-//!   received through synchronization.
+//! - H1': the table of epoch e+1 is a deterministic function of the ledger up to G_{e-1}, one epoch behind, so
+//!   that a node knows it before its ledger reaches G_e (the first two epochs share the configured table). The
+//!   AT accusations on the ledger drive the G2 leader rule and the reputations (reputation.rs, DESIGN.md §12.2),
+//!   which give each member's stake (CapNorm of the base weights times r, within the budget) and whether it may
+//!   lead; the G1 evidence on it drives the graded punishment (punish.rs, DESIGN.md §13): suspension (z = 0),
+//!   bars from leading, eviction.
+//! - H3: a node enters epoch e+1 when it first holds G_e and a commit proof of it: when its ledger reaches G_e
+//!   (Core::commit), or earlier, with G_e, its child and the proof at hand but some block before G_e still
+//!   missing (enter_early; DESIGN.md §15.10). From then on it signs no message of an older epoch. The tables
+//!   of the last few epochs are kept to verify old blocks received through synchronization.
 
 use crate::config::{Authority, Committee, EpochNumber, Stake};
 use crate::consensus::Round;
@@ -28,8 +30,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[path = "tests/epoch_tests.rs"]
 pub mod epoch_tests;
 
-/// Tables kept for verification: the current epoch and the previous ones.
-const KEEP: usize = 16;
+/// Tables kept: the next epoch's (H1'), the current epoch's and the previous ones, for verification.
+const KEEP: usize = 17;
 
 /// In a single-epoch run, committed blocks and accusation facts of rounds more than this far behind the latest
 /// committed block are forgotten: there is no handover to process them (enter_next), so nothing else would. It
@@ -64,6 +66,10 @@ pub struct Epochs {
     current: EpochNumber,
     /// s_e: round of the terminal block of the previous epoch.
     start: Round,
+    /// The epoch the committed ledger is in, and the round of the terminal block before it. It is one behind
+    /// `current` after an early entry, until the ledger reaches that terminal block.
+    ledger: EpochNumber,
+    ledger_start: Round,
     tables: BTreeMap<EpochNumber, Committee>,
     /// First round of each kept epoch (a round's leader comes from the table of its epoch).
     first_rounds: BTreeMap<EpochNumber, Round>,
@@ -168,19 +174,24 @@ impl Epochs {
             punishment,
             current: roster.epoch,
             start: 0,
+            ledger: roster.epoch,
+            ledger_start: 0,
             tables: BTreeMap::new(),
             first_rounds: BTreeMap::new(),
             committed: BTreeMap::new(),
             watermark: HashMap::new(),
         };
-        let first = epochs.make_table(roster.epoch);
-        epochs.tables.insert(roster.epoch, first);
+        // H1': the second epoch has no ledger two terminal blocks back either, so it starts from the same state.
+        for epoch in roster.epoch..=roster.epoch + 1 {
+            let table = epochs.make_table(epoch);
+            epochs.tables.insert(epoch, table);
+        }
         epochs.first_rounds.insert(roster.epoch, 0);
         epochs
     }
 
-    /// W_e = F(ledger up to G_{e-1}): stakes from the base shares (G1), reputations within the budget (G2) and
-    /// suspensions (z, G1); leadership barred by the G2 exclusions and by G1 (L1, suspended, queued, evicted).
+    /// W_e = F(ledger up to G_{e-2}) (H1'): stakes from the base shares (G1), reputations within the budget (G2)
+    /// and suspensions (z, G1); leadership barred by the G2 exclusions and by G1 (L1, suspended, queued, evicted).
     fn make_table(&self, epoch: EpochNumber) -> Committee {
         let z = self.punishment.z();
         let stakes = self.split(&self.reputation.stakes_on(self.punishment.base(), &z));
@@ -344,11 +355,17 @@ impl Epochs {
         self.tables.get(&epoch)
     }
 
-    /// H1: whether `block` is the terminal block of the current epoch.
+    /// H1: whether `block`, the next block of the ledger in chain order, is the terminal block of the ledger's
+    /// epoch.
     pub fn is_terminal(&self, block: &Block) -> bool {
         self.config.length > 0
-            && block.epoch == self.current
-            && block.round >= self.start + self.config.length
+            && block.epoch == self.ledger
+            && block.round >= self.ledger_start + self.config.length
+    }
+
+    /// Whether `round` is past the end of the current epoch (a block there may be its terminal block or after it).
+    pub fn past_end(&self, round: Round) -> bool {
+        self.config.length > 0 && round >= self.start + self.config.length
     }
 
     /// Whether a QC of `round` may be the commit proof of the terminal block (its block's parent may be
@@ -357,10 +374,11 @@ impl Epochs {
         self.config.length > 0 && round > self.start + self.config.length
     }
 
-    /// H3: enter the next epoch once its terminal block is committed. The leader rule processes the rounds up
-    /// to (terminal round + 1 - lag), each led by the leader of its epoch's table (the epoch the accusation
-    /// was made in, if any); then the next table is computed.
-    pub fn enter_next(&mut self, terminal: &Block) {
+    /// The ledger reaches the terminal block of its epoch. The leader rule processes the rounds up to (terminal
+    /// round + 1 - lag), each led by the leader of its epoch's table (the epoch the accusation was made in, if
+    /// any); then the table two epochs ahead is computed (H1'). The node enters the next epoch now (H3) unless
+    /// it already did (enter_early). Returns whether it entered.
+    pub fn enter_next(&mut self, terminal: &Block) -> bool {
         let horizon = (terminal.round + 1).saturating_sub(self.reputation.config().lag);
         let before = self.reputation.r_ppm().to_vec();
         let (tables, first_rounds, members) = (&self.tables, &self.first_rounds, &self.members);
@@ -388,9 +406,9 @@ impl Epochs {
             }
         }
 
-        // G1: the graded punishment for the next table.
-        let next = self.current + 1;
-        for event in self.punishment.update(next) {
+        // G1: the graded punishment for the table two epochs ahead.
+        let target = self.ledger + 2;
+        for event in self.punishment.update(target) {
             let (what, i, k) = match *event {
                 G1Event::Level(l, i, k) => (format!("level L{}", l), i, k),
                 G1Event::Queue(i, k) => ("queued for suspension".to_string(), i, k),
@@ -404,20 +422,48 @@ impl Epochs {
             }
         }
 
-        // The child of the terminal block still belongs to this epoch (the commit proof certifies it, at the
-        // adjacent round); the next epoch starts after it, and its first round keeps the old leader, which
-        // holds that proof, even if the new table suspends it (it then proposes without voting).
-        let first = terminal.round + 2;
-        let mut table = self.make_table(next);
-        table.handover = Some((first, leader(self.current(), first)));
-        self.tables.insert(next, table);
-        self.first_rounds.insert(next, first);
-        self.current = next;
-        self.start = terminal.round;
+        let table = self.make_table(target);
+        self.tables.insert(target, table);
+        let entering = self.current == self.ledger;
+        if entering {
+            self.enter(terminal);
+        }
+        self.ledger += 1;
+        self.ledger_start = terminal.round;
         while self.tables.len() > KEEP {
             let oldest = *self.tables.keys().next().unwrap();
             self.tables.remove(&oldest);
             self.first_rounds.remove(&oldest);
         }
+        entering
+    }
+
+    /// H3: switch to the next epoch, whose table is known a whole epoch ahead (H1'), at its terminal block.
+    fn enter(&mut self, terminal: &Block) {
+        // The child of the terminal block still belongs to this epoch (the commit proof certifies it, at the
+        // adjacent round); the next epoch starts after it, and its first round keeps the old leader, which
+        // holds that proof, even if the new table suspends it (it then proposes without voting).
+        let next = self.current + 1;
+        let first = terminal.round + 2;
+        let handover = leader(self.current(), first);
+        let table = self.tables.get_mut(&next).expect("the next table is known an epoch ahead");
+        table.handover = Some((first, handover));
+        self.first_rounds.insert(next, first);
+        self.current = next;
+        self.start = terminal.round;
+    }
+
+    /// H3 before the ledger gets there: a node that holds the terminal block of the current epoch and a commit
+    /// proof of it (checked by the caller), but not yet every block before it, enters the next epoch, whose
+    /// table it already knows (H1'). `terminal` must be the first block of the epoch past its end: its parent is
+    /// not. The ledger's own processing of the epoch follows when it gets there (enter_next). Returns whether the
+    /// node entered.
+    pub fn enter_early(&mut self, terminal: &Block) -> bool {
+        let first_past_end = self.past_end(terminal.round) && !self.past_end(terminal.qc.round);
+        if terminal.epoch != self.current || !first_past_end || !self.tables.contains_key(&(self.current + 1)) {
+            return false;
+        }
+        self.enter(terminal);
+        true
     }
 }

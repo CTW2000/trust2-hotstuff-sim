@@ -36,6 +36,9 @@ const MAX_DEFERRED_BYTES: usize = 64 << 20;
 /// At most this many blocks of a later epoch requested at a time (cleared when we enter a new epoch).
 const MAX_REQUESTED: usize = 2_000;
 
+/// At most this many verified blocks past the end of the epoch kept for enter_on_proof (cleared when we enter).
+const MAX_HEADERS: usize = 1_000;
+
 /// A block of a later epoch is asked for again only after this long (the request or the replies may be late). Asking
 /// on every copy of every reply would multiply the requests: each reply is itself a block of the later epoch.
 const REQUEST_AGAIN_AFTER: Duration = Duration::from_millis(1_000);
@@ -142,6 +145,9 @@ pub struct Core {
     replay: VecDeque<ConsensusMessage>,
     // Blocks of a later epoch already requested, and when (cleared when we enter a new epoch).
     requested: HashMap<Digest, Instant>,
+    // Verified blocks of the current epoch past its end, stored or not: the terminal block and its child, which
+    // let us enter the next epoch before every block before them is here (cleared when we enter a new epoch).
+    headers: HashMap<Digest, Block>,
     // A proposal for the round held back until we have the block certified by our high QC.
     pending_proposal: Option<(Round, Option<TC>)>,
     // The round at the last round-based cleanup of the detection / accusation / inclusion state.
@@ -234,6 +240,7 @@ impl Core {
             deferred: Deferred::default(),
             replay: VecDeque::new(),
             requested: HashMap::new(),
+            headers: HashMap::new(),
             pending_proposal: None,
             last_cleanup: 0,
         }
@@ -421,10 +428,11 @@ impl Core {
         self.network.lucky_broadcast(addresses, Bytes::from(message), SYNC_FANOUT).await;
     }
 
-    /// A QC (of an epoch we know) embedded in a message of a later epoch may be the commit proof of our
-    /// terminal block: process it, which commits and enters the next epoch (H3).
+    /// A QC of our epoch or an older one, embedded in a message of a later epoch, may be the commit proof of our
+    /// terminal block: process it, which enters the next epoch (H3). A QC of the next epoch is not processed
+    /// before we enter it, although its table is known (H1'): our high QC stays within our epoch.
     async fn catch_up(&mut self, qc: &QC) {
-        if self.verify_qc(qc).is_ok() {
+        if qc.epoch <= self.epochs.epoch() && self.verify_qc(qc).is_ok() {
             self.process_qc(qc).await;
         }
     }
@@ -448,18 +456,57 @@ impl Core {
     /// rather than wait for a block of the new epoch to ask for it: a stalling round brings none, and the others may
     /// be counting on our vote.
     async fn fetch_if_behind(&mut self, epoch: EpochNumber, qc: &QC) {
-        if epoch <= self.epochs.epoch() || self.asked_recently(&qc.hash) {
+        if epoch <= self.epochs.epoch() || qc.epoch > self.epochs.epoch() || self.asked_recently(&qc.hash) {
             return;
         }
-        if matches!(self.read_block(&qc.hash).await, Ok(None)) && self.verify_qc(qc).is_ok() && self.ask_now(&qc.hash) {
+        let missing = matches!(self.read_block(&qc.hash).await, Ok(None)) && !self.headers.contains_key(&qc.hash);
+        if missing && self.verify_qc(qc).is_ok() && self.ask_now(&qc.hash) {
             self.request_certified(qc).await;
         }
     }
 
-    /// H3: enter the next epoch once its terminal block is committed; messages of the new epoch that
-    /// arrived early are handled again.
-    fn enter_epoch(&mut self, terminal: &Block) {
-        self.epochs.enter_next(terminal);
+    /// A block we hold, stored or (past the end of the epoch) only verified.
+    async fn block_or_header(&mut self, digest: &Digest) -> Option<Block> {
+        match self.headers.get(digest) {
+            Some(block) => Some(block.clone()),
+            None => self.read_block(digest).await.ok().flatten(),
+        }
+    }
+
+    /// H3 before our ledger gets there: `qc`, of our epoch, certifies b1 whose parent b0, at the adjacent round,
+    /// is the terminal block of the epoch. Holding both and the proof is enough to enter the next epoch, whose
+    /// table we know (H1'), even if a block before b0 is still missing and the ledger cannot follow yet.
+    async fn enter_on_proof(&mut self, qc: &QC) {
+        if qc.epoch != self.epochs.epoch() || !self.epochs.past_end(qc.round) {
+            return;
+        }
+        let b1 = match self.block_or_header(&qc.hash).await {
+            Some(block) => block,
+            None => return,
+        };
+        let b0 = match self.block_or_header(&b1.qc.hash).await {
+            Some(block) => block,
+            None => return,
+        };
+        if b0.round + 1 == b1.round && self.epochs.enter_early(&b0) {
+            debug!("Entered epoch {} before the ledger reached B{}", self.epochs.epoch(), b0.round);
+            self.entered(&b0);
+        }
+    }
+
+    /// The ledger reaches a terminal block (H1): the next epoch's table is ready, and we enter it now unless we
+    /// already did (enter_on_proof).
+    fn reach_terminal(&mut self, terminal: &Block) {
+        if self.epochs.enter_next(terminal) {
+            self.entered(terminal);
+        } else {
+            self.accuser.cleanup(self.epochs.done() + 1);
+            self.inclusion.cleanup(self.epochs.done() + 1);
+        }
+    }
+
+    /// H3: we are in a new epoch; messages of it that arrived early are handled again.
+    fn entered(&mut self, terminal: &Block) {
         info!(
             "Entered epoch {} at round {} (terminal block B{})",
             self.epochs.epoch(),
@@ -468,6 +515,7 @@ impl Core {
         );
         self.replay.extend(self.deferred.take());
         self.requested.clear();
+        self.headers.clear();
         self.accuser.cleanup(self.epochs.done() + 1);
         self.inclusion.cleanup(self.epochs.done() + 1);
         self.detector.cleanup(self.round.saturating_sub(DETECT_WINDOW));
@@ -604,7 +652,7 @@ impl Core {
 
             // H1/H3: committing the terminal block of the epoch moves us to the next epoch.
             if self.epochs.is_terminal(&block) {
-                self.enter_epoch(&block);
+                self.reach_terminal(&block);
             }
 
             for x in &block.otxs {
@@ -807,11 +855,14 @@ impl Core {
     }
 
     /// Near the end of an epoch our high QC may be the commit proof of the terminal block, which we can
-    /// only tell once we hold the block it certifies (votes can arrive before the block). Then propose
-    /// only when that block is here, so that our block carries the right epoch; ask its author for it.
+    /// only tell once we hold the block it certifies and that block's parent (votes can arrive before the
+    /// block). Then propose only when they are here, so that our block carries the right epoch; ask for them.
     async fn propose(&mut self, tc: Option<TC>) {
         let qc = self.high_qc.clone();
-        let missing = matches!(self.read_block(&qc.hash).await, Ok(None));
+        let missing = match self.block_or_header(&qc.hash).await {
+            Some(b1) => self.block_or_header(&b1.qc.hash).await.is_none(),
+            None => true,
+        };
         if self.epochs.may_end(qc.round) && missing {
             debug!("Proposal for round {} waits for {}", self.round, qc.hash);
             self.pending_proposal = Some((self.round, tc));
@@ -935,6 +986,8 @@ impl Core {
         if let Err(e) = self.try_commit_via_qc(qc).await {
             warn!("{}", e);
         }
+        // The commit proof of our terminal block, while a block before it is missing.
+        self.enter_on_proof(qc).await;
     }
 
     /// Commit as soon as we hold a commit proof, a QC for b1 whose parent b0 is from the round just
@@ -1112,6 +1165,19 @@ impl Core {
             found.extend(self.detector.tc(tc));
         }
         self.propose_evidence(found).await;
+
+        // A block past the end of our epoch may be its terminal block or the child of it (enter_on_proof).
+        let current = block.epoch == self.epochs.epoch();
+        if current && self.epochs.past_end(block.round) && self.headers.len() < MAX_HEADERS {
+            self.headers.insert(digest.clone(), block.clone());
+            // It may be one a held-back proposal waits for (propose), and complete the commit proof.
+            if matches!(self.pending_proposal, Some((round, _)) if round == self.round) {
+                let high_qc = self.high_qc.clone();
+                self.enter_on_proof(&high_qc).await;
+                let (_, tc) = self.pending_proposal.take().unwrap();
+                self.propose(tc).await;
+            }
+        }
 
         // Process the QC. This may allow us to advance round.
         self.process_qc(&block.qc).await;

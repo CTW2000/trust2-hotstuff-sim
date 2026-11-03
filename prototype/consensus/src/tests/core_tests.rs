@@ -127,6 +127,26 @@ fn frames(address: SocketAddr, n: usize) -> Receiver<Bytes> {
     rx
 }
 
+/// A listener that hands over the frames of every connection to it: the core and its synchronizer connect apart.
+fn all_frames(address: SocketAddr) -> Receiver<Bytes> {
+    let (tx, rx) = channel(1_000);
+    tokio::spawn(async move {
+        let listener = TcpListener::bind(&address).await.unwrap();
+        while let Ok((socket, _)) = listener.accept().await {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let mut transport = Framed::new(socket, LengthDelimitedCodec::new());
+                while let Some(Ok(frame)) = transport.next().await {
+                    if tx.send(frame.freeze()).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    rx
+}
+
 /// A QC for `block` signed by every member.
 fn qc_for(block: &Block) -> QC {
     QC {
@@ -1036,6 +1056,47 @@ async fn copies_of_a_block_of_the_next_epoch_ask_for_its_parent_once() {
     })
     .await;
     assert_eq!(asks, 1);
+}
+
+#[tokio::test]
+async fn a_node_missing_an_older_block_enters_on_the_commit_proof() {
+    // H1' and H3 (DESIGN.md §15.10): the next table is known an epoch ahead, so a node that holds the terminal block
+    // (B10, epochs of 10 rounds), its child and the commit proof enters the next epoch although B9 never came and its
+    // ledger cannot reach B10. Its next timeout is of the new epoch; before, it stayed in the old one.
+    let committee = committee_with_base_port(17_900);
+    let at = |qc: QC, round: Round| {
+        let (author, secret) = leader_keys(round);
+        Block::new_from_key(qc, author, round, Vec::new(), &secret)
+    };
+    let b9 = at(QC::genesis(), 9);
+    let b10 = at(qc_for(&b9), 10);
+    let b11 = at(qc_for(&b10), 11);
+    let mut b12 = at(qc_for(&b11), 12);
+    b12.epoch = EPOCH + 1;
+    b12.signature = Signature::new(&b12.digest(), &leader_keys(12).1);
+
+    let mut members = keys();
+    let (name, secret) = members.remove(0);
+    let peer = members[0].0;
+    let mut received = all_frames(committee.address(&peer).unwrap());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let store_path = ".db_test_a_node_missing_an_older_block_enters_on_the_commit_proof";
+    let (tx_core, mut rx_proposer, _rx_commit) = core_with_epochs(name, secret, committee.clone(), store_path, 10);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    for block in [b10, b11, b12] {
+        tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+    }
+    let new_epoch = async {
+        while let Some(frame) = received.recv().await {
+            if let Ok(ConsensusMessage::Timeout(t)) = bincode::deserialize(&frame) {
+                if t.epoch == EPOCH + 1 {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+    assert!(timeout(Duration::from_secs(2), new_epoch).await.unwrap_or(false), "no timeout of the new epoch");
 }
 
 #[tokio::test]

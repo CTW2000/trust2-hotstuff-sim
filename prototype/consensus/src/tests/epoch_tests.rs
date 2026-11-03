@@ -93,6 +93,7 @@ fn every_member_fits_under_l_max() {
     let evidence = vec![Evidence::DoubleVote(vote(1), vote(2))];
     epochs.record(&Block { epoch: EPOCH, round: 8, evidence, ..Block::default() });
     epochs.enter_next(&block(EPOCH, 10));
+    epochs.enter_next(&block(EPOCH + 1, 20)); // H1': the table of the epoch after next
     assert_eq!(epochs.current().stake(&cheat.0), 0);
 }
 
@@ -140,6 +141,35 @@ fn terminal_blocks_and_handover() {
 }
 
 #[test]
+fn early_entry_then_the_ledger_catches_up() {
+    // H1' and H3 (DESIGN.md §15.10): holding the terminal block, the first of the epoch past its end, a node enters
+    // the next epoch before its ledger gets there. The ledger's arrival then computes the table two epochs ahead
+    // without entering again; only after that can the following epoch be entered early.
+    let mut epochs = Epochs::new(&committee(), config(10));
+    let first_table = epochs.current().clone();
+    let past = |epoch, round, parent| Block {
+        epoch,
+        round,
+        qc: QC { hash: Digest::default(), round: parent, epoch, votes: Vec::new() },
+        ..Block::default()
+    };
+    assert!(epochs.get(EPOCH + 1).is_some());
+    assert!(!epochs.enter_early(&past(EPOCH, 11, 10)), "not the first block past the end");
+    assert!(!epochs.enter_early(&past(EPOCH, 9, 8)), "not past the end");
+    assert!(epochs.enter_early(&past(EPOCH, 10, 9)));
+    assert_eq!(epochs.epoch(), EPOCH + 1);
+    assert_eq!(epochs.current().handover, Some((12, leader(&first_table, 12))));
+    assert!(!epochs.enter_early(&past(EPOCH + 1, 20, 19)), "the table after next is not known yet");
+
+    assert!(epochs.is_terminal(&past(EPOCH, 10, 9)));
+    assert!(!epochs.enter_next(&past(EPOCH, 10, 9)));
+    assert_eq!(epochs.epoch(), EPOCH + 1);
+    assert!(epochs.get(EPOCH + 2).is_some());
+    assert!(epochs.enter_early(&past(EPOCH + 1, 20, 19)));
+    assert_eq!(epochs.epoch(), EPOCH + 2);
+}
+
+#[test]
 fn no_handover_with_zero_length() {
     let epochs = Epochs::new(&committee(), config(0));
     assert!(!epochs.is_terminal(&block(EPOCH, 1_000_000)));
@@ -158,10 +188,10 @@ fn accusing(epoch: EpochNumber, round: Round, accused: &[Round]) -> Block {
 fn accusations_count_against_the_leader_of_their_own_table() {
     // 5.3: an accusation counts against the leader of its round in the table of the epoch it was made in, which is the
     // table the accusers went by, not the one of the epoch the round falls in. They differ here: the third epoch
-    // change excludes the silent leader, and the new table hands its rounds to others.
+    // change excludes the silent leader from the table after next (H1'), and that table hands its rounds to others.
     let mut epochs = Epochs::new(&committee(), config(10));
     let silent = leader(epochs.current(), 1);
-    for k in 1..=3 {
+    for k in 1..=4 {
         let table = epochs.current().clone();
         let accused: Vec<Round> = (10 * k - 9..=10 * k).filter(|u| leader(&table, *u) == silent).collect();
         epochs.record(&accusing(table.epoch, 10 * k, &accused));
@@ -195,7 +225,9 @@ fn silent_leader_loses_leadership_and_reputation() {
         let end = 10 * k;
         let accused: Vec<Round> = (end - 9..=end).filter(|u| leader(&table, *u) == silent).collect();
         if !table.authorities[&silent].leader {
-            assert!(accused.is_empty(), "an excluded member led a round");
+            // Only the first round of an epoch can be its: it keeps the leader of the previous table.
+            let first = table.handover.map(|(first, _)| first);
+            assert!(accused.iter().all(|u| Some(*u) == first), "an excluded member led a round");
         }
         epochs.record(&accusing(table.epoch, end, &accused));
         epochs.enter_next(&block(table.epoch, end));
@@ -206,8 +238,9 @@ fn silent_leader_loses_leadership_and_reputation() {
         assert!(r.iter().enumerate().all(|(i, x)| i == idx || *x == 1_000_000), "an honest member was cut");
     }
 
-    // Convicted at the third epoch change (rounds <= 21 processed: six accusations), excluded for 500 rounds.
-    assert_eq!(excluded_epochs.first(), Some(&3));
+    // Convicted at the third epoch change (rounds <= 21 processed: six accusations), excluded for 500 rounds from
+    // the table after next (H1').
+    assert_eq!(excluded_epochs.first(), Some(&4));
     assert!(excluded_epochs.windows(2).take(49).all(|w| w[1] == w[0] + 1));
     assert!(excluded_epochs.len() < 80, "the exclusion never ended");
 
@@ -220,7 +253,7 @@ fn silent_leader_loses_leadership_and_reputation() {
         epochs.enter_next(&block(table.epoch, 10 * k));
     }
     assert_eq!(epochs.reputation.r_ppm()[idx], 900_000);
-    let table = epochs.current();
+    let table = epochs.get(epochs.epoch() + 1).unwrap();
     assert_eq!(table.stake(&silent), (225_000_000_000u64 / 975_000) as Stake);
     assert!((0..100).all(|u| leader(table, u) != silent));
 }
@@ -232,7 +265,7 @@ fn first_round_of_an_epoch_keeps_the_previous_leader() {
     // when the new table changes who may lead (DESIGN.md §12.2).
     let mut epochs = Epochs::new(&committee(), config(10));
     let silent = leader(epochs.current(), 1);
-    for k in 1..=3 {
+    for k in 1..=4 {
         let table = epochs.current().clone();
         let accused: Vec<Round> = (10 * k - 9..=10 * k).filter(|u| leader(&table, *u) == silent).collect();
         epochs.record(&accusing(table.epoch, 10 * k, &accused));
@@ -242,9 +275,9 @@ fn first_round_of_an_epoch_keeps_the_previous_leader() {
     let old = epochs.get(new.epoch - 1).unwrap().clone();
     assert!(old.authorities[&silent].leader && !new.authorities[&silent].leader);
     // The schedules differ after the first round (the old one has four leaders, the new one three) ...
-    assert!((33..60).any(|u| leader(&old, u) != leader(&new, u)));
-    // ... but the first round of the new epoch, 32, keeps the old leader.
-    assert_eq!(leader(&new, 32), leader(&old, 32));
+    assert!((43..70).any(|u| leader(&old, u) != leader(&new, u)));
+    // ... but the first round of the new epoch, 42, keeps the old leader.
+    assert_eq!(leader(&new, 42), leader(&old, 42));
 }
 
 fn with_otxs(round: Round, otxs: Vec<Otx>) -> Block {
@@ -312,21 +345,25 @@ fn g1_evidence_suspends_or_bars_at_an_epoch_change() {
     let carrying = Block { epoch: EPOCH, round: 8, evidence: vec![e1, nr], ..Block::default() };
     epochs.record(&carrying);
 
-    let old = epochs.current().clone();
+    // H1': the ledger up to the terminal block of this epoch decides the table of the epoch after next.
     epochs.enter_next(&block(EPOCH, 10));
+    assert!(epochs.current().stake(&cheat.0) > 0);
+    assert_eq!(epochs.get(EPOCH + 2).unwrap().stake(&cheat.0), 0);
+    let old = epochs.current().clone();
+    epochs.enter_next(&block(EPOCH + 1, 20));
     let table = epochs.current().clone();
     assert_eq!(table.stake(&cheat.0), 0);
-    // The first round (12) stays with the old table's leader, suspended or not.
-    assert_eq!(table.handover, Some((12, leader(&old, 12))));
+    // The first round (22) stays with the old table's leader, suspended or not.
+    assert_eq!(table.handover, Some((22, leader(&old, 22))));
     assert!(!table.authorities[&cheat.0].leader);
     assert!(table.stake(&liar.0) > 0 && !table.authorities[&liar.0].leader);
-    assert!((13..100).all(|u| { let l = leader(&table, u); l != cheat.0 && l != liar.0 }));
+    assert!((23..100).all(|u| { let l = leader(&table, u); l != cheat.0 && l != liar.0 }));
 
     // The bar lasts one epoch, the suspension four.
-    epochs.enter_next(&block(EPOCH + 1, 20));
+    epochs.enter_next(&block(EPOCH + 2, 30));
     assert!(epochs.current().authorities[&liar.0].leader);
     assert_eq!(epochs.current().stake(&cheat.0), 0);
-    for k in 3..=5 {
+    for k in 4..=6 {
         epochs.enter_next(&block(EPOCH + k - 1, 10 * k as Round));
     }
     assert_eq!(epochs.current().stake(&cheat.0), 250_000);
@@ -386,6 +423,7 @@ fn punishment_falls_on_the_whole_entity() {
     let evidence = vec![Evidence::DoubleVote(vote(1), vote(2))];
     epochs.record(&Block { epoch: EPOCH, round: 8, evidence, ..Block::default() });
     epochs.enter_next(&block(EPOCH, 10));
+    epochs.enter_next(&block(EPOCH + 1, 20)); // H1': the table of the epoch after next
     let table = epochs.current();
     for name in &names[..2] {
         assert_eq!(table.stake(name), 0);
