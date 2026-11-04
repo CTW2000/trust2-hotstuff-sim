@@ -1,0 +1,5 @@
+  nodes: Counter({'honest': 3, 'equivocator': 1})
+  evidence on the ledger (type, culprit role): {('E1', 'equivocator'): 163}
+  punished entities by role: {'equivocator': 1}
+    equivocator  K8k35jb8XwG/SHTu: L2@3 queued@3 suspended@3 released@19 L3@21 queued@21 suspended@21 L4@22 downgraded@30 released@149 L4@151 L4@154 L4@158 downgraded@159
+  most entities suspended at once: 1
