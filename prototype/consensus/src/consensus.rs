@@ -1,6 +1,6 @@
 use crate::config::{Committee, Parameters};
 use crate::core::{Core, Faults};
-use crate::epoch::EpochConfig;
+use crate::epoch::{EpochConfig, REFERENCE_EPOCH_LENGTH};
 use crate::error::ConsensusError;
 use crate::helper::Helper;
 use crate::mempool::MempoolDriver;
@@ -98,6 +98,7 @@ impl Consensus {
         // Spawn the consensus core.
         let epoch_config = EpochConfig {
             length: parameters.epoch_length,
+            reference_length: REFERENCE_EPOCH_LENGTH,
             entity_cap_ppm: parameters.entity_cap_ppm,
             class_cap_ppm: parameters.class_cap_ppm,
             l_max_ppm: parameters.l_max_ppm,

@@ -200,7 +200,7 @@ def main():
     ap.add_argument("--duration", type=int, default=30, help="measured seconds, after the warm-up")
     ap.add_argument("--warmup", type=int, default=0, help="seconds left out of the measurement at the start")
     ap.add_argument("--timeout-delay", type=int, default=1_000)
-    ap.add_argument("--epoch-length", type=int, default=100, help="rounds per epoch (0: a single epoch)")
+    ap.add_argument("--epoch-length", type=int, default=25, help="rounds per epoch (0: a single epoch)")
     ap.add_argument("--otx-rate", type=int, default=0, help="observed transactions per second (0: no observer)")
     ap.add_argument("--attest-guard", type=int, default=500, help="attestation guard in ms")
     ap.add_argument("--censor", type=int, default=0, help="number of booted nodes that censor victim accounts")

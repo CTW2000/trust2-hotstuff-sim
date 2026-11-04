@@ -62,8 +62,10 @@ fn default_l_max_ppm() -> u64 {
     100_000
 }
 
+/// DESIGN.md §15.11: the next table is known an epoch ahead (H1'), and short epochs keep the delay of punishment
+/// short.
 fn default_epoch_length() -> u64 {
-    100
+    25
 }
 
 fn default_ppm() -> u64 {

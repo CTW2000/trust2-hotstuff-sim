@@ -75,6 +75,7 @@ fn core_on(
 
     let epoch_config = EpochConfig {
         length,
+        reference_length: 0,
         entity_cap_ppm: 1_000_000,
         class_cap_ppm: 1_000_000,
         l_max_ppm: 100_000,
@@ -681,6 +682,7 @@ fn node_with_proposer(store: Store) -> (Core, Receiver<ProposerMessage>) {
         committee(),
         EpochConfig {
             length: 0,
+            reference_length: 0,
             entity_cap_ppm: 1_000_000,
             class_cap_ppm: 1_000_000,
             l_max_ppm: 100_000,

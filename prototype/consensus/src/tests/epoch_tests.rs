@@ -7,6 +7,7 @@ use crate::messages::{Accusation, Evidence, OmitProof, Otx, SignedTimeout, Timeo
 fn config(length: Round) -> EpochConfig {
     EpochConfig {
         length,
+        reference_length: 0,
         entity_cap_ppm: 1_000_000,
         class_cap_ppm: 1_000_000,
         l_max_ppm: 100_000,
@@ -167,6 +168,24 @@ fn early_entry_then_the_ledger_catches_up() {
     assert!(epochs.get(EPOCH + 2).is_some());
     assert!(epochs.enter_early(&past(EPOCH + 1, 20, 19)));
     assert_eq!(epochs.epoch(), EPOCH + 2);
+}
+
+#[test]
+fn durations_keep_their_rounds_at_another_epoch_length() {
+    // DESIGN.md §15.11: the defaults are for epochs of 100 rounds; at 25 rounds an epoch-counted duration is four
+    // times as many epochs, and the recovery per epoch a quarter; at the reference length nothing changes.
+    let at = |length| scaled(&EpochConfig { reference_length: 100, ..config(length) });
+    let (punish, g2) = at(25);
+    let (base, base_g2) = (PunishConfig::default(), G2Config::default());
+    assert_eq!(punish.lead_bar, 4 * base.lead_bar);
+    assert_eq!((punish.suspend_l2, punish.suspend_l3), (4 * base.suspend_l2, 4 * base.suspend_l3));
+    assert_eq!((punish.chain_window, punish.lookback), (4 * base.chain_window, 4 * base.lookback));
+    assert_eq!(punish.governance_delay, 4 * base.governance_delay);
+    assert_eq!(g2.recover_ppm, base_g2.recover_ppm / 4);
+    assert_eq!((g2.lag, g2.exclusion), (base_g2.lag, base_g2.exclusion));
+    let (same, same_g2) = at(100);
+    assert_eq!((same.suspend_l2, same_g2.recover_ppm), (base.suspend_l2, base_g2.recover_ppm));
+    assert_eq!(at(0).0.suspend_l3, base.suspend_l3);
 }
 
 #[test]

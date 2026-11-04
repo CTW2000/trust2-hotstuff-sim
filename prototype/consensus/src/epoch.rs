@@ -39,10 +39,17 @@ const KEEP: usize = 17;
 /// checks the bound at compile time).
 pub const SINGLE_EPOCH_LEDGER_WINDOW: Round = 1_000;
 
+/// The epoch length the G1 durations and the reputation recovery of the defaults are given for (scaled).
+pub const REFERENCE_EPOCH_LENGTH: Round = 100;
+
 #[derive(Clone, Copy, Debug)]
 pub struct EpochConfig {
     /// Rounds per epoch, counted from the previous terminal block (0: a single epoch).
     pub length: Round,
+    /// The epoch length the G1 durations (in epochs) and the reputation recovery (per epoch) of the defaults are
+    /// given for: 100 rounds, as in the simulator. At another length they are converted to last as many rounds
+    /// (scaled; DESIGN.md §15.11). 0 leaves them as they are.
+    pub reference_length: Round,
     pub entity_cap_ppm: u64,
     pub class_cap_ppm: u64,
     /// G1: at most this much base weight suspended at once (ppm).
@@ -103,6 +110,30 @@ fn leader_index(
     members.binary_search_by_key(&name, |(n, _)| *n).ok()
 }
 
+/// The G1 and reputation parameters for the configured epoch length: the durations in epochs (L1 bar, L2 and L3
+/// suspensions, chain window, look-back, governance delay) and the recovery per epoch of the defaults are for
+/// epochs of `reference_length` rounds, and keep their length in rounds at any other epoch length. The leader
+/// rule's windows (lag, exclusion, queue wait) are in rounds already.
+pub fn scaled(config: &EpochConfig) -> (PunishConfig, G2Config) {
+    let mut punish = PunishConfig {
+        l_max: ttru::from_ppm(config.l_max_ppm),
+        ..PunishConfig::default()
+    };
+    let mut g2 = G2Config::default();
+    let (length, reference) = (config.length, config.reference_length);
+    if length > 0 && reference > 0 && length != reference {
+        let epochs = |n: u64| ((n * reference + length / 2) / length).max(1);
+        punish.lead_bar = epochs(punish.lead_bar);
+        punish.suspend_l2 = epochs(punish.suspend_l2);
+        punish.suspend_l3 = epochs(punish.suspend_l3);
+        punish.chain_window = epochs(punish.chain_window);
+        punish.lookback = epochs(punish.lookback);
+        punish.governance_delay = epochs(punish.governance_delay);
+        g2.recover_ppm = g2.recover_ppm * length / reference;
+    }
+    (punish, g2)
+}
+
 /// The entity of each member, numbered in the order of their first members.
 fn entities(members: &[(PublicKey, Authority)]) -> Vec<usize> {
     let mut known = HashMap::new();
@@ -161,16 +192,13 @@ impl Epochs {
         if largest > cap {
             info!("Entity cap relaxed to {} ppm: the committee is too small for it", largest * ttru::PPM / ttru::ONE);
         }
-        let punish_config = PunishConfig {
-            l_max: ttru::from_ppm(config.l_max_ppm),
-            ..PunishConfig::default()
-        };
+        let (punish_config, g2_config) = scaled(&config);
         let punishment = Punishment::new(classes, weights, cap, u_max, punish_config);
         let mut epochs = Self {
             config,
             members,
             entity_of,
-            reputation: Reputation::new(base, G2Config::default()),
+            reputation: Reputation::new(base, g2_config),
             punishment,
             current: roster.epoch,
             start: 0,

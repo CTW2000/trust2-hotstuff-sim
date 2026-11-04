@@ -134,6 +134,7 @@ fn overhead() {
         // Epoch changes with some accusations on the ledger each epoch.
         let config = EpochConfig {
             length: 100,
+            reference_length: 0,
             entity_cap_ppm: 1_000_000,
             class_cap_ppm: 1_000_000,
             l_max_ppm: 100_000,

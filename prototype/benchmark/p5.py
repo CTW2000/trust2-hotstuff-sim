@@ -254,6 +254,37 @@ def xt():
                     run("xt", dict(build=build, nodes=nodes, net="base", rate=rate, epoch_length=100, rep=rep), 30)
 
 
+def f25():
+    """The adopted scheme (DESIGN.md §15.11): the next table known an epoch ahead and epochs of 25 rounds. Rerun what
+    the handover can affect -- late messages and silent leaders (the baseline's silent runs of xr stand: it has no
+    epochs), the weighted path, entity binding, long framing and long censorship -- and spot-check the normal case."""
+    late = dict(late_p=0.1)
+    for rep in range(1, 11):
+        for build in ("baseline", "trust2"):
+            run("f25_late", dict(scenario="late", build=build, nodes=31, net="base", epoch_length=25, rep=rep, **late), 90)
+    for rep in range(1, 6):
+        run("f25_silent", dict(scenario="silent", build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                               faults=3), 90)
+    for rep in (1, 2, 3):
+        for build in ("baseline", "trust2"):
+            run("f25_x2", dict(build=build, nodes=31, net="base", epoch_length=25, rep=rep), 30)
+    weighted = dict(stakes="lognormal:1", uncertified=10, entity_cap_ppm=50_000, class_cap_ppm=250_000)
+    for rep in (1, 2):
+        for name, faults in (("normal", {}), ("silent", dict(faults=3)), ("equivocators", dict(equivocate=3))):
+            run("f25_xc", dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                               **weighted, **faults), 60)
+        for name, bound in (("separate", {}), ("bound", dict(entity_size=5))):
+            for faults in ({}, dict(equivocate=1)):
+                scenario = name + ("+equivocator" if faults else "")
+                run("f25_xe", dict(scenario=scenario, build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                                   **bound, **faults), 60)
+        for name, faults in (("framers+late", dict(frame=2, late_p=0.1)), ("late", dict(late_p=0.1))):
+            run("f25_xb", dict(scenario=name, build="trust2", nodes=10, net="base", epoch_length=25, rep=rep,
+                               **faults), 240)
+        run("f25_censor", dict(scenario="censor", build="trust2", nodes=31, net="base", epoch_length=25, otx_rate=25,
+                               attest_guard=136, censor=10, rep=rep), 300)
+
+
 def report():
     for path in sorted(glob(f"{OUT}/*.csv")):
         with open(path) as fh:
@@ -312,4 +343,5 @@ def compare_x2(rows):
 
 
 if __name__ == "__main__":
-    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "report": report}[sys.argv[1]]()
+    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "f25": f25,
+     "report": report}[sys.argv[1]]()
