@@ -1,0 +1,46 @@
+batch,code,group,run,scenario,epoch_length,e2e_latency_ms,consensus_latency_ms,timeouts,top_round,stalls
+table-ahead-25,baseline,baseline,B_1,late,50,543,334,15,668,16
+table-ahead-25,baseline,baseline,B_2,late,50,591,357,21,637,21
+table-ahead-25,baseline,baseline,B_3,late,50,617,408,16,667,18
+table-ahead-25,baseline,baseline,B_4,late,50,612,372,21,631,22
+table-ahead-25,baseline,baseline,B_5,late,50,574,341,17,647,19
+table-ahead-25,baseline,baseline,B_6,late,50,539,323,16,651,19
+table-ahead-25,baseline,baseline,B_7,late,50,487,301,12,706,13
+table-ahead-25,baseline,baseline,B_8,late,50,532,320,19,636,21
+table-ahead-25,baseline,baseline,B_9,late,50,576,347,17,648,17
+table-ahead-25,baseline,baseline,B_10,late,50,571,356,16,652,19
+table-ahead-25,89ee5c7,trust2 table ahead,E50_1,late,50,495,306,12,691,15
+table-ahead-25,89ee5c7,trust2 table ahead,E50_2,late,50,623,375,20,628,21
+table-ahead-25,89ee5c7,trust2 table ahead,E50_3,late,50,582,351,21,648,18
+table-ahead-25,89ee5c7,trust2 table ahead,E50_4,late,50,517,322,13,697,14
+table-ahead-25,89ee5c7,trust2 table ahead,E50_5,late,50,568,351,16,658,17
+table-ahead-25,89ee5c7,trust2 table ahead,E50_6,late,50,592,347,20,635,21
+table-ahead-25,89ee5c7,trust2 table ahead,E50_7,late,50,633,403,19,629,20
+table-ahead-25,89ee5c7,trust2 table ahead,E50_8,late,50,626,357,23,606,25
+table-ahead-25,89ee5c7,trust2 table ahead,E50_9,late,50,684,441,22,628,23
+table-ahead-25,89ee5c7,trust2 table ahead,E50_10,late,50,531,317,18,688,14
+table-ahead-25,89ee5c7,trust2 table ahead,E25_1,late,25,572,340,16,685,15
+table-ahead-25,89ee5c7,trust2 table ahead,E25_2,late,25,530,324,17,664,18
+table-ahead-25,89ee5c7,trust2 table ahead,E25_3,late,25,680,400,25,588,26
+table-ahead-25,89ee5c7,trust2 table ahead,E25_4,late,25,576,371,15,671,14
+table-ahead-25,89ee5c7,trust2 table ahead,E25_5,late,25,663,395,22,586,26
+table-ahead-25,89ee5c7,trust2 table ahead,E25_6,late,25,588,361,16,667,17
+table-ahead-25,89ee5c7,trust2 table ahead,E25_7,late,25,637,387,22,616,22
+table-ahead-25,89ee5c7,trust2 table ahead,E25_8,late,25,589,348,18,640,19
+table-ahead-25,89ee5c7,trust2 table ahead,E25_9,late,25,489,306,18,679,14
+table-ahead-25,89ee5c7,trust2 table ahead,E25_10,late,25,678,406,25,571,28
+table-ahead-25,10c2b6f,trust2,ST_1,silent (3),50,1154,507,39,508,42
+table-ahead-25,10c2b6f,trust2,ST_2,silent (3),50,838,333,35,517,42
+table-ahead-25,10c2b6f,trust2,ST_3,silent (3),50,819,316,33,522,41
+table-ahead-25,10c2b6f,trust2,ST_4,silent (3),50,934,326,41,458,49
+table-ahead-25,10c2b6f,trust2,ST_5,silent (3),50,1229,701,36,508,43
+table-ahead-25,89ee5c7,trust2 table ahead,SE50_1,silent (3),50,1124,427,43,441,50
+table-ahead-25,89ee5c7,trust2 table ahead,SE50_2,silent (3),50,1085,437,43,431,51
+table-ahead-25,89ee5c7,trust2 table ahead,SE50_3,silent (3),50,1811,842,56,339,62
+table-ahead-25,89ee5c7,trust2 table ahead,SE50_4,silent (3),50,1196,421,48,396,56
+table-ahead-25,89ee5c7,trust2 table ahead,SE50_5,silent (3),50,1682,941,47,419,52
+table-ahead-25,89ee5c7,trust2 table ahead,SE25_1,silent (3),25,965,387,35,514,42
+table-ahead-25,89ee5c7,trust2 table ahead,SE25_2,silent (3),25,1167,415,45,435,51
+table-ahead-25,89ee5c7,trust2 table ahead,SE25_3,silent (3),25,1134,500,39,493,44
+table-ahead-25,89ee5c7,trust2 table ahead,SE25_4,silent (3),25,1130,520,40,473,47
+table-ahead-25,89ee5c7,trust2 table ahead,SE25_5,silent (3),25,1330,676,45,416,53
