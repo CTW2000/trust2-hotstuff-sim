@@ -50,7 +50,7 @@ NETS = {"base": dict(regions=3, jitter_max_ms=2.0), "wide": dict(regions=8, regi
 
 def rule_and_weights(base):
     rule = S.CusumExclusion(q=0.5, evidence="at", rho_bar=0.1, D=D, cap=0.5, Wq=500, cap_weights=base)
-    return rule, ttru.TtruWeights(base, epoch=100, r_min=0.7, b_rep=B_REP, rule=rule)
+    return rule, ttru.TtruWeights(base, r_min=0.7, b_rep=B_REP, rule=rule, **ttru.scheme_kwargs()[0])
 
 
 def config(seed, rule, vw, byz, adv, views):
@@ -214,14 +214,14 @@ def run(part):
         fn = budget_job
     with Pool(PROCS) as pool:
         rows = pool.map(fn, jobs, chunksize=1)
-    write(f"dirTtru_review_{part}.csv", rows)
+    write(f"dirTtru_review_{part}{ttru.suffix()}.csv", rows)
     print(f"{part}: {len(rows)} runs, {time.time() - t0:.0f}s", flush=True)
     return rows
 
 
 def report():
     def load(part):
-        p = os.path.join(OUT, f"dirTtru_review_{part}.csv")
+        p = os.path.join(OUT, f"dirTtru_review_{part}{ttru.suffix()}.csv")
         if not os.path.exists(p):
             return []
         rows = list(csv.DictReader(open(p)))
@@ -294,7 +294,7 @@ def report():
                 L.append(f"| {'失败提议者（可被陷害）' if ev == 'failed' else 'AT（抗陷害）'} | "
                          f"{np.mean([r['share_max'] for r in g]):.4f} / {np.mean([r['bound'] for r in g]):.4f}（{over:+.5f}） | "
                          f"{fmt([r['honest_removed_max'] for r in g], 4)} | {fmt([r['colluder_removed_max'] for r in g], 4)} |")
-    with open(os.path.join(OUT, "dirTtru_review.md"), "w") as fh:
+    with open(os.path.join(OUT, f"dirTtru_review{ttru.suffix()}.md"), "w") as fh:
         fh.write("\n".join(L) + "\n")
     print("\n".join(L))
 

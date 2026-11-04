@@ -64,9 +64,11 @@ def build(cls, s, base, double=False, graded=True, injected=(), forks=(), old_g1
           recompute="fork"):
     rule = S.CusumExclusion(q=0.5, evidence=evidence, rho_bar=rho_bar, D=D, cap=0.5, Wq=500, cap_weights=base,
                             double=double, g1=old_g1)
-    pun = GradedPunishment(cls, s, CAP, UMAX, l_max=L_MAX, injected=injected, forks=forks,
-                           recompute=recompute, repeat_evict=True) if graded else None   # rule of the v0.13 runs
-    vw = ttru.TtruWeights(base, epoch=100, r_min=0.7, b_rep=B_REP, rule=rule, punish=pun, g1=old_g1)
+    wk, gk = ttru.scheme_kwargs()
+    # The v0.13 runs evicted non-malicious repeat offenders; the adopted scheme (SIM_SCHEME=h1p) runs the current rule.
+    pun = GradedPunishment(cls, s, CAP, UMAX, l_max=L_MAX, injected=injected, forks=forks, recompute=recompute,
+                           repeat_evict=not ttru.adopted(), **gk) if graded else None
+    vw = ttru.TtruWeights(base, r_min=0.7, b_rep=B_REP, rule=rule, punish=pun, g1=old_g1, **wk)
     if graded:
         rule.bars = vw.bars
     return rule, vw
@@ -229,10 +231,10 @@ def g1safe_job(args):
     if scen == "iso":
         for e in range(2, 36):
             if rng.random() < 0.10:
-                injected.append((int(rng.integers(N)), e, e, False))
+                injected.append((int(rng.integers(N)), ttru.at_epoch(e), ttru.at_epoch(e), False))
     elif scen in ("repeat", "repeat_all"):
         i = int(rng.choice(hon))
-        injected = [(i, 3, 3, False), (i, 8, 8, False), (i, 13, 13, False)]
+        injected = [(i, ttru.at_epoch(e), ttru.at_epoch(e), False) for e in (3, 8, 13)]
     elif scen == "decoy":
         dec = [int(i) for i in np.flatnonzero(byz)[np.argsort(base[byz])]]
         acc, chosen = 0.0, []
@@ -241,13 +243,13 @@ def g1safe_job(args):
             acc += base[i]
             if acc > L_MAX + 0.02:
                 break
-        injected = [(i, 3 + j, 3 + j, True) for j, i in enumerate(chosen)]
+        injected = [(i, ttru.at_epoch(3 + j), ttru.at_epoch(3 + j), True) for j, i in enumerate(chosen)]
     elif scen == "bug":
         acc = 0.0
         for i in hon[np.argsort(base[hon])[::-1]]:
             if acc >= 0.40:
                 break
-            injected.append((int(i), 10, 10, False))
+            injected.append((int(i), ttru.at_epoch(10), ttru.at_epoch(10), False))
             acc += base[i]
     elif scen == "fork":
         cul = list(np.flatnonzero(byz))
@@ -257,7 +259,7 @@ def g1safe_job(args):
                 break
             cul.append(int(i))
             acc += base[i]
-        forks = [(cul, 10)]
+        forks = [(cul, ttru.at_epoch(10))]
     rule, vw = build(cls, s, base, injected=injected, forks=forks, recompute="all" if scen == "repeat_all" else "fork")
     cfg = config(seed, rule, vw, byz, framing(), views)
     st = State(cfg)
@@ -281,7 +283,7 @@ def g1safe_job(args):
                 n_L4=len(lv.get("L4", ())), downgraded=sum(1 for ev, _, _ in p.log if ev == "downgrade"),
                 honest_evicted=int((p.evicted & ~byz).sum()),
                 colluder_share_max=float(max(t[byz].sum() for t in T)),
-                colluder_share_after=float(np.mean([t[byz].sum() for t in T[15:]])),
+                colluder_share_after=float(np.mean([t[byz].sum() for t in T[ttru.at_epoch(15):]])),
                 unc_share_max=float(max(t[unc].sum() for t in T)), entity_share_max=float(max(t.max() for t in T)),
                 qc_pre=float(np.mean(st.qc_exists[100:1000])), qc_post=float(np.mean(st.qc_exists[1100:2500])),
                 qc_all=float(np.mean(st.qc_exists[100:end])), commit=perf(st, 100, end)["commit"],
@@ -347,12 +349,12 @@ def run(part):
     fn, jobs = jobs_of(part)
     with Pool(PROCS) as pool:
         rows = pool.map(fn, jobs, chunksize=1)
-    write(f"dirTtru_v12_{part}.csv", rows)
+    write(f"dirTtru_v12_{part}{ttru.suffix()}.csv", rows)
     print(f"{part}: {len(rows)} runs, {time.time() - t0:.0f}s", flush=True)
 
 
 def load(part):
-    p = os.path.join(OUT, f"dirTtru_v12_{part}.csv")
+    p = os.path.join(OUT, f"dirTtru_v12_{part}{ttru.suffix()}.csv")
     if not os.path.exists(p):
         return []
     rows = list(csv.DictReader(open(p)))
@@ -484,7 +486,7 @@ def report():
                 cols = {a: [r[f"{a}_{tn}"] for r in g] for a in ("prop", "equal", "stake", "lic_only")}
                 worse = sum(any(r[f"{a}_{tn}"] < r[f"prop_{tn}"] - 1e-9 for a in ("equal", "stake", "lic_only")) for r in g)
                 L.append(f"| {nm} | {th:.3f} | {q(cols['prop'])} | {q(cols['equal'])} | {q(cols['stake'])} | {q(cols['lic_only'])} | {worse}/{len(g)} |")
-    with open(os.path.join(OUT, "dirTtru_v12.md"), "w") as fh:
+    with open(os.path.join(OUT, f"dirTtru_v12{ttru.suffix()}.md"), "w") as fh:
         fh.write("\n".join(L) + "\n")
     print("\n".join(L))
 

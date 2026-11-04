@@ -26,10 +26,43 @@ epoch is committed, otherwise the bound needs beta0 < (1 - 2 b_rep)/3 (cuts that
 tighter (理论 定理 6).
 """
 import copy
+import os
 
 import numpy as np
 
 from . import schedule as S
+
+
+def scheme(epoch=25, reference=100):
+    """The adopted scheme (DESIGN.md §15.11): the next table known an epoch ahead, and the durations of the defaults,
+    given for epochs of `reference` views, kept in views at `epoch` views per epoch. Returns the keyword arguments for
+    TtruWeights and for punish.GradedPunishment."""
+    f = reference / epoch
+    ep = lambda n: max(1, round(n * f))
+    weights = dict(epoch=epoch, recover=0.02 / f, table_lag=1)
+    graded = dict(epoch=epoch, sus=(0, 0, ep(4), ep(32)), lead_bar=ep(1), win_chain=ep(32), lookback=ep(64),
+                  gov_delay=ep(2), delay=1)
+    return weights, graded
+
+
+def adopted():
+    """SIM_SCHEME=h1p: experiments run the adopted scheme (scheme(25)), keep their scenario times in views
+    (at_epoch) and write their results with the suffix _h1p (DESIGN.md §15.11)."""
+    return os.environ.get("SIM_SCHEME") == "h1p"
+
+
+def scheme_kwargs():
+    """(TtruWeights kwargs, GradedPunishment kwargs) of the scheme the experiments run."""
+    return scheme(25) if adopted() else (dict(epoch=100), dict())
+
+
+def at_epoch(e):
+    """An epoch number given for epochs of 100 views, at the epoch length of the scheme the experiments run."""
+    return e * 100 // scheme_kwargs()[0]["epoch"]
+
+
+def suffix():
+    return "_h1p" if adopted() else ""
 
 
 def population(n_L, n_U, n_A, seed, alpha=1.16, base=(3.0, 1.0, 0.2)):
@@ -100,12 +133,15 @@ class TtruWeights:
     """Callable (st, v) -> voting shares of view v (epoch tables, computed lazily and cached on st)."""
 
     def __init__(self, base, epoch=100, r_min=0.7, b_rep=0.10, step=0.1, recover=0.02, rule=None, g1=False,
-                 punish=None):
+                 punish=None, table_lag=0):
         self.base = np.asarray(base, float)
         self.punish = punish
         assert abs(self.base.sum() - 1.0) < 1e-9, "base weights must sum to 1 (b_rep is a share)"
         self.epoch, self.r_min, self.b_rep, self.step, self.recover = epoch, r_min, b_rep, step, recover
         self.rule, self.g1 = rule, g1
+        # H1' (DESIGN.md §15.11): with table_lag 1 the table of epoch k comes from the facts up to the start of epoch
+        # k - 1 (minus the rule lag), so the first two epochs share the base table.
+        self.table_lag = table_lag
 
     def _state(self, st):
         c = st.__dict__.setdefault("_ttru_cache", {})
@@ -122,7 +158,7 @@ class TtruWeights:
         n = len(self.base)
         while len(s["tables"]) <= e:
             k = len(s["tables"])
-            B = k * self.epoch + 1                       # first view of epoch k; facts <= B - lag
+            B = max(0, k - self.table_lag) * self.epoch + 1   # first view of the deciding epoch; facts <= B - lag
             horizon = B - st.cfg.lag
             convicted = np.zeros(n, bool)
             if self.rule is not None:

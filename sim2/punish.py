@@ -52,12 +52,15 @@ from . import ttru
 class GradedPunishment:
     def __init__(self, cls, stake, cap, u_max, epoch=100, l_max=0.10, sus=(0, 0, 4, 32), lead_bar=1,
                  win_chain=32, lookback=64, gov_delay=2, liveness=True, injected=(), forks=(), recompute="fork",
-                 repeat_evict=False):
+                 repeat_evict=False, delay=0):
         self.cls, self.stake = np.asarray(cls), np.asarray(stake, float)
         self.cap, self.u_max, self.epoch, self.l_max = cap, u_max, epoch, l_max
         self.sus, self.lead_bar, self.win_chain, self.lookback = sus, lead_bar, win_chain, lookback
         self.gov_delay, self.liveness, self.recompute = gov_delay, liveness, recompute
         self.repeat_evict = repeat_evict
+        # H1' (DESIGN.md §15.11): with delay 1 the table of epoch k is built from the ledger up to the start of epoch
+        # k - 1, so evidence of chain epoch e is visible from the table of epoch e + 2 on.
+        self.delay = delay
         self.injected = sorted(injected, key=lambda x: x[2])
         self.forks = sorted(forks, key=lambda x: x[1])
         n = len(self.cls)
@@ -104,13 +107,13 @@ class GradedPunishment:
             for u in range(self.done_view + 1, horizon + 1):
                 if u >= 1:
                     for i in np.flatnonzero(S.contradictions(st, u)):
-                        self._add(i, "live", (u - 1) // self.epoch, k)
+                        self._add(i, "live", (u - 1) // self.epoch, k - self.delay)
             self.done_view = max(self.done_view, horizon)
-        while self.next_inj < len(self.injected) and self.injected[self.next_inj][2] < k:
+        while self.next_inj < len(self.injected) and self.injected[self.next_inj][2] < k - self.delay:
             i, es, ec, mal = self.injected[self.next_inj]
             self._add(i, "safe", es, ec, mal)
             self.next_inj += 1
-        while self.next_fork < len(self.forks) and self.forks[self.next_fork][1] < k:
+        while self.next_fork < len(self.forks) and self.forks[self.next_fork][1] < k - self.delay:
             culprits, ec = self.forks[self.next_fork]
             for i in culprits:
                 self._add(i, "safe", ec, ec, True, fork=True)

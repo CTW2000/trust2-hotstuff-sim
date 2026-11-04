@@ -123,7 +123,7 @@ def budget_job(args):
     cls, s, base, cost = setup(seed, 1.0)
     byz = cheapest_set(base, cost, 0.2)
     rule = S.CusumExclusion(evidence=evidence, rho_bar=0.01, D=500, cap=0.5, Wq=500, cap_weights=base)
-    vw = ttru.TtruWeights(base, epoch=100, r_min=0.7, b_rep=b_rep, rule=rule)
+    vw = ttru.TtruWeights(base, r_min=0.7, b_rep=b_rep, rule=rule, **ttru.scheme_kwargs()[0])
     advs = [A.CollectorFraming()] + ([A.SilentLeader(0.3)] if misbehave else [])
     views = 4000
     cfg = RunConfig(n=N, views=views, seed=seed, protocol="P1", leader_rule=rule, byzantine=list(np.flatnonzero(byz)),
