@@ -139,6 +139,7 @@ fn overhead() {
             class_cap_ppm: 1_000_000,
             l_max_ppm: 100_000,
             governance_malicious: false,
+            leader_rule: Default::default(),
         };
         let mut epochs = Epochs::new(&committee, config);
         let mut changes = Vec::new();

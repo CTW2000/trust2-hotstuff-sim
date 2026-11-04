@@ -105,6 +105,8 @@ pub struct Faults {
     /// Never vote, and report NR = 1 in every timeout (withheld votes plus NR lies against the leaders: the
     /// framing colluders of the simulator, which leave no G1 evidence).
     pub frame: bool,
+    /// As leader, never propose; vote and time out as usual (a Byzantine silent leader).
+    pub silent: bool,
 }
 
 pub struct Core {
@@ -874,6 +876,9 @@ impl Core {
 
     #[async_recursion]
     async fn generate_proposal(&mut self, tc: Option<TC>) {
+        if self.faults.silent {
+            return;
+        }
         let committee = self.committee().clone();
         // Experiment switch: extend an older QC without a TC, a block no honest node votes for (E2).
         let older = self.prev_high_qc.clone();

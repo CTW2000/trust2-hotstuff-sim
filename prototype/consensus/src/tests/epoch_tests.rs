@@ -1,6 +1,7 @@
 use super::*;
 use crate::common::{committee, keys, unsigned_otx, EPOCH};
 use crate::config::Parameters;
+use crypto::Signature;
 use crate::leader::leader;
 use crate::messages::{Accusation, Evidence, OmitProof, Otx, SignedTimeout, Timeout, Vote, MAX_OTXS, QC};
 
@@ -12,6 +13,7 @@ fn config(length: Round) -> EpochConfig {
         class_cap_ppm: 1_000_000,
         l_max_ppm: 100_000,
         governance_malicious: false,
+        leader_rule: Default::default(),
     }
 }
 
@@ -469,4 +471,132 @@ fn accusations_of_its_members_add_up_on_the_entity() {
     assert!(names[..2].iter().all(|name| !table.authorities[name].leader));
     assert!(names[2..].iter().all(|name| table.authorities[name].leader));
     assert_eq!(epochs.reputation.r_ppm().len(), 3);
+}
+
+// The leader rules of the prototype comparison (DESIGN.md §15.12).
+
+fn with_rule(rule: LeaderRule) -> EpochConfig {
+    EpochConfig { leader_rule: rule, ..config(10) }
+}
+
+fn event(proposer: Option<usize>, failed: &[usize], voters: &[usize]) -> AptosEvent {
+    AptosEvent { proposer, failed: failed.to_vec(), voters: voters.to_vec() }
+}
+
+#[test]
+fn aptos_weights_follow_the_heuristic() {
+    // ProposerAndVoterHeuristic::get_weights: failed above 10% of the proposer rounds (strictly), else active if it
+    // proposed or voted, else inactive. Member 0: 1 failure in 10 rounds (10%, active); member 1: 2 in 10 (failed);
+    // member 2 only votes, in the last block (active); member 3 does nothing (inactive).
+    let mut epochs = Epochs::new(&committee(), with_rule(LeaderRule::Aptos));
+    for k in 0..9 {
+        epochs.history.push_back(event(Some(0), &[], &[]));
+        if k < 8 {
+            epochs.history.push_back(event(Some(1), &[], &[]));
+        }
+    }
+    epochs.history.push_back(event(None, &[0, 1, 1], &[]));
+    epochs.history.push_back(event(None, &[], &[2]));
+    assert_eq!(epochs.aptos_weights(), vec![aptos::ACTIVE, aptos::FAILED, aptos::ACTIVE, aptos::INACTIVE]);
+
+    // The voter window is n blocks: a vote further back no longer counts.
+    for _ in 0..4 {
+        epochs.history.push_back(event(Some(0), &[], &[]));
+    }
+    assert_eq!(epochs.aptos_weights()[2], aptos::INACTIVE);
+}
+
+#[test]
+fn aptos_records_the_proposer_the_skipped_leaders_and_the_voters() {
+    let mut epochs = Epochs::new(&committee(), with_rule(LeaderRule::Aptos));
+    let table = epochs.current().clone();
+    let author = leader(&table, 5);
+    let (proposer, failed) = {
+        let index = |name| epochs.members.binary_search_by_key(&name, |(n, _)| *n).unwrap();
+        (index(author), vec![index(leader(&table, 3)), index(leader(&table, 4))])
+    };
+    let voters: Vec<_> = epochs.members.iter().take(3).map(|(name, _)| (*name, Signature::default())).collect();
+    let qc = QC { round: 2, epoch: EPOCH, votes: voters, ..QC::default() };
+    epochs.record(&Block { qc, author, ..block(EPOCH, 5) });
+    let recorded = epochs.history.back().unwrap();
+    assert_eq!(recorded.proposer, Some(proposer));
+    assert_eq!(recorded.failed, failed);
+    assert_eq!(recorded.voters, vec![0, 1, 2]);
+    // No G2 facts under this rule.
+    assert!(epochs.reputation.facts().is_empty());
+}
+
+#[test]
+fn aptos_leaders_are_drawn_by_reputation_times_voting_weight() {
+    // A member whose rounds all fail is demoted to weight 1 in the next tables; the voting weights do not change.
+    let mut epochs = Epochs::new(&committee(), with_rule(LeaderRule::Aptos));
+    let failing = leader(epochs.current(), 1);
+    for k in 1..=4 {
+        let table = epochs.current().clone();
+        let mut parent = 10 * k - 10;
+        for round in 10 * k - 9..=10 * k {
+            if leader(&table, round) == failing && round != 10 * k {
+                continue; // skipped: recorded as failed by the next block
+            }
+            let author = leader(&table, round);
+            let qc = QC { round: parent, epoch: table.epoch, ..QC::default() };
+            epochs.record(&Block { qc, author, ..block(table.epoch, round) });
+            parent = round;
+        }
+        epochs.enter_next(&block(table.epoch, 10 * k));
+    }
+    let table = epochs.current();
+    assert!(table.authorities.values().all(|a| a.stake == 250_000 && a.leader));
+    assert_eq!(table.authorities[&failing].lead, aptos::FAILED * 250_000);
+    let led = (0..2_000).filter(|u| leader(table, *u) == failing).count();
+    assert!(led < 20, "a demoted member led {} of 2000 rounds", led);
+}
+
+#[test]
+fn failed_rounds_are_the_facts_of_the_framable_rule() {
+    // LeaderRule::Failed: the rounds a committed block skips are bad facts against their leaders; AT accusations
+    // are not. A member whose rounds all fail is excluded as under AT evidence.
+    let mut epochs = Epochs::new(&committee(), with_rule(LeaderRule::Failed));
+    let table = epochs.current().clone();
+    let qc = QC { round: 2, epoch: EPOCH, ..QC::default() };
+    let accusation = Accusation { round: 1, epoch: EPOCH, votes: Vec::new() };
+    epochs.record(&Block { qc, accusations: vec![accusation], ..block(EPOCH, 5) });
+    assert_eq!(epochs.reputation.facts().keys().copied().collect::<Vec<_>>(), vec![3, 4]);
+
+    let mut epochs = Epochs::new(&committee(), with_rule(LeaderRule::Failed));
+    let failing = leader(&table, 1);
+    let mut excluded = false;
+    for k in 1..=10 {
+        let table = epochs.current().clone();
+        let mut parent = 10 * k - 10;
+        for round in 10 * k - 9..=10 * k {
+            if leader(&table, round) == failing && round != 10 * k {
+                continue;
+            }
+            let qc = QC { round: parent, epoch: table.epoch, ..QC::default() };
+            epochs.record(&Block { qc, ..block(table.epoch, round) });
+            parent = round;
+        }
+        epochs.enter_next(&block(table.epoch, 10 * k));
+        excluded |= !epochs.current().authorities[&failing].leader;
+        let r = epochs.reputation.r_ppm();
+        let i = epochs.members.binary_search_by_key(&failing, |(n, _)| *n).unwrap();
+        assert!(r.iter().enumerate().all(|(k, x)| k == i || *x == 1_000_000), "another member was cut");
+    }
+    assert!(excluded, "a member whose rounds all fail was never excluded");
+}
+
+#[test]
+fn no_rule_keeps_everyone_leading() {
+    let mut epochs = Epochs::new(&committee(), with_rule(LeaderRule::None));
+    let silent = leader(epochs.current(), 1);
+    for k in 1..=4 {
+        let table = epochs.current().clone();
+        let accused: Vec<Round> = (10 * k - 9..=10 * k).filter(|u| leader(&table, *u) == silent).collect();
+        let qc = QC { round: 10 * k - 9, epoch: table.epoch, ..QC::default() };
+        epochs.record(&Block { qc, ..accusing(table.epoch, 10 * k, &accused) });
+        epochs.enter_next(&block(table.epoch, 10 * k));
+    }
+    assert!(epochs.reputation.facts().is_empty());
+    assert!(epochs.current().authorities.values().all(|a| a.leader && a.lead == 0 && a.stake == 250_000));
 }

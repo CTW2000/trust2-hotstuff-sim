@@ -36,11 +36,14 @@ LOCK = f"/tmp/{os.environ.get('USER', 'user')}_ttru_bench.lock"
 
 
 def node_parameters(args):
+    consensus = {"timeout_delay": args.timeout_delay, "sync_retry_delay": 10_000,
+                 "epoch_length": args.epoch_length, "entity_cap_ppm": args.entity_cap_ppm,
+                 "class_cap_ppm": args.class_cap_ppm, "attest_guard": args.attest_guard,
+                 "l_max_ppm": args.l_max_ppm, "governance_malicious": args.governance_malicious}
+    if args.leader_rule != "trust2":                         # the comparison of leader rules (DESIGN.md §15.12)
+        consensus["leader_rule"] = args.leader_rule
     return {
-        "consensus": {"timeout_delay": args.timeout_delay, "sync_retry_delay": 10_000,
-                      "epoch_length": args.epoch_length, "entity_cap_ppm": args.entity_cap_ppm,
-                      "class_cap_ppm": args.class_cap_ppm, "attest_guard": args.attest_guard,
-                      "l_max_ppm": args.l_max_ppm, "governance_malicious": args.governance_malicious},
+        "consensus": consensus,
         "mempool": {"gc_depth": 50, "sync_retry_delay": 5_000, "sync_retry_nodes": 3,
                     "batch_size": 15_000, "max_batch_delay": 10},
     }
@@ -140,7 +143,8 @@ def run(args):
     switches = {}
     tail = list(range(up - 1, -1, -1))
     roles = (("--censor", args.censor), ("--equivocate", args.equivocate), ("--lie-nr", args.lie_nr),
-             ("--invalid-block", args.invalid_block), ("--regress", args.regress), ("--frame", args.frame))
+             ("--invalid-block", args.invalid_block), ("--regress", args.regress), ("--frame", args.frame),
+             ("--silent", args.silent))
     for flag, count in roles:
         for i in tail[:count]:
             switches.setdefault(i, []).append(flag)
@@ -209,6 +213,9 @@ def main():
     ap.add_argument("--invalid-block", type=int, default=0, help="number of booted nodes that propose invalid blocks (E2)")
     ap.add_argument("--regress", type=int, default=0, help="number of booted nodes that regress their high QC (E3)")
     ap.add_argument("--frame", type=int, default=0, help="number of booted nodes that withhold votes and claim NR = 1")
+    ap.add_argument("--silent", type=int, default=0, help="number of booted nodes that never propose (Byzantine)")
+    ap.add_argument("--leader-rule", choices=["trust2", "none", "aptos", "failed"], default="trust2",
+                    help="leader rule of the Trust 2.0 build, for comparisons (DESIGN.md §15.12)")
     ap.add_argument("--l-max-ppm", type=int, default=100_000, help="G1 suspension cap L_max in ppm")
     ap.add_argument("--governance-malicious", action="store_true", help="G1: an L4 without a fork evicts")
     ap.add_argument("--entity-cap-ppm", type=int, default=50_000, help="CapNorm entity cap in ppm, at most L_max")

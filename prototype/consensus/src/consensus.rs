@@ -103,6 +103,7 @@ impl Consensus {
             class_cap_ppm: parameters.class_cap_ppm,
             l_max_ppm: parameters.l_max_ppm,
             governance_malicious: parameters.governance_malicious,
+            leader_rule: parameters.leader_rule,
         };
         Core::spawn(
             name,
@@ -115,6 +116,7 @@ impl Consensus {
                 invalid_block: parameters.invalid_block,
                 regress: parameters.regress,
                 frame: parameters.frame,
+                silent: parameters.silent,
             },
             signature_service.clone(),
             store.clone(),

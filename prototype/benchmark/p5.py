@@ -19,7 +19,7 @@ OUT = "results-p5"
 RATE, WARMUP = 10_000, 10
 ROLES = (("Voting twice", "equivocator"), ("Lying about NR", "liar"), ("Censoring", "censor"),
          ("Proposing and voting for invalid blocks", "invalid"), ("Regressing the high QC", "regressor"),
-         ("Framing:", "framer"))
+         ("Framing:", "framer"), ("Silent leader:", "silent"))
 
 
 def roles(logs):
@@ -42,11 +42,19 @@ def ledger_events(logs, role, n):
     lines = [line.split("] ", 1)[1].strip() for line in text.splitlines() if "G1: " in line or "G2: " in line]
     base = {who: int(ppm) for who, ppm in re.findall(r"T_tru base weight of (\S+) is (\d+) ppm", text)}
     count = defaultdict(int)
+    count_aptos_dict = {}
     r_ppm = {}
+    # LeaderRule::Aptos (DESIGN.md §15.12): member-epochs at the failed and the inactive weight.
+    for who, kind in re.findall(r"Aptos: (\S+) weight (failed|inactive) at epoch \d+", text):
+        count_aptos = f"aptos_{kind}_{side(who)}"
+        count_aptos_dict[count_aptos] = count_aptos_dict.get(count_aptos, 0) + 1
     for line in lines:
         m = re.match(r"G2: accusation of round \d+ led by (\S+)", line)
         if m:
             count[f"accusations_{side(m.group(1))}"] += 1
+        m = re.match(r"G2: failed round \d+ led by (\S+)", line)
+        if m:
+            count[f"failed_facts_{side(m.group(1))}"] += 1
         m = re.match(r"G2: (\S+) excluded from leading", line)
         if m:
             count[f"g2_excluded_{side(m.group(1))}"] += 1
@@ -66,6 +74,14 @@ def ledger_events(logs, role, n):
     # Weight cut from honest members by reputation at the end of the run, by base weight (equal if not logged).
     weight = lambda who: base.get(who, 1e6 / n) / 1e6
     count["honest_cut"] = round(sum(weight(who) * (1 - r / 1e6) for who, r in r_ppm.items() if side(who) == "honest"), 4)
+    count.update(count_aptos_dict)
+    # Voting share of the faulty members at the end: base * r, the total cut scaled down to the budget of 0.1.
+    members = set(base) | set(r_ppm) | set(role)
+    cut = {who: weight(who) * (1 - r_ppm.get(who, 1e6) / 1e6) for who in members}
+    scale = min(1.0, 0.1 / sum(cut.values())) if sum(cut.values()) > 0 else 1.0
+    left = {who: weight(who) - cut[who] * scale for who in members}
+    if any(side(who) == "faulty" for who in members) and sum(left.values()) > 0:
+        count["faulty_share_end"] = round(sum(v for who, v in left.items() if side(who) == "faulty") / sum(left.values()), 4)
     if base and len(set(base.values())) > 1:
         count["base_max_ppm"] = max(base.values())
         count["base_min_ppm"] = min(base.values())
@@ -285,6 +301,22 @@ def f25():
                                attest_guard=136, censor=10, rep=rep), 300)
 
 
+def cmp():
+    """Leader rules on the same Trust 2.0 code (DESIGN.md §15.12): none (leaders by base weight), aptos (Aptos
+    LeaderReputation, aptos-core defaults), failed (Trust 2.0 with failed-proposer facts) and trust2. n = 31, base
+    network, epochs of 25 rounds, the four rules interleaved within each repetition.
+    - silent: 3 Byzantine silent leaders (they vote and time out, but never propose);
+    - late: 10% late messages, no faults;
+    - framers+late: 6 colluders withhold their votes and claim NR = 1, on top of 10% late messages."""
+    scenarios = (("silent", dict(silent=3), 90), ("late", dict(late_p=0.1), 90),
+                 ("framers+late", dict(frame=6, late_p=0.1), 180))
+    for rep in range(1, 6):
+        for name, faults, duration in scenarios:
+            for rule in ("none", "aptos", "failed", "trust2"):
+                run("cmp", dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                                leader_rule=rule, **faults), duration)
+
+
 def report():
     for path in sorted(glob(f"{OUT}/*.csv")):
         with open(path) as fh:
@@ -344,4 +376,4 @@ def compare_x2(rows):
 
 if __name__ == "__main__":
     {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "f25": f25,
-     "report": report}[sys.argv[1]]()
+     "cmp": cmp, "report": report}[sys.argv[1]]()

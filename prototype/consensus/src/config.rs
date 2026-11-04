@@ -8,6 +8,28 @@ use std::net::SocketAddr;
 pub type Stake = u32;
 pub type EpochNumber = u128;
 
+/// Experiment switch, not part of the protocol: the leader rule, for comparisons on the same code (DESIGN.md §15.12).
+/// Every rule keeps the T_tru base weights and G1; they differ in what decides who may lead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LeaderRule {
+    /// Trust 2.0: AT accusations (and omissions) feed the G2 CUSUM, which excludes from leading and lowers r.
+    Trust2,
+    /// No reputation: leaders drawn by the base weights, nothing on the ledger changes who leads.
+    None,
+    /// Aptos LeaderReputation (ProposerAndVoterV2 with the aptos-core defaults; epoch.rs `aptos_weights`):
+    /// voting weights unchanged, leaders drawn by a reputation weight times the voting weight.
+    Aptos,
+    /// Trust 2.0 with a framable fact: a failed proposer (a round skipped on the chain) instead of an AT accusation.
+    Failed,
+}
+
+impl Default for LeaderRule {
+    fn default() -> Self {
+        Self::Trust2
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Parameters {
     pub timeout_delay: u64,
@@ -48,6 +70,12 @@ pub struct Parameters {
     /// Experiment switch: never vote, and report NR = 1 in every timeout (framing colluder).
     #[serde(default)]
     pub frame: bool,
+    /// Experiment switch: as leader, never propose; otherwise run as usual (a Byzantine silent leader).
+    #[serde(default)]
+    pub silent: bool,
+    /// Experiment switch: the leader rule (all nodes alike).
+    #[serde(default)]
+    pub leader_rule: LeaderRule,
 }
 
 fn default_attest_guard() -> u64 {
@@ -89,6 +117,8 @@ impl Default for Parameters {
             invalid_block: false,
             regress: false,
             frame: false,
+            silent: false,
+            leader_rule: LeaderRule::default(),
         }
     }
 }
@@ -131,6 +161,12 @@ impl Parameters {
         if self.frame {
             info!("Framing: withholding votes and reporting NR = 1 (experiment)");
         }
+        if self.silent {
+            info!("Silent leader: never proposing (experiment)");
+        }
+        if self.leader_rule != LeaderRule::Trust2 {
+            info!("Leader rule set to {:?} (experiment)", self.leader_rule);
+        }
         info!(
             "Entity cap set to {} ppm, uncertified class cap to {} ppm",
             self.entity_cap_ppm, self.class_cap_ppm
@@ -155,6 +191,10 @@ pub struct Authority {
     /// the configuration.
     #[serde(default = "default_true")]
     pub leader: bool,
+    /// Weight in the leader draw when positive (LeaderRule::Aptos: reputation weight times stake); otherwise the
+    /// stake. Set by the weight table.
+    #[serde(skip)]
+    pub lead: u64,
 }
 
 fn default_true() -> bool {
@@ -189,6 +229,7 @@ impl Committee {
                         certified: true,
                         entity: None,
                         leader: true,
+                        lead: 0,
                     };
                     (name, authority)
                 })

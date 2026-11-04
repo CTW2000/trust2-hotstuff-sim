@@ -64,6 +64,9 @@ enum Command {
         /// Experiment switch: withhold votes and report NR = 1 (framing colluder, DESIGN.md §14.3).
         #[clap(long)]
         frame: bool,
+        /// Experiment switch: as leader, never propose (Byzantine silent leader, DESIGN.md §15.12).
+        #[clap(long)]
+        silent: bool,
     },
     /// Deploy a local testbed with the specified number of nodes.
     Deploy {
@@ -105,12 +108,13 @@ async fn main() {
             invalid_block,
             regress,
             frame,
+            silent,
         } => match Node::new(
             &committee,
             &keys,
             &store,
             parameters,
-            Experiment { censor, equivocate, lie_nr, invalid_block, regress, frame },
+            Experiment { censor, equivocate, lie_nr, invalid_block, regress, frame, silent },
         )
         .await
         {

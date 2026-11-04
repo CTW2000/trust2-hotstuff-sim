@@ -80,6 +80,7 @@ fn core_on(
         class_cap_ppm: 1_000_000,
         l_max_ppm: 100_000,
         governance_malicious: false,
+        leader_rule: Default::default(),
     };
     Core::spawn(
         name,
@@ -687,6 +688,7 @@ fn node_with_proposer(store: Store) -> (Core, Receiver<ProposerMessage>) {
             class_cap_ppm: 1_000_000,
             l_max_ppm: 100_000,
             governance_malicious: false,
+            leader_rule: Default::default(),
         },
         Inclusion::new(Duration::from_millis(500), false),
         Faults::default(),

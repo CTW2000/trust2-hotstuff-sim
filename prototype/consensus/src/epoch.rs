@@ -14,7 +14,7 @@
 //!   missing (enter_early; DESIGN.md §15.10). From then on it signs no message of an older epoch. The tables
 //!   of the last few epochs are kept to verify old blocks received through synchronization.
 
-use crate::config::{Authority, Committee, EpochNumber, Stake};
+use crate::config::{Authority, Committee, EpochNumber, LeaderRule, Stake};
 use crate::consensus::Round;
 use crate::leader::leader;
 use crate::messages::{Block, OmitProof};
@@ -24,7 +24,7 @@ use crate::ttru::{self, Class};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
 use log::info;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 #[cfg(test)]
 #[path = "tests/epoch_tests.rs"]
@@ -42,6 +42,20 @@ pub const SINGLE_EPOCH_LEDGER_WINDOW: Round = 1_000;
 /// The epoch length the G1 durations and the reputation recovery of the defaults are given for (scaled).
 pub const REFERENCE_EPOCH_LENGTH: Round = 100;
 
+/// LeaderRule::Aptos: ProposerAndVoterV2 with the defaults of aptos-core (types/src/on_chain_config/
+/// consensus_config.rs, ConsensusConfigV1::default, commit c8b51a1 of 2026-11-03): weights 1000 (active), 10
+/// (inactive) and 1 (failed, more than 10% of its proposer rounds failed), windows of 10 n and n committed blocks for
+/// proposals and votes, at most 10 failed proposers recorded per block, leaders drawn by weight times voting power.
+pub mod aptos {
+    pub const ACTIVE: u64 = 1000;
+    pub const INACTIVE: u64 = 10;
+    pub const FAILED: u64 = 1;
+    pub const FAILURE_THRESHOLD_PERCENT: u64 = 10;
+    pub const PROPOSER_WINDOW_MULTIPLIER: usize = 10;
+    pub const VOTER_WINDOW_MULTIPLIER: usize = 1;
+    pub const MAX_FAILED_AUTHORS: u64 = 10;
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct EpochConfig {
     /// Rounds per epoch, counted from the previous terminal block (0: a single epoch).
@@ -57,6 +71,8 @@ pub struct EpochConfig {
     /// G1 governance stand-in: an L4 without a fork counts as confirmed malicious (evicted) rather than as a
     /// client fault (downgraded).
     pub governance_malicious: bool,
+    /// Experiment switch: the leader rule (DESIGN.md §15.12).
+    pub leader_rule: LeaderRule,
 }
 
 pub struct Epochs {
@@ -84,6 +100,17 @@ pub struct Epochs {
     /// processed, and for the rounds before them the highest nonce of each owner.
     committed: BTreeMap<Round, LedgerBlock>,
     watermark: HashMap<PublicKey, u64>,
+    /// LeaderRule::Aptos: the latest committed blocks, newest last, at most the proposer window.
+    history: VecDeque<AptosEvent>,
+}
+
+/// What Aptos keeps of a committed block (NewBlockEvent): its proposer, the failed proposers it records (the leaders
+/// of the rounds skipped since its parent, at most `aptos::MAX_FAILED_AUTHORS`, the latest ones) and the voters of
+/// its parent (the signers of the QC it carries). Member indices.
+struct AptosEvent {
+    proposer: Option<usize>,
+    failed: Vec<usize>,
+    voters: Vec<usize>,
 }
 
 /// What an omission proof is checked against: a committed block's digest and observed transactions.
@@ -209,6 +236,7 @@ impl Epochs {
             first_rounds: BTreeMap::new(),
             committed: BTreeMap::new(),
             watermark: HashMap::new(),
+            history: VecDeque::new(),
         };
         // H1': the second epoch has no ledger two terminal blocks back either, so it starts from the same state.
         for epoch in roster.epoch..=roster.epoch + 1 {
@@ -226,6 +254,21 @@ impl Epochs {
         let stakes = self.split(&self.reputation.stakes_on(self.punishment.base(), &z));
         let excluded = self.reputation.excluded();
         let bars = self.punishment.bars();
+        let reputation = match self.config.leader_rule {
+            LeaderRule::Aptos => Some(self.aptos_weights()),
+            _ => None,
+        };
+        if let Some(weights) = &reputation {
+            // NOTE: this log entry is used to count the members Aptos demotes (benchmark/p5.py).
+            for ((name, _), w) in self.members.iter().zip(weights) {
+                let kind = match *w {
+                    aptos::FAILED => "failed",
+                    aptos::INACTIVE => "inactive",
+                    _ => continue,
+                };
+                info!("Aptos: {} weight {} at epoch {}", name, kind, epoch);
+            }
+        }
         Committee {
             authorities: self
                 .members
@@ -237,6 +280,7 @@ impl Epochs {
                     let authority = Authority {
                         stake: stake as Stake,
                         leader: !excluded[e] && !bars[e],
+                        lead: reputation.as_ref().map_or(0, |w| w[i] * stake),
                         ..a.clone()
                     };
                     (*name, authority)
@@ -271,9 +315,95 @@ impl Epochs {
         split
     }
 
+    /// LeaderRule::Aptos (ProposerAndVoterHeuristic::get_weights): per member, from the latest committed blocks,
+    /// failed if its failed proposals exceed the threshold share of its proposer rounds in the proposer window,
+    /// else active if it proposed in that window or voted in the voter window, else inactive.
+    fn aptos_weights(&self) -> Vec<u64> {
+        let n = self.members.len();
+        let (mut proposals, mut failed, mut votes) = (vec![0u64; n], vec![0u64; n], vec![0u64; n]);
+        let recent = |window: usize| self.history.iter().rev().take(window);
+        for event in recent(aptos::PROPOSER_WINDOW_MULTIPLIER * n) {
+            if let Some(i) = event.proposer {
+                proposals[i] += 1;
+            }
+            for i in &event.failed {
+                failed[*i] += 1;
+            }
+        }
+        for event in recent(aptos::VOTER_WINDOW_MULTIPLIER * n) {
+            for i in &event.voters {
+                votes[*i] += 1;
+            }
+        }
+        (0..n)
+            .map(|i| {
+                if failed[i] * 100 > (proposals[i] + failed[i]) * aptos::FAILURE_THRESHOLD_PERCENT {
+                    aptos::FAILED
+                } else if proposals[i] > 0 || votes[i] > 0 {
+                    aptos::ACTIVE
+                } else {
+                    aptos::INACTIVE
+                }
+            })
+            .collect()
+    }
+
+    /// The member that led `round` by the table of the epoch it falls in, and that epoch.
+    fn leader_of_round(&self, round: Round) -> Option<(usize, EpochNumber)> {
+        let epoch = *self.first_rounds.iter().rev().find(|(_, first)| **first <= round)?.0;
+        let i = leader_index(&self.tables, &self.first_rounds, &self.members, round, Some(epoch))?;
+        Some((i, epoch))
+    }
+
+    /// The rounds a committed block skips since its parent: their proposals failed (Aptos failed_authors).
+    fn skipped(block: &Block) -> std::ops::Range<Round> {
+        block.qc.round + 1..block.round
+    }
+
     /// A committed block, in chain order: the AT accusations it carries, and the omission proofs that hold on
-    /// the ledger, are bad facts of their rounds; its observed transactions are included.
+    /// the ledger, are bad facts of their rounds; its observed transactions are included. The leader rules of the
+    /// comparison (DESIGN.md §15.12) read other facts: LeaderRule::Failed the rounds the block skips, LeaderRule::
+    /// Aptos its proposer, failed proposers and voters; LeaderRule::None nothing.
     pub fn record(&mut self, block: &Block) {
+        match self.config.leader_rule {
+            LeaderRule::Trust2 => self.record_accusations(block),
+            LeaderRule::Failed => self.record_failed(block),
+            LeaderRule::Aptos => self.record_aptos(block),
+            LeaderRule::None => (),
+        }
+        self.record_ledger(block);
+    }
+
+    fn record_failed(&mut self, block: &Block) {
+        for round in Self::skipped(block) {
+            if round <= self.reputation.done() || self.reputation.facts().contains_key(&round) {
+                continue;
+            }
+            if let Some((i, epoch)) = self.leader_of_round(round) {
+                // NOTE: this log entry is used to count the failed-proposer facts per leader (benchmark/p5.py).
+                info!("G2: failed round {} led by {}", round, self.members[i].0);
+                self.reputation.record(round, epoch);
+            }
+        }
+    }
+
+    fn record_aptos(&mut self, block: &Block) {
+        let index = |name: &PublicKey| self.members.binary_search_by_key(name, |(n, _)| *n).ok();
+        let skipped = Self::skipped(block);
+        let first = skipped.end.saturating_sub(aptos::MAX_FAILED_AUTHORS).max(skipped.start);
+        let failed = (first..skipped.end).filter_map(|u| self.leader_of_round(u).map(|(i, _)| i)).collect();
+        let event = AptosEvent {
+            proposer: index(&block.author),
+            failed,
+            voters: block.qc.votes.iter().filter_map(|(name, _)| index(name)).collect(),
+        };
+        self.history.push_back(event);
+        while self.history.len() > aptos::PROPOSER_WINDOW_MULTIPLIER * self.members.len() {
+            self.history.pop_front();
+        }
+    }
+
+    fn record_accusations(&mut self, block: &Block) {
         for accusation in &block.accusations {
             // NOTE: this log entry is used to count the accusation facts per leader (benchmark/p5.py): the first
             // fact of a round counts, against the leader of that round in the table of the accusation's epoch.
@@ -284,6 +414,10 @@ impl Epochs {
             }
             self.reputation.record(accusation.round, accusation.epoch);
         }
+    }
+
+    /// Omission proofs, G1 evidence and the committed block itself, under every leader rule.
+    fn record_ledger(&mut self, block: &Block) {
         for omission in &block.omissions {
             if self.omission_holds(omission) {
                 let author = self.committed[&omission.round].author;

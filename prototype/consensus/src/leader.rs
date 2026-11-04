@@ -17,7 +17,7 @@ pub fn leader(committee: &Committee, round: Round) -> PublicKey {
         .authorities
         .iter()
         .filter(|(_, a)| a.stake > 0 && a.leader)
-        .map(|(name, a)| (*name, a.stake as u128))
+        .map(|(name, a)| (*name, if a.lead > 0 { a.lead as u128 } else { a.stake as u128 }))
         .collect();
     // If the leader rule has barred everyone (G1 suspensions plus G2 exclusions covering all of the weight),
     // fall back to the full membership so the round still gets a deterministic leader, rather than dividing by
@@ -115,6 +115,20 @@ mod leader_tests {
         let (large, _) = weighted(&[250_000, 250_000, 250_000, 250_000]);
         for round in 0..1_000 {
             assert_eq!(leader(&small, round), leader(&large, round));
+        }
+    }
+
+    #[test]
+    fn the_lead_weight_replaces_the_stake_in_the_draw() {
+        // LeaderRule::Aptos sets a reputation weight times the stake; the voting stake stays as it is.
+        let (mut committee, names) = weighted(&[1, 1, 1, 1]);
+        for (name, lead) in names.iter().zip([1000u64, 1000, 1, 10]) {
+            committee.authorities.get_mut(name).unwrap().lead = lead;
+        }
+        let expected = [1000.0 / 2011.0, 1000.0 / 2011.0, 1.0 / 2011.0, 10.0 / 2011.0];
+        for (name, expected) in names.iter().zip(expected) {
+            let got = share(&committee, name);
+            assert!((got - expected).abs() < 0.015, "{} instead of {}", got, expected);
         }
     }
 
