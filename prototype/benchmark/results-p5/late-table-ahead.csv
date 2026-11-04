@@ -1,0 +1,36 @@
+batch,code,group,run,scenario,epoch_length,e2e_latency_ms,consensus_latency_ms,timeouts,top_round,stalls,stalls_near_boundary,invalid_signatures
+table-ahead,baseline,baseline,B_1,late,50,630,385,21,629,22,0,0
+table-ahead,baseline,baseline,B_2,late,50,562,357,15,689,17,0,0
+table-ahead,baseline,baseline,B_3,late,50,491,298,13,718,13,0,0
+table-ahead,baseline,baseline,B_4,late,50,545,332,16,669,18,3,0
+table-ahead,baseline,baseline,B_5,late,50,590,345,20,624,21,4,0
+table-ahead,baseline,baseline,B_6,late,50,600,371,18,620,19,4,0
+table-ahead,baseline,baseline,B_7,late,50,581,348,19,644,20,1,0
+table-ahead,baseline,baseline,B_8,late,50,584,345,20,624,23,2,0
+table-ahead,baseline,baseline,B_9,late,50,610,374,20,646,20,3,0
+table-ahead,baseline,baseline,B_10,late,50,554,334,16,660,18,4,0
+table-ahead,10c2b6f,trust2,T_1,late,50,661,386,25,590,26,5,0
+table-ahead,10c2b6f,trust2,T_2,late,50,614,372,23,615,22,4,0
+table-ahead,10c2b6f,trust2,T_3,late,50,665,403,23,582,24,3,0
+table-ahead,10c2b6f,trust2,T_4,late,50,638,354,25,604,24,4,0
+table-ahead,10c2b6f,trust2,T_5,late,50,637,396,17,670,17,7,0
+table-ahead,10c2b6f,trust2,T_6,late,50,556,347,18,671,15,1,0
+table-ahead,10c2b6f,trust2,T_7,late,50,641,377,24,607,24,3,0
+table-ahead,10c2b6f,trust2,T_8,late,50,707,440,25,583,27,4,0
+table-ahead,10c2b6f,trust2,T_9,late,50,467,294,12,709,12,1,0
+table-ahead,10c2b6f,trust2,T_10,late,50,668,392,27,588,24,4,0
+table-ahead,89ee5c7,trust2 table ahead,E_1,late,50,548,340,16,655,17,0,0
+table-ahead,89ee5c7,trust2 table ahead,E_2,late,50,612,361,24,624,21,5,0
+table-ahead,89ee5c7,trust2 table ahead,E_3,late,50,581,359,19,660,17,0,0
+table-ahead,89ee5c7,trust2 table ahead,E_4,late,50,715,419,23,592,23,2,0
+table-ahead,89ee5c7,trust2 table ahead,E_5,late,50,601,355,19,616,23,9,0
+table-ahead,89ee5c7,trust2 table ahead,E_6,late,50,634,383,21,628,20,0,0
+table-ahead,89ee5c7,trust2 table ahead,E_7,late,50,522,315,15,684,16,1,0
+table-ahead,89ee5c7,trust2 table ahead,E_8,late,50,609,375,20,616,20,6,0
+table-ahead,89ee5c7,trust2 table ahead,E_9,late,50,572,353,17,644,20,1,0
+table-ahead,89ee5c7,trust2 table ahead,E_10,late,50,745,455,26,567,29,3,0
+table-ahead,89ee5c7,trust2 table ahead,SE_1,silent (3),50,1075,420,47,410,54,9,
+table-ahead,89ee5c7,trust2 table ahead,SE_2,silent (3),50,1134,369,52,380,58,5,
+table-ahead,89ee5c7,trust2 table ahead,SE_3,silent (3),50,971,346,45,411,54,3,
+table-ahead,89ee5c7,trust2 table ahead,SE_4,silent (3),50,1366,613,51,374,58,2,
+table-ahead,89ee5c7,trust2 table ahead,SE_5,silent (3),50,1103,426,46,437,51,5,
