@@ -26,7 +26,9 @@ pub struct PunishConfig {
     pub suspend_l3: u64,
     /// L1 bars from leading for this many epochs.
     pub lead_bar: u64,
-    /// Chain window of the correlated share and look-back of repeats, in epochs.
+    /// Sign window, chain window of the correlated share and look-back of repeats, in epochs. Evidence signed in the
+    /// same sign window counts as one fault of its entity and class.
+    pub sign_window: u64,
     pub chain_window: u64,
     pub lookback: u64,
     /// Governance decides an L4 this many epochs later.
@@ -42,6 +44,7 @@ impl Default for PunishConfig {
             suspend_l2: 4,
             suspend_l3: 32,
             lead_bar: 1,
+            sign_window: 1,
             chain_window: 32,
             lookback: 64,
             governance_delay: 2,
@@ -170,9 +173,9 @@ impl Punishment {
         });
     }
 
-    /// One punished window per (entity, class, sign epoch): further evidence only feeds upgrades.
+    /// One punished window per (entity, class, sign window): further evidence only feeds upgrades.
     fn add(&mut self, item: Item) {
-        let key = (item.entity, item.kind, item.sign_epoch);
+        let key = (item.entity, item.kind, item.sign_epoch / self.config.sign_window.max(1) as EpochNumber);
         match self.windows.get(&key) {
             Some(&index) => {
                 self.items[index].fork |= item.fork;
@@ -206,7 +209,8 @@ impl Punishment {
             entities.dedup();
             entities.iter().map(|i| self.base0[*i]).sum()
         };
-        let mut c = share(&|x: &Item| x.sign_epoch == item.sign_epoch);
+        let w = self.config.sign_window.max(1) as EpochNumber;
+        let mut c = share(&|x: &Item| x.sign_epoch / w == item.sign_epoch / w);
         let window = self.config.chain_window as EpochNumber;
         if item.chain_epoch + window > k {
             c = c.max(share(&|x: &Item| x.chain_epoch + window > k && x.chain_epoch <= k));

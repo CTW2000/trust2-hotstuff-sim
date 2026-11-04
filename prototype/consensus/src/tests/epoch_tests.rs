@@ -177,7 +177,7 @@ fn durations_keep_their_rounds_at_another_epoch_length() {
     let at = |length| scaled(&EpochConfig { reference_length: 100, ..config(length) });
     let (punish, g2) = at(25);
     let (base, base_g2) = (PunishConfig::default(), G2Config::default());
-    assert_eq!(punish.lead_bar, 4 * base.lead_bar);
+    assert_eq!((punish.lead_bar, punish.sign_window), (4 * base.lead_bar, 4 * base.sign_window));
     assert_eq!((punish.suspend_l2, punish.suspend_l3), (4 * base.suspend_l2, 4 * base.suspend_l3));
     assert_eq!((punish.chain_window, punish.lookback), (4 * base.chain_window, 4 * base.lookback));
     assert_eq!(punish.governance_delay, 4 * base.governance_delay);

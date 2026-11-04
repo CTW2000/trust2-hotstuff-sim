@@ -1102,6 +1102,49 @@ async fn a_node_missing_an_older_block_enters_on_the_commit_proof() {
 }
 
 #[tokio::test]
+async fn the_commit_proof_before_the_terminal_block_still_enters() {
+    // The commit proof can come first: the first block of the next epoch (B12, carrying the QC of B11) reaches the
+    // node before the child of the terminal block, which comes only after the node's first timeout in round 12 (a
+    // timeout repeated in the same round is resent, and processes nothing again). When B11 comes, the proof already
+    // at hand must let it enter; B9 is still missing, so the ledger cannot get there.
+    let committee = committee_with_base_port(18_000);
+    let at = |qc: QC, round: Round| {
+        let (author, secret) = leader_keys(round);
+        Block::new_from_key(qc, author, round, Vec::new(), &secret)
+    };
+    let b9 = at(QC::genesis(), 9);
+    let b10 = at(qc_for(&b9), 10);
+    let b11 = at(qc_for(&b10), 11);
+    let mut b12 = at(qc_for(&b11), 12);
+    b12.epoch = EPOCH + 1;
+    b12.signature = Signature::new(&b12.digest(), &leader_keys(12).1);
+
+    let mut members = keys();
+    let (name, secret) = members.remove(0);
+    let peer = members[0].0;
+    let mut received = all_frames(committee.address(&peer).unwrap());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let store_path = ".db_test_the_commit_proof_before_the_terminal_block_still_enters";
+    let (tx_core, mut rx_proposer, _rx_commit) = core_with_epochs(name, secret, committee.clone(), store_path, 10);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Propose(b10)).await.unwrap();
+    tx_core.send(ConsensusMessage::Propose(b12)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    tx_core.send(ConsensusMessage::Propose(b11)).await.unwrap();
+    let new_epoch = async {
+        while let Some(frame) = received.recv().await {
+            if let Ok(ConsensusMessage::Timeout(t)) = bincode::deserialize(&frame) {
+                if t.epoch == EPOCH + 1 {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+    assert!(timeout(Duration::from_secs(2), new_epoch).await.unwrap_or(false), "no timeout of the new epoch");
+}
+
+#[tokio::test]
 async fn a_timeout_of_the_next_epoch_fetches_the_block_its_qc_certifies() {
     // The commit proof of the terminal block can reach a lagging node inside a timeout of the next epoch, when no
     // block comes (the round is stalling, and its vote may be the one missing). Without the block it certifies the

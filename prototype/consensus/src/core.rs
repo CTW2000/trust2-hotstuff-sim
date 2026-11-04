@@ -1170,10 +1170,12 @@ impl Core {
         let current = block.epoch == self.epochs.epoch();
         if current && self.epochs.past_end(block.round) && self.headers.len() < MAX_HEADERS {
             self.headers.insert(digest.clone(), block.clone());
-            // It may be one a held-back proposal waits for (propose), and complete the commit proof.
+            // It may complete the commit proof our high QC already is: nothing else would check again, as a
+            // timeout repeated in the same round is resent without being processed.
+            let high_qc = self.high_qc.clone();
+            self.enter_on_proof(&high_qc).await;
+            // It may be one a held-back proposal waits for (propose).
             if matches!(self.pending_proposal, Some((round, _)) if round == self.round) {
-                let high_qc = self.high_qc.clone();
-                self.enter_on_proof(&high_qc).await;
                 let (_, tc) = self.pending_proposal.take().unwrap();
                 self.propose(tc).await;
             }

@@ -52,7 +52,7 @@ from . import ttru
 class GradedPunishment:
     def __init__(self, cls, stake, cap, u_max, epoch=100, l_max=0.10, sus=(0, 0, 4, 32), lead_bar=1,
                  win_chain=32, lookback=64, gov_delay=2, liveness=True, injected=(), forks=(), recompute="fork",
-                 repeat_evict=False, delay=0):
+                 repeat_evict=False, delay=0, sign_window=1):
         self.cls, self.stake = np.asarray(cls), np.asarray(stake, float)
         self.cap, self.u_max, self.epoch, self.l_max = cap, u_max, epoch, l_max
         self.sus, self.lead_bar, self.win_chain, self.lookback = sus, lead_bar, win_chain, lookback
@@ -61,6 +61,8 @@ class GradedPunishment:
         # H1' (DESIGN.md §15.11): with delay 1 the table of epoch k is built from the ledger up to the start of epoch
         # k - 1, so evidence of chain epoch e is visible from the table of epoch e + 2 on.
         self.delay = delay
+        # Evidence signed within one sign window of `sign_window` epochs counts as one fault (scheme(25): 4 epochs).
+        self.sign_window = sign_window
         self.injected = sorted(injected, key=lambda x: x[2])
         self.forks = sorted(forks, key=lambda x: x[1])
         n = len(self.cls)
@@ -89,7 +91,7 @@ class GradedPunishment:
     def _add(self, i, kind, es, ec, mal=True, fork=False):
         if ec - es > self.lookback:                     # evidence is valid for the look-back
             return
-        key = (int(i), kind, int(es))
+        key = (int(i), kind, int(es) // self.sign_window)
         if key in self.windows:
             it = self.items[self.windows[key]]
             it["fork"] |= fork
@@ -122,7 +124,8 @@ class GradedPunishment:
     # ---- levels ----------------------------------------------------------------------------------
     def _c(self, it, k):
         safe = [x for x in self.items if x["kind"] == "safe"]
-        sig = {x["i"] for x in safe if x["es"] == it["es"]}
+        w = self.sign_window
+        sig = {x["i"] for x in safe if x["es"] // w == it["es"] // w}
         c = float(self.base0[list(sig)].sum())
         if it["ec"] > k - self.win_chain:
             chain = {x["i"] for x in safe if k - self.win_chain < x["ec"] <= k}

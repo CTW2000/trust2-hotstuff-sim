@@ -111,7 +111,7 @@ fn leader_index(
 }
 
 /// The G1 and reputation parameters for the configured epoch length: the durations in epochs (L1 bar, L2 and L3
-/// suspensions, chain window, look-back, governance delay) and the recovery per epoch of the defaults are for
+/// suspensions, sign window, chain window, look-back, governance delay) and the recovery per epoch of the defaults are for
 /// epochs of `reference_length` rounds, and keep their length in rounds at any other epoch length. The leader
 /// rule's windows (lag, exclusion, queue wait) are in rounds already.
 pub fn scaled(config: &EpochConfig) -> (PunishConfig, G2Config) {
@@ -124,6 +124,7 @@ pub fn scaled(config: &EpochConfig) -> (PunishConfig, G2Config) {
     if length > 0 && reference > 0 && length != reference {
         let epochs = |n: u64| ((n * reference + length / 2) / length).max(1);
         punish.lead_bar = epochs(punish.lead_bar);
+        punish.sign_window = epochs(punish.sign_window);
         punish.suspend_l2 = epochs(punish.suspend_l2);
         punish.suspend_l3 = epochs(punish.suspend_l3);
         punish.chain_window = epochs(punish.chain_window);

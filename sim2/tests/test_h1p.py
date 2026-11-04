@@ -29,7 +29,7 @@ def check_scheme():
     weights, graded = ttru.scheme(25)
     assert weights == dict(epoch=25, recover=0.005, table_lag=1)
     assert graded == dict(epoch=25, sus=(0, 0, 16, 128), lead_bar=4, win_chain=128, lookback=256, gov_delay=8,
-                          delay=1)
+                          delay=1, sign_window=4)
     print("scheme(25): durations x4 in epochs, recovery / 4 per epoch")
 
 

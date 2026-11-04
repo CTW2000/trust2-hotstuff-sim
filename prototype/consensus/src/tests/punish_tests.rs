@@ -147,3 +147,28 @@ fn evidence_older_than_the_lookback_does_not_punish() {
     assert_eq!(levels(65), 1);
     assert_eq!(levels(66), 0);
 }
+
+#[test]
+fn evidence_within_one_sign_window_is_one_fault() {
+    // DESIGN.md §15.11: at 25 rounds per epoch the sign window is 4 epochs (100 rounds, as one epoch was). Evidence
+    // signed in epochs 4 and 6 is one fault (one L2, no repeat); in epochs 4 and 8 it is two windows, so the second is
+    // a repeat. With a window of one epoch both pairs are two faults.
+    let levels = |sign_window: u64, epochs: [EpochNumber; 2]| -> Vec<u8> {
+        let (classes, weights) = (vec![Class::Licensed; 4], vec![1; 4]);
+        let config = PunishConfig { sign_window, ..PunishConfig::default() };
+        let mut punishment = Punishment::new(classes, weights, ONE, ONE, config);
+        let mut levels = Vec::new();
+        for (k, signed) in epochs.iter().enumerate() {
+            punishment.record(0, Kind::Safety, *signed, *signed, false, false);
+            for event in punishment.update(k as EpochNumber + 10) {
+                if let G1Event::Level(l, _, _) = event {
+                    levels.push(*l);
+                }
+            }
+        }
+        levels
+    };
+    assert_eq!(levels(4, [4, 6]), vec![2]);
+    assert_eq!(levels(4, [4, 8]), vec![2, 3]);
+    assert_eq!(levels(1, [4, 6]), vec![2, 3]);
+}

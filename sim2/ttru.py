@@ -41,7 +41,7 @@ def scheme(epoch=25, reference=100):
     ep = lambda n: max(1, round(n * f))
     weights = dict(epoch=epoch, recover=0.02 / f, table_lag=1)
     graded = dict(epoch=epoch, sus=(0, 0, ep(4), ep(32)), lead_bar=ep(1), win_chain=ep(32), lookback=ep(64),
-                  gov_delay=ep(2), delay=1)
+                  gov_delay=ep(2), delay=1, sign_window=ep(1))
     return weights, graded
 
 
