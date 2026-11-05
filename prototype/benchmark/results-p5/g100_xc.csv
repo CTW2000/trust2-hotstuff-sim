@@ -1,0 +1,3 @@
+scenario,build,nodes,net,epoch_length,rep,stakes,uncertified,entity_cap_ppm,class_cap_ppm,faults,consensus_tps,consensus_latency_ms,e2e_tps,e2e_latency_ms,timeouts,client_misses,timeout_rounds,top_round,rounds_per_s,epochs,lag_median_ms,lag_max_ms,accusations_faulty,g2_excluded_faulty,min_r_faulty,accusations_honest,honest_cut,faulty_share_end,base_max_ppm,base_min_ppm,faulty_base_ppm
+silent,trust2,31,base,25,1,lognormal:1,10,50000,250000,3,9483,406,9471,834,18,0,26,392,5.6,16,67,1080,12,3,900000,1,0,0.1029,50000,2624,112991
+silent,trust2,31,base,25,2,lognormal:1,10,50000,250000,3,10604,275,10502,575,11,0,20,442,6.3,18,67,81,11,3,900000,,0,0.1029,50000,2624,112991
