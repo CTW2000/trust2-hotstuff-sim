@@ -39,14 +39,15 @@ pub struct G2Config {
 }
 
 impl Default for G2Config {
-    /// The recommended protocol (信任2.0_协议级验证 §4.4): q = 0.5, ρ̄ = 0.1, γ = 10⁴, D = 500, cap 0.5,
-    /// Wq = 500, r_min = 0.7, step 0.1, recovery 0.02, B_rep = 0.10, lag 10.
+    /// The recommended protocol (信任2.0_协议级验证 §4.4, γ from §4.9): q = 0.5, ρ̄ = 0.1, γ = 10², D = 500,
+    /// cap 0.5, Wq = 500, r_min = 0.7, step 0.1, recovery 0.02, B_rep = 0.10, lag 10. γ was 10⁴ until the
+    /// threshold sweep of 2026-11-04 (DESIGN.md §15.13): a run of bad facts now convicts after 3 leads, not 6.
     fn default() -> Self {
         Self {
             lag: 10,
             up: 1_609_438,         // ln 5
             down: -587_787,        // ln(5/9)
-            threshold: 9_210_340,  // ln 10⁴
+            threshold: 4_605_170,  // ln 10²
             exclusion: 500,
             cap: ONE / 2,
             queue_wait: 500,

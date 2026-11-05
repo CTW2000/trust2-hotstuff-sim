@@ -104,6 +104,7 @@ impl Consensus {
             l_max_ppm: parameters.l_max_ppm,
             governance_malicious: parameters.governance_malicious,
             leader_rule: parameters.leader_rule,
+            g2_threshold: parameters.g2_threshold,
         };
         Core::spawn(
             name,

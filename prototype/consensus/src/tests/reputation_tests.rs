@@ -39,7 +39,7 @@ fn increments_are_the_log_likelihood_ratios() {
     let c = G2Config::default();
     assert!((c.up as f64 / 1e6 - (0.5f64 / 0.1).ln()).abs() < 1e-6);
     assert!((c.down as f64 / 1e6 - (0.5f64 / 0.9).ln()).abs() < 1e-6);
-    assert!((c.threshold as f64 / 1e6 - 1e4f64.ln()).abs() < 1e-6);
+    assert!((c.threshold as f64 / 1e6 - 1e2f64.ln()).abs() < 1e-6);
 }
 
 /// Replays each simulator run: leaders by round robin over the members not excluded at the epoch's start,

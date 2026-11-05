@@ -76,6 +76,9 @@ pub struct Parameters {
     /// Experiment switch: the leader rule (all nodes alike).
     #[serde(default)]
     pub leader_rule: LeaderRule,
+    /// Experiment switch: the G2 CUSUM threshold ln γ in millionths (0: the protocol's, `G2Config::default`).
+    #[serde(default)]
+    pub g2_threshold: i64,
 }
 
 fn default_attest_guard() -> u64 {
@@ -119,6 +122,7 @@ impl Default for Parameters {
             frame: false,
             silent: false,
             leader_rule: LeaderRule::default(),
+            g2_threshold: 0,
         }
     }
 }
@@ -166,6 +170,9 @@ impl Parameters {
         }
         if self.leader_rule != LeaderRule::Trust2 {
             info!("Leader rule set to {:?} (experiment)", self.leader_rule);
+        }
+        if self.g2_threshold != 0 {
+            info!("G2 threshold set to {} millionths (experiment)", self.g2_threshold);
         }
         info!(
             "Entity cap set to {} ppm, uncertified class cap to {} ppm",

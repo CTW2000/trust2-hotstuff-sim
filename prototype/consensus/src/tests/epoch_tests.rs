@@ -14,6 +14,7 @@ fn config(length: Round) -> EpochConfig {
         l_max_ppm: 100_000,
         governance_malicious: false,
         leader_rule: Default::default(),
+        g2_threshold: 0,
     }
 }
 
@@ -191,6 +192,15 @@ fn durations_keep_their_rounds_at_another_epoch_length() {
 }
 
 #[test]
+fn g2_threshold_switch() {
+    // DESIGN.md §15.13: 0 keeps the protocol's threshold; another value replaces it and nothing else.
+    assert_eq!(scaled(&config(25)).1.threshold, G2Config::default().threshold);
+    let (_, g2) = scaled(&EpochConfig { g2_threshold: 9_210_340, ..config(25) });
+    assert_eq!(g2.threshold, 9_210_340);
+    assert_eq!((g2.up, g2.down, g2.exclusion), (G2Config::default().up, G2Config::default().down, 500));
+}
+
+#[test]
 fn no_handover_with_zero_length() {
     let epochs = Epochs::new(&committee(), config(0));
     assert!(!epochs.is_terminal(&block(EPOCH, 1_000_000)));
@@ -208,11 +218,11 @@ fn accusing(epoch: EpochNumber, round: Round, accused: &[Round]) -> Block {
 #[test]
 fn accusations_count_against_the_leader_of_their_own_table() {
     // 5.3: an accusation counts against the leader of its round in the table of the epoch it was made in, which is the
-    // table the accusers went by, not the one of the epoch the round falls in. They differ here: the third epoch
+    // table the accusers went by, not the one of the epoch the round falls in. They differ here: the second epoch
     // change excludes the silent leader from the table after next (H1'), and that table hands its rounds to others.
     let mut epochs = Epochs::new(&committee(), config(10));
     let silent = leader(epochs.current(), 1);
-    for k in 1..=4 {
+    for k in 1..=3 {
         let table = epochs.current().clone();
         let accused: Vec<Round> = (10 * k - 9..=10 * k).filter(|u| leader(&table, *u) == silent).collect();
         epochs.record(&accusing(table.epoch, 10 * k, &accused));
@@ -234,7 +244,7 @@ fn accusations_count_against_the_leader_of_their_own_table() {
 
 #[test]
 fn silent_leader_loses_leadership_and_reputation() {
-    // G2 (DESIGN.md §12.2): every round led by one member is accused. Once six accusations are processed it
+    // G2 (DESIGN.md §12.2): every round led by one member is accused. Once three accusations are processed it
     // is convicted at an epoch change: it no longer leads, and its reputation drops to 0.9 until the
     // exclusion (500 rounds) ends; the others are untouched.
     let mut epochs = Epochs::new(&committee(), config(10));
@@ -259,9 +269,9 @@ fn silent_leader_loses_leadership_and_reputation() {
         assert!(r.iter().enumerate().all(|(i, x)| i == idx || *x == 1_000_000), "an honest member was cut");
     }
 
-    // Convicted at the third epoch change (rounds <= 21 processed: six accusations), excluded for 500 rounds from
-    // the table after next (H1').
-    assert_eq!(excluded_epochs.first(), Some(&4));
+    // Convicted at the second epoch change (rounds <= 11 processed: three accusations at γ = 10², §15.13), excluded
+    // for 500 rounds from the table after next (H1').
+    assert_eq!(excluded_epochs.first(), Some(&3));
     assert!(excluded_epochs.windows(2).take(49).all(|w| w[1] == w[0] + 1));
     assert!(excluded_epochs.len() < 80, "the exclusion never ended");
 
@@ -286,7 +296,7 @@ fn first_round_of_an_epoch_keeps_the_previous_leader() {
     // when the new table changes who may lead (DESIGN.md §12.2).
     let mut epochs = Epochs::new(&committee(), config(10));
     let silent = leader(epochs.current(), 1);
-    for k in 1..=4 {
+    for k in 1..=3 {
         let table = epochs.current().clone();
         let accused: Vec<Round> = (10 * k - 9..=10 * k).filter(|u| leader(&table, *u) == silent).collect();
         epochs.record(&accusing(table.epoch, 10 * k, &accused));
@@ -296,9 +306,9 @@ fn first_round_of_an_epoch_keeps_the_previous_leader() {
     let old = epochs.get(new.epoch - 1).unwrap().clone();
     assert!(old.authorities[&silent].leader && !new.authorities[&silent].leader);
     // The schedules differ after the first round (the old one has four leaders, the new one three) ...
-    assert!((43..70).any(|u| leader(&old, u) != leader(&new, u)));
-    // ... but the first round of the new epoch, 42, keeps the old leader.
-    assert_eq!(leader(&new, 42), leader(&old, 42));
+    assert!((33..60).any(|u| leader(&old, u) != leader(&new, u)));
+    // ... but the first round of the new epoch, 32, keeps the old leader.
+    assert_eq!(leader(&new, 32), leader(&old, 32));
 }
 
 fn with_otxs(round: Round, otxs: Vec<Otx>) -> Block {

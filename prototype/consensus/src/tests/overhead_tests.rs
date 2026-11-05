@@ -140,6 +140,7 @@ fn overhead() {
             l_max_ppm: 100_000,
             governance_malicious: false,
             leader_rule: Default::default(),
+            g2_threshold: 0,
         };
         let mut epochs = Epochs::new(&committee, config);
         let mut changes = Vec::new();

@@ -317,6 +317,43 @@ def cmp():
                                 leader_rule=rule, **faults), duration)
 
 
+def cmpg():
+    """The comparison of leader rules (cmp) again after the G2 threshold changed from ln 10^4 to ln 10^2 (DESIGN.md
+    §15.13): the four rules at the new threshold and, in the silent scenario, Trust 2.0 at the old one as well
+    (g2_threshold = 9_210_340), interleaved within each repetition. Same scenarios and durations as cmp."""
+    old = 9_210_340
+    scenarios = (("silent", dict(silent=3), 90), ("late", dict(late_p=0.1), 90),
+                 ("framers+late", dict(frame=6, late_p=0.1), 180))
+    for rep in range(1, 6):
+        for name, faults, duration in scenarios:
+            runs = [(rule, 0) for rule in ("none", "aptos", "failed", "trust2")]
+            if name == "silent":
+                runs.append(("trust2", old))
+            for rule, threshold in runs:
+                run("cmpg", dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                                 leader_rule=rule, g2_threshold=threshold, **faults), duration)
+
+
+
+def g100():
+    """Everything the G2 threshold can change, at the new one (ln 10^2; DESIGN.md §15.13): the comparison of leader
+    rules (cmpg), then the parts of f25 where G2 convicts -- silent leaders (crashed, and on the weighted path), long
+    framing with its control, long censorship. Runs without a conviction are the same at either threshold."""
+    cmpg()
+    for rep in range(1, 6):
+        run("g100_silent", dict(scenario="silent", build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                                faults=3), 90)
+    weighted = dict(stakes="lognormal:1", uncertified=10, entity_cap_ppm=50_000, class_cap_ppm=250_000)
+    for rep in (1, 2):
+        run("g100_xc", dict(scenario="silent", build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                            **weighted, faults=3), 60)
+        for name, faults in (("framers+late", dict(frame=2, late_p=0.1)), ("late", dict(late_p=0.1))):
+            run("g100_xb", dict(scenario=name, build="trust2", nodes=10, net="base", epoch_length=25, rep=rep,
+                                **faults), 240)
+        run("g100_censor", dict(scenario="censor", build="trust2", nodes=31, net="base", epoch_length=25, otx_rate=25,
+                                attest_guard=136, censor=10, rep=rep), 300)
+
+
 def report():
     for path in sorted(glob(f"{OUT}/*.csv")):
         with open(path) as fh:
@@ -327,7 +364,7 @@ def report():
                                                    "faults", "frame", "lie_nr", "equivocate", "otx_rate",
                                                    "attest_guard", "censor", "censor_adjacent", "late_p",
                                                    "stakes", "uncertified", "entity_cap_ppm", "class_cap_ppm",
-                                                   "silent", "leader_rule")]
+                                                   "silent", "leader_rule", "g2_threshold")]
         keys = [k for k in rows[0] if k not in metrics and k != "rep"]
         groups = defaultdict(list)
         for r in rows:
@@ -377,4 +414,4 @@ def compare_x2(rows):
 
 if __name__ == "__main__":
     {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "f25": f25,
-     "cmp": cmp, "report": report}[sys.argv[1]]()
+     "cmp": cmp, "cmpg": cmpg, "g100": g100, "report": report}[sys.argv[1]]()

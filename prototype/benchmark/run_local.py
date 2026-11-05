@@ -42,6 +42,8 @@ def node_parameters(args):
                  "l_max_ppm": args.l_max_ppm, "governance_malicious": args.governance_malicious}
     if args.leader_rule != "trust2":                         # the comparison of leader rules (DESIGN.md §15.12)
         consensus["leader_rule"] = args.leader_rule
+    if args.g2_threshold:                                    # another G2 threshold, for comparisons (§15.13)
+        consensus["g2_threshold"] = args.g2_threshold
     return {
         "consensus": consensus,
         "mempool": {"gc_depth": 50, "sync_retry_delay": 5_000, "sync_retry_nodes": 3,
@@ -216,6 +218,8 @@ def main():
     ap.add_argument("--silent", type=int, default=0, help="number of booted nodes that never propose (Byzantine)")
     ap.add_argument("--leader-rule", choices=["trust2", "none", "aptos", "failed"], default="trust2",
                     help="leader rule of the Trust 2.0 build, for comparisons (DESIGN.md §15.12)")
+    ap.add_argument("--g2-threshold", type=int, default=0,
+                    help="G2 CUSUM threshold ln(gamma) in millionths (0: the protocol's), for comparisons")
     ap.add_argument("--l-max-ppm", type=int, default=100_000, help="G1 suspension cap L_max in ppm")
     ap.add_argument("--governance-malicious", action="store_true", help="G1: an L4 without a fork evicts")
     ap.add_argument("--entity-cap-ppm", type=int, default=50_000, help="CapNorm entity cap in ppm, at most L_max")

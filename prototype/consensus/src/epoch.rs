@@ -73,6 +73,8 @@ pub struct EpochConfig {
     pub governance_malicious: bool,
     /// Experiment switch: the leader rule (DESIGN.md §15.12).
     pub leader_rule: LeaderRule,
+    /// Experiment switch: the G2 CUSUM threshold in millionths, 0 for the protocol's (DESIGN.md §15.13).
+    pub g2_threshold: i64,
 }
 
 pub struct Epochs {
@@ -147,6 +149,9 @@ pub fn scaled(config: &EpochConfig) -> (PunishConfig, G2Config) {
         ..PunishConfig::default()
     };
     let mut g2 = G2Config::default();
+    if config.g2_threshold > 0 {
+        g2.threshold = config.g2_threshold;
+    }
     let (length, reference) = (config.length, config.reference_length);
     if length > 0 && reference > 0 && length != reference {
         let epochs = |n: u64| ((n * reference + length / 2) / length).max(1);

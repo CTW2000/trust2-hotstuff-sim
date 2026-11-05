@@ -81,6 +81,7 @@ fn core_on(
         l_max_ppm: 100_000,
         governance_malicious: false,
         leader_rule: Default::default(),
+        g2_threshold: 0,
     };
     Core::spawn(
         name,
@@ -689,6 +690,7 @@ fn node_with_proposer(store: Store) -> (Core, Receiver<ProposerMessage>) {
             l_max_ppm: 100_000,
             governance_malicious: false,
             leader_rule: Default::default(),
+            g2_threshold: 0,
         },
         Inclusion::new(Duration::from_millis(500), false),
         Faults::default(),
