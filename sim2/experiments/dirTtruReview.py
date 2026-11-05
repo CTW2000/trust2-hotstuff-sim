@@ -171,12 +171,13 @@ def wilson_upper(k, n, z=1.96):
 
 
 def poisson_upper(k, conf=0.975):
-    """Upper end of the two-sided 95% interval of a Poisson mean given k events (bisection on the CDF)."""
+    """Upper end of the two-sided 95% interval of a Poisson mean given k events (bisection on the CDF). The terms
+    are summed in log space: exp(-lam) underflows for lam above about 745 (k in the hundreds)."""
     def cdf(lam):
-        term = total = math.exp(-lam)
+        log_term, total = -lam, math.exp(-lam)
         for i in range(1, k + 1):
-            term *= lam / i
-            total += term
+            log_term += math.log(lam / i)
+            total += math.exp(log_term)
         return total
     lo, hi = 0.0, 10.0 + 10.0 * k
     for _ in range(200):
