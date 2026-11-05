@@ -326,7 +326,8 @@ def report():
         metrics = [k for k in rows[0] if k not in ("scenario", "build", "nodes", "net", "rate", "epoch_length", "rep",
                                                    "faults", "frame", "lie_nr", "equivocate", "otx_rate",
                                                    "attest_guard", "censor", "censor_adjacent", "late_p",
-                                                   "stakes", "uncertified", "entity_cap_ppm", "class_cap_ppm")]
+                                                   "stakes", "uncertified", "entity_cap_ppm", "class_cap_ppm",
+                                                   "silent", "leader_rule")]
         keys = [k for k in rows[0] if k not in metrics and k != "rep"]
         groups = defaultdict(list)
         for r in rows:
