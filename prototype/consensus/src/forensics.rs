@@ -9,12 +9,15 @@
 //!   C2  j = view(X):              QC(X) and QC(P)                                  -> E1;
 //!   C3  j < view(X):              Z embeds TC(view(Z) - 1) whose signers reported high QCs <= j < view(X),
 //!                                 though those in QC(X+) had voted for X+, which certifies view(X)       -> E3.
-//! Only the TC embedded in Z ties C3 to the records: a node keeps no other TC (DESIGN.md §15.15, S3).
+//! Before the cases, the blocks of Y's branch above view(X) + 1 are checked against the voting rule: the signers of
+//! the QC of the first block that breaks it have E2 (the theorem's first step; honest code never certifies one).
+//! Only the TC embedded in Z ties C3 to the records: a node keeps no other TC (DESIGN.md §15.15, S3). Where the TC
+//! is not part of the block (`tc_outside_block`), stored blocks lack it and look invalid, so the E2 step is skipped.
 
 use crate::config::{Committee, EpochNumber, Parameters, Stake};
 use crate::epoch::Epochs;
 use crate::consensus::Round;
-use crate::messages::{Block, Evidence, SignedTimeout, Timeout, Vote, QC, TC};
+use crate::messages::{extends_validly, Block, Evidence, SignedTimeout, Timeout, Vote, QC, TC};
 use crypto::{Digest, Hash as _, PublicKey};
 use std::collections::{BTreeSet, HashSet};
 use store::Store;
@@ -40,6 +43,8 @@ pub struct CommitProof {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Case {
+    /// A block of Y's branch breaks the voting rule (E2).
+    Invalid,
     A,
     B,
     C1,
@@ -96,9 +101,9 @@ pub fn first_conflict(a: &Records, b: &Records) -> Option<(CommitProof, CommitPr
     Some(if x.x.round <= y.x.round { (x, y) } else { (y, x) })
 }
 
-/// Theorem 3 for the commit proofs `cx` and `cy` (view(X) <= view(Y)); `y_records` are the records of one honest
-/// node that holds Y (Y and its ancestors).
-pub fn judge(cx: &CommitProof, cy: &CommitProof, y_records: &Records) -> Finding {
+/// The accountability theorem for the commit proofs `cx` and `cy` (view(X) <= view(Y)); `y_records` are the records
+/// of one honest node that holds Y (Y and its ancestors). `tc_in_block`: blocks carry their TC (the protocol).
+pub fn judge(cx: &CommitProof, cy: &CommitProof, y_records: &Records, tc_in_block: bool) -> Finding {
     let u = cx.x.round;
     let y = &cy.x;
     let qc_x = &cx.x_plus.qc;
@@ -113,6 +118,23 @@ pub fn judge(cx: &CommitProof, cy: &CommitProof, y_records: &Records) -> Finding
         culprits: BTreeSet::new(),
         missing: None,
     };
+    let y_index = y_records.chain.iter().position(|b| b.digest() == y.digest());
+    if let (true, Some(end)) = (tc_in_block, y_index) {
+        let invalid = (0..=end).find(|&i| {
+            let b = &y_records.chain[i];
+            b.round > u + 1 && !extends_validly(b.round, b.qc.round, b.tc.as_ref())
+        });
+        if let Some(i) = invalid {
+            finding.case = Case::Invalid;
+            finding.z_round = Some(y_records.chain[i].round);
+            finding.evidence = match y_records.qc_of(i) {
+                Some(qc) => invalid_votes(&y_records.chain[i], qc),
+                None => Vec::new(),
+            };
+            finding.culprits = finding.evidence.iter().map(culprit).collect();
+            return finding;
+        }
+    }
     if y.round == u {
         finding.evidence = double_votes(qc_x, qc_y);
     } else if y.round == u + 1 {
@@ -185,6 +207,17 @@ fn double_votes(a: &QC, b: &QC) -> Vec<Evidence> {
                 vote(&a.hash, a.round, a.epoch, *name, sa),
                 vote(&b.hash, b.round, b.epoch, *name, sb),
             );
+            evidence.verify().ok().map(|_| evidence)
+        })
+        .collect()
+}
+
+/// E2 for every signer of `qc`, which certifies `block`, a block that breaks the voting rule (verified).
+fn invalid_votes(block: &Block, qc: &QC) -> Vec<Evidence> {
+    qc.votes
+        .iter()
+        .filter_map(|(name, signature)| {
+            let evidence = Evidence::InvalidBlock(vote(&qc.hash, qc.round, qc.epoch, *name, signature), block.header());
             evidence.verify().ok().map(|_| evidence)
         })
         .collect()
@@ -265,7 +298,7 @@ pub async fn report(committee: &Committee, parameters: &Parameters, a: &str, b: 
     });
     if let Some((cx, cy)) = first_conflict(&ra, &rb) {
         let x_from_a = ra.digests().contains(&cx.x.digest());
-        let finding = judge(&cx, &cy, if x_from_a { &rb } else { &ra });
+        let finding = judge(&cx, &cy, if x_from_a { &rb } else { &ra }, !parameters.tc_outside_block);
         let count = |e1: bool| {
             finding.evidence.iter().filter(|e| matches!(e, Evidence::DoubleVote(..)) == e1).count()
         };
@@ -281,7 +314,9 @@ pub async fn report(committee: &Committee, parameters: &Parameters, a: &str, b: 
             "x_side": if x_from_a { "a" } else { "b" },
             "x_round": finding.x_round, "y_round": finding.y_round, "z_round": finding.z_round,
             "case": format!("{:?}", finding.case),
-            "e1": count(true), "e3": count(false),
+            "e1": count(true),
+            "e2": finding.evidence.iter().filter(|e| matches!(e, Evidence::InvalidBlock(..))).count(),
+            "e3": finding.evidence.iter().filter(|e| matches!(e, Evidence::Regression(..))).count(),
             "culprits": finding.culprits.iter().map(|k| k.encode_base64()).collect::<Vec<_>>(),
             "share": share(&finding.culprits, &table),
             "licensed": licensed,

@@ -1207,3 +1207,13 @@ fn split_brain_vote_window() {
     let late = Faults { vote_from: 11, ..Faults::default() };
     assert!(!late.votes_in(10) && late.votes_in(11));
 }
+
+#[test]
+fn parameter_check_keeps_the_class_cap_below_the_tolerated_share() {
+    // The paper's defaults pass; a class cap at or above (1 - B_rep - L_max)/3 = 26.7% does not; no class cap passes.
+    use crate::config::Parameters;
+    assert!(Parameters::default().check().is_ok());
+    assert_eq!(Parameters::default().class_cap_ppm, 250_000);
+    assert!(Parameters { class_cap_ppm: 290_000, ..Parameters::default() }.check().is_err());
+    assert!(Parameters { class_cap_ppm: 1_000_000, ..Parameters::default() }.check().is_ok());
+}

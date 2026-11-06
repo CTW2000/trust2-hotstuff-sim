@@ -5,7 +5,10 @@ in the first commit of `prototype/`), with only the fixes the Trust 2.0 prototyp
 experiments compare like with like (prototype/DESIGN.md §10, §11, §14.2):
 
 1. a node missing a block asks a few signers of the QC that certifies it (`consensus/src/synchronizer.rs`);
-2. blocks committed together are committed oldest first (`consensus/src/core.rs`, `commit`).
+2. blocks committed together are committed oldest first (`consensus/src/core.rs`, `commit`);
+3. a node commits as soon as it holds a commit proof (`try_commit_via_qc`, including a QC carried by a timeout and a
+   synced block that completes a proof already held; prototype/DESIGN.md §14.5 E-A);
+4. sync retries ask only for the blocks still missing (prototype/DESIGN.md §15.1).
 
 The crypto, store, network (including the synthetic link delays) and mempool crates are the prototype's.
 Build with `cargo build --release --features benchmark` in `baseline/node`; run with

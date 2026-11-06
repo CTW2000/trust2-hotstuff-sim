@@ -1,0 +1,3 @@
+baseline-e25: 10 runs, node timeouts per run 586; near a handover 128, far 458
+trust2-e0: 20 runs, node timeouts per run 553; near a handover 140, far 413
+trust2-e25: 20 runs, node timeouts per run 576; near a handover 142, far 435

@@ -89,7 +89,7 @@ fn same_view_fork_is_double_votes() {
     let a = chain(QC::genesis(), plain(&[1, 2, 3]), &SIDE_A, 1);
     let b = chain(QC::genesis(), plain(&[1, 2, 3]), &SIDE_B, 2);
     let (cx, cy) = first_conflict(&a, &b).unwrap();
-    let finding = judge(&cx, &cy, &b);
+    let finding = judge(&cx, &cy, &b, true);
     assert_eq!(finding.case, Case::A);
     assert_eq!(culprits(&finding), expected());
     assert_eq!(finding.evidence.len(), 2);
@@ -107,7 +107,7 @@ fn parent_at_the_view_of_x_is_double_votes() {
     let b = Records { chain: [b1.chain, rest.chain].concat(), high_qc: rest.high_qc };
     let (cx, cy) = first_conflict(&a, &b).unwrap();
     assert_eq!((cx.x.round, cy.x.round), (1, 3));
-    let finding = judge(&cx, &cy, &b);
+    let finding = judge(&cx, &cy, &b, true);
     assert_eq!(finding.case, Case::C2);
     assert_eq!(culprits(&finding), expected());
     assert!(finding.evidence.iter().all(|e| matches!(e, Evidence::DoubleVote(..)) && e.verify().is_ok()));
@@ -121,7 +121,7 @@ fn fork_through_a_tc_is_regression() {
     let tc = tc_by(4, &QC::genesis(), &SIDE_B);
     let b = chain(QC::genesis(), vec![(5, Some(tc)), (6, None), (7, None)], &SIDE_B, 2);
     let (cx, cy) = first_conflict(&a, &b).unwrap();
-    let finding = judge(&cx, &cy, &b);
+    let finding = judge(&cx, &cy, &b, true);
     assert_eq!(finding.case, Case::C3);
     assert_eq!(finding.z_round, Some(5));
     assert_eq!(culprits(&finding), expected());
@@ -137,7 +137,7 @@ fn a_tc_outside_the_records_convicts_nobody() {
     let mut b = chain(QC::genesis(), vec![(5, Some(tc)), (6, None), (7, None)], &SIDE_B, 2);
     b.chain[0].tc = None;
     let (cx, cy) = first_conflict(&a, &b).unwrap();
-    let finding = judge(&cx, &cy, &b);
+    let finding = judge(&cx, &cy, &b, false);
     assert_eq!(finding.case, Case::C3);
     assert!(finding.culprits.is_empty());
     assert!(finding.evidence.is_empty());
@@ -149,6 +149,34 @@ fn the_share_of_the_culprits() {
     let a = chain(QC::genesis(), plain(&[1, 2, 3]), &SIDE_A, 1);
     let b = chain(QC::genesis(), plain(&[1, 2, 3]), &SIDE_B, 2);
     let (cx, cy) = first_conflict(&a, &b).unwrap();
-    let finding = judge(&cx, &cy, &b);
+    let finding = judge(&cx, &cy, &b, true);
     assert!((share(&finding.culprits, &committee()) - 0.5).abs() < 1e-9);
+}
+
+#[test]
+fn a_block_that_breaks_the_voting_rule_is_e2() {
+    // The theorem's first step: side b certifies a block of round 5 on the genesis without a TC; its QC's signers
+    // (0, 1, 3) have E2 whatever the cases below would give.
+    let a = chain(QC::genesis(), plain(&[1, 2, 3]), &SIDE_A, 1);
+    let b = chain(QC::genesis(), plain(&[5, 6, 7]), &SIDE_B, 2);
+    let (cx, cy) = first_conflict(&a, &b).unwrap();
+    let finding = judge(&cx, &cy, &b, true);
+    assert_eq!(finding.case, Case::Invalid);
+    assert_eq!(finding.z_round, Some(5));
+    let mut expected: Vec<_> = SIDE_B.iter().map(|&i| key(i)).collect();
+    expected.sort();
+    assert_eq!(culprits(&finding), expected);
+    assert!(finding.evidence.iter().all(|e| matches!(e, Evidence::InvalidBlock(..)) && e.verify().is_ok()));
+}
+
+#[test]
+fn without_the_tc_in_the_block_the_e2_step_would_blame_honest_voters() {
+    // Why `tc_in_block` matters (S3): a stored block that left its TC outside looks like it breaks the voting rule.
+    let a = chain(QC::genesis(), plain(&[1, 2, 3]), &SIDE_A, 1);
+    let tc = tc_by(4, &QC::genesis(), &SIDE_B);
+    let mut b = chain(QC::genesis(), vec![(5, Some(tc)), (6, None), (7, None)], &SIDE_B, 2);
+    b.chain[0].tc = None;
+    let (cx, cy) = first_conflict(&a, &b).unwrap();
+    assert_eq!(judge(&cx, &cy, &b, true).case, Case::Invalid);
+    assert_eq!(judge(&cx, &cy, &b, false).case, Case::C3);
 }

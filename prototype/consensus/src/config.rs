@@ -40,8 +40,8 @@ pub struct Parameters {
     /// Entity cap of CapNorm, in ppm of the total weight; at most L_max (`check`).
     #[serde(default = "default_entity_cap_ppm")]
     pub entity_cap_ppm: u64,
-    /// Cap on the uncertified class, in ppm (1_000_000: no cap).
-    #[serde(default = "default_ppm")]
+    /// Cap on the uncertified class u_max, in ppm (default 25%; 1_000_000: no cap; `check`).
+    #[serde(default = "default_class_cap_ppm")]
     pub class_cap_ppm: u64,
     /// G1: at most this much base weight suspended at once, in ppm (L_max).
     #[serde(default = "default_l_max_ppm")]
@@ -109,8 +109,9 @@ fn default_epoch_length() -> u64 {
     25
 }
 
-fn default_ppm() -> u64 {
-    1_000_000
+/// The scheme's default class cap u_max = 25% (方案 §3.3, the paper's default; it must stay below (1 - B_rep)/3).
+fn default_class_cap_ppm() -> u64 {
+    250_000
 }
 
 impl Default for Parameters {
@@ -120,7 +121,7 @@ impl Default for Parameters {
             sync_retry_delay: 10_000,
             epoch_length: default_epoch_length(),
             entity_cap_ppm: default_entity_cap_ppm(),
-            class_cap_ppm: default_ppm(),
+            class_cap_ppm: default_class_cap_ppm(),
             l_max_ppm: default_l_max_ppm(),
             governance_malicious: false,
             attest_guard: default_attest_guard(),
@@ -143,14 +144,26 @@ impl Default for Parameters {
 impl Parameters {
     /// The scheme requires cap <= L_max (方案 §3.3): a member above L_max could never be suspended, and at the head
     /// of the strict FIFO suspension queue it would hold up everyone behind it.
+    /// The class cap must stay below (1 - B_rep - L_max)/3, or the uncertified class alone could hold a third of the
+    /// votes once reputation cuts and suspensions of honest members have shrunk the rest (the paper's corollary on
+    /// licensed culprits in the worst case; (1 - B_rep)/3 is enough only while nobody is suspended).
     pub fn check(&self) -> Result<(), String> {
-        match self.entity_cap_ppm <= self.l_max_ppm {
-            true => Ok(()),
-            false => Err(format!(
+        if self.entity_cap_ppm > self.l_max_ppm {
+            return Err(format!(
                 "entity cap of {} ppm is above L_max of {} ppm",
                 self.entity_cap_ppm, self.l_max_ppm
-            )),
+            ));
         }
+        let b_rep_ppm = (crate::reputation::G2Config::default().b_rep * 1_000_000 / crate::ttru::ONE) as u64;
+        let room = 1_000_000u64.saturating_sub(b_rep_ppm + self.l_max_ppm);
+        if self.class_cap_ppm < 1_000_000 && 3 * self.class_cap_ppm >= room {
+            return Err(format!(
+                "class cap of {} ppm is not below (1 - B_rep - L_max)/3 = {} ppm",
+                self.class_cap_ppm,
+                room / 3
+            ));
+        }
+        Ok(())
     }
 
     pub fn log(&self) {
