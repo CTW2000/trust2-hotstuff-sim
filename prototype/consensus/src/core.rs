@@ -44,7 +44,7 @@ const MAX_HEADERS: usize = 1_000;
 const REQUEST_AGAIN_AFTER: Duration = Duration::from_millis(1_000);
 
 /// R8: where the store keeps what a restart must not forget.
-const SAFETY_STATE: &[u8] = b"safety_state";
+pub(crate) const SAFETY_STATE: &[u8] = b"safety_state";
 /// G1 evidence detection looks this many rounds back.
 const DETECT_WINDOW: Round = 300;
 
@@ -107,6 +107,18 @@ pub struct Faults {
     pub frame: bool,
     /// As leader, never propose; vote and time out as usual (a Byzantine silent leader).
     pub silent: bool,
+    /// Vote only in rounds vote_from..=vote_until (0: unbounded): one half of a split-brain member (§15.15).
+    pub vote_from: Round,
+    pub vote_until: Round,
+    /// Keep blocks in the store without their TC (§15.15, S3; the digest leaves it out, see messages.rs).
+    pub tc_outside_block: bool,
+}
+
+impl Faults {
+    /// Whether the vote window lets us vote in `round` (DESIGN.md §15.15).
+    pub fn votes_in(&self, round: Round) -> bool {
+        round >= self.vote_from && (self.vote_until == 0 || round <= self.vote_until)
+    }
 }
 
 pub struct Core {
@@ -250,7 +262,12 @@ impl Core {
 
     async fn store_block(&mut self, block: &Block) {
         let key = block.digest().to_vec();
-        let value = bincode::serialize(block).expect("Failed to serialize block");
+        let value = match self.faults.tc_outside_block {
+            // Experiment switch (DESIGN.md §15.15, S3): the TC is not part of the block, so the store does not keep it.
+            true => bincode::serialize(&Block { tc: None, ..block.clone() }),
+            false => bincode::serialize(block),
+        }
+        .expect("Failed to serialize block");
         self.store.write(key, value).await;
     }
 
@@ -530,6 +547,10 @@ impl Core {
     async fn make_vote(&mut self, block: &Block) -> Option<Vote> {
         // H3: we sign no message of an epoch other than the current one.
         if block.epoch != self.epochs.epoch() {
+            return None;
+        }
+        // Experiment switch (DESIGN.md §15.15): one half of a split-brain member votes only in its rounds.
+        if !self.faults.votes_in(block.round) {
             return None;
         }
 

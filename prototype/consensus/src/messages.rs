@@ -7,6 +7,7 @@ use ed25519_dalek::Sha512;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::convert::TryInto;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::fmt;
 
 #[cfg(test)]
@@ -208,6 +209,14 @@ impl Hash for BlockHeader {
     }
 }
 
+/// Experiment switch (DESIGN.md §15.15, S3), set once at start for the whole process: the TC travels with the proposal
+/// but is not part of the block, so the digest -- and hence every vote -- leaves it out.
+static TC_OUTSIDE_BLOCK: AtomicBool = AtomicBool::new(false);
+
+pub fn set_tc_outside_block(on: bool) {
+    TC_OUTSIDE_BLOCK.store(on, Ordering::Relaxed);
+}
+
 /// The block digest from its fields, the sub-messages given by their digests: Block and BlockHeader both hash
 /// through here, so a block and its header always have the same digest.
 #[allow(clippy::too_many_arguments)]
@@ -239,7 +248,7 @@ fn block_digest(
     }
     hasher.update(qc_hash);
     hasher.update(qc_round.to_le_bytes());
-    match tc {
+    match tc.filter(|_| !TC_OUTSIDE_BLOCK.load(Ordering::Relaxed)) {
         None => hasher.update([0u8]),
         Some(tc) => {
             hasher.update([1u8]);

@@ -14,6 +14,7 @@ from statistics import median
 
 from benchmark.logs import LogParser
 from lagstat import stats as lag_stats
+from stallstat import stats as stall_stats
 
 OUT = "results-p5"
 RATE, WARMUP = 10_000, 10
@@ -103,7 +104,8 @@ def otx_stats(logs):
     return res
 
 
-def run(experiment, config, duration):
+def run(experiment, config, duration, keep_logs=None):
+    """One run_local.py run; keep_logs names a tarball of the run's logs under results-p5/<experiment>_logs/."""
     args = ["python3", "run_local.py", "--rate", str(RATE), "--warmup", str(WARMUP), "--duration", str(duration)]
     for key, value in config.items():
         if key in ("scenario", "rep"):
@@ -111,7 +113,7 @@ def run(experiment, config, duration):
         flag = "--" + key.replace("_", "-")
         if value is True:
             args.append(flag)
-        elif value not in (False, None, 0, "0"):
+        elif value not in (False, None, 0, "0") or key == "epoch_length":   # epoch length 0: a single epoch
             args += [flag, str(value)]
     print(" ".join(args[2:]), flush=True)
     done = subprocess.run(args, capture_output=True, text=True, timeout=duration + WARMUP + 600)
@@ -134,6 +136,11 @@ def run(experiment, config, duration):
         lag_median_ms=round(lag["lag_median_ms"]), lag_max_ms=round(lag["lag_max_ms"]),
     )
     row.update(ledger_events("logs", role, int(config["nodes"])))
+    if keep_logs:
+        stall = stall_stats("logs", int(config.get("epoch_length") or 25))
+        row.update(stalls=len(stall["stalls"]), stalls_near=stall["near"], stall_anchors=stall["anchors"])
+        os.makedirs(f"{OUT}/{experiment}_logs", exist_ok=True)
+        subprocess.run(["tar", "czf", f"{OUT}/{experiment}_logs/{keep_logs}.tgz", "logs"], check=True)
     row.update(otx_stats("logs"))
     os.makedirs(OUT, exist_ok=True)
     path = f"{OUT}/{experiment}.csv"
@@ -335,6 +342,17 @@ def cmpg():
 
 
 
+def lc():
+    """Where the cost under 10% late messages comes from (DESIGN.md §15.14): the baseline, Trust 2.0 with 25-round
+    epochs and Trust 2.0 in a single epoch (no handover), alternating, 10 times each, n = 31, base, 90 s. Each run's
+    stalls (rounds where >= f+1 nodes timed out) are counted by their distance to a terminal block (multiples of 25
+    without epochs), and its logs are kept in results-p5/lc_logs/ (not in the repository)."""
+    for rep in range(1, 11):
+        for build, length in (("baseline", 25), ("trust2", 25), ("trust2", 0)):
+            run("lc", dict(scenario="late", build=build, nodes=31, net="base", epoch_length=length, rep=rep, late_p=0.1),
+                90, keep_logs=f"{build}-e{length}-{rep}")
+
+
 def g100():
     """Everything the G2 threshold can change, at the new one (ln 10^2; DESIGN.md §15.13): the comparison of leader
     rules (cmpg), then the parts of f25 where G2 convicts -- silent leaders (crashed, and on the weighted path), long
@@ -414,4 +432,4 @@ def compare_x2(rows):
 
 if __name__ == "__main__":
     {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "f25": f25,
-     "cmp": cmp, "cmpg": cmpg, "g100": g100, "report": report}[sys.argv[1]]()
+     "cmp": cmp, "cmpg": cmpg, "g100": g100, "lc": lc, "report": report}[sys.argv[1]]()

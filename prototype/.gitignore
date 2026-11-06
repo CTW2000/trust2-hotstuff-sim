@@ -25,3 +25,6 @@ Cargo.lock
 !consensus/src/tests/g2_vectors.json
 !consensus/src/tests/g1_vectors.json
 !benchmark/nets/*.json
+
+# Run log archives of p5.py (keep_logs), kept on the server only
+benchmark/results-p5/*_logs/

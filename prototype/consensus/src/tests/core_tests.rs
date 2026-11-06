@@ -1196,3 +1196,14 @@ async fn nr_timeouts_make_an_accusation() {
         message => panic!("Unexpected message {:?}", message),
     }
 }
+
+#[test]
+fn split_brain_vote_window() {
+    // DESIGN.md §15.15: an experiment switch; 0 leaves a bound open.
+    let all = Faults::default();
+    assert!(all.votes_in(1) && all.votes_in(1_000_000));
+    let early = Faults { vote_until: 10, ..Faults::default() };
+    assert!(early.votes_in(10) && !early.votes_in(11));
+    let late = Faults { vote_from: 11, ..Faults::default() };
+    assert!(!late.votes_in(10) && late.votes_in(11));
+}

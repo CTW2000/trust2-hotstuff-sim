@@ -96,16 +96,8 @@ impl Consensus {
         );
 
         // Spawn the consensus core.
-        let epoch_config = EpochConfig {
-            length: parameters.epoch_length,
-            reference_length: REFERENCE_EPOCH_LENGTH,
-            entity_cap_ppm: parameters.entity_cap_ppm,
-            class_cap_ppm: parameters.class_cap_ppm,
-            l_max_ppm: parameters.l_max_ppm,
-            governance_malicious: parameters.governance_malicious,
-            leader_rule: parameters.leader_rule,
-            g2_threshold: parameters.g2_threshold,
-        };
+        crate::messages::set_tc_outside_block(parameters.tc_outside_block);
+        let epoch_config = epoch_config(&parameters);
         Core::spawn(
             name,
             committee.clone(),
@@ -118,6 +110,9 @@ impl Consensus {
                 regress: parameters.regress,
                 frame: parameters.frame,
                 silent: parameters.silent,
+                vote_from: parameters.fork_vote_from,
+                vote_until: parameters.fork_vote_until,
+                tc_outside_block: parameters.tc_outside_block,
             },
             signature_service.clone(),
             store.clone(),
@@ -179,5 +174,19 @@ impl MessageHandler for ConsensusReceiverHandler {
                 .expect("Failed to consensus message"),
         }
         Ok(())
+    }
+}
+
+/// The epoch configuration the parameters give (also used by the offline forensics, DESIGN.md §15.15).
+pub(crate) fn epoch_config(parameters: &Parameters) -> EpochConfig {
+    EpochConfig {
+        length: parameters.epoch_length,
+        reference_length: REFERENCE_EPOCH_LENGTH,
+        entity_cap_ppm: parameters.entity_cap_ppm,
+        class_cap_ppm: parameters.class_cap_ppm,
+        l_max_ppm: parameters.l_max_ppm,
+        governance_malicious: parameters.governance_malicious,
+        leader_rule: parameters.leader_rule,
+        g2_threshold: parameters.g2_threshold,
     }
 }

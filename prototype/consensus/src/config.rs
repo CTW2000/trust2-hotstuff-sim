@@ -79,6 +79,16 @@ pub struct Parameters {
     /// Experiment switch: the G2 CUSUM threshold ln γ in millionths (0: the protocol's, `G2Config::default`).
     #[serde(default)]
     pub g2_threshold: i64,
+    /// Experiment switch (DESIGN.md §15.15): vote only in rounds fork_vote_from..=fork_vote_until (0: unbounded) --
+    /// the two halves of a split-brain member keep their votes in disjoint rounds, so a fork leaves no E1.
+    #[serde(default)]
+    pub fork_vote_from: u64,
+    #[serde(default)]
+    pub fork_vote_until: u64,
+    /// Experiment switch (DESIGN.md §15.15, all nodes alike): the TC travels with the proposal but is not part of
+    /// the block -- not in its digest, not in the store -- as the TC of DiemBFT / Aptos travels in the sync info.
+    #[serde(default)]
+    pub tc_outside_block: bool,
 }
 
 fn default_attest_guard() -> u64 {
@@ -123,6 +133,9 @@ impl Default for Parameters {
             silent: false,
             leader_rule: LeaderRule::default(),
             g2_threshold: 0,
+            fork_vote_from: 0,
+            fork_vote_until: 0,
+            tc_outside_block: false,
         }
     }
 }
@@ -170,6 +183,15 @@ impl Parameters {
         }
         if self.leader_rule != LeaderRule::Trust2 {
             info!("Leader rule set to {:?} (experiment)", self.leader_rule);
+        }
+        if self.fork_vote_from != 0 || self.fork_vote_until != 0 {
+            info!(
+                "Split brain: voting only in rounds {}..{} (experiment)",
+                self.fork_vote_from, self.fork_vote_until
+            );
+        }
+        if self.tc_outside_block {
+            info!("TC outside the block (experiment)");
         }
         if self.g2_threshold != 0 {
             info!("G2 threshold set to {} millionths (experiment)", self.g2_threshold);

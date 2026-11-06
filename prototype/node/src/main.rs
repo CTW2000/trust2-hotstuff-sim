@@ -2,7 +2,7 @@ mod config;
 mod node;
 
 use crate::config::Export as _;
-use crate::config::{Committee, Secret};
+use crate::config::{Committee, Parameters, Secret};
 use crate::node::{Experiment, Node};
 use clap::{Parser, Subcommand};
 use consensus::Committee as ConsensusCommittee;
@@ -68,6 +68,21 @@ enum Command {
         #[clap(long)]
         silent: bool,
     },
+    /// Offline forensics of a fork between the stores of two stopped nodes (DESIGN.md §15.15).
+    Forensics {
+        /// The file containing committee information.
+        #[clap(short, long, value_parser, value_name = "FILE")]
+        committee: String,
+        /// Optional file containing the node parameters.
+        #[clap(short, long, value_parser, value_name = "FILE")]
+        parameters: Option<String>,
+        /// The store of a node on one side.
+        #[clap(long, value_parser, value_name = "PATH")]
+        store_a: String,
+        /// The store of a node on the other side.
+        #[clap(long, value_parser, value_name = "PATH")]
+        store_b: String,
+    },
     /// Deploy a local testbed with the specified number of nodes.
     Deploy {
         #[clap(short, long, value_parser = clap::value_parser!(u16).range(4..))]
@@ -127,6 +142,12 @@ async fn main() {
             }
             Err(e) => error!("{}", e),
         },
+        Command::Forensics { committee, parameters, store_a, store_b } => {
+            match forensics(&committee, parameters, &store_a, &store_b).await {
+                Ok(report) => println!("{}", report),
+                Err(e) => error!("{}", e),
+            }
+        }
         Command::Deploy { nodes } => match deploy_testbed(nodes) {
             Ok(handles) => {
                 let _ = join_all(handles).await;
@@ -196,4 +217,14 @@ fn deploy_testbed(nodes: u16) -> Result<Vec<JoinHandle<()>>, Box<dyn std::error:
             }))
         })
         .collect::<Result<_, Box<dyn std::error::Error>>>()
+}
+
+/// DESIGN.md §15.15: the committee and parameters files are those of the run.
+async fn forensics(committee: &str, parameters: Option<String>, a: &str, b: &str) -> Result<String, String> {
+    let committee = Committee::read(committee).map_err(|e| e.to_string())?;
+    let parameters = match parameters {
+        Some(filename) => Parameters::read(&filename).map_err(|e| e.to_string())?,
+        None => Parameters::default(),
+    };
+    consensus::forensics::report(&committee.consensus, &parameters.consensus, a, b).await
 }

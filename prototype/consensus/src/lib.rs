@@ -6,6 +6,7 @@ mod consensus;
 mod core;
 mod epoch;
 mod evidence;
+pub mod forensics;
 mod helper;
 mod inclusion;
 mod leader;
