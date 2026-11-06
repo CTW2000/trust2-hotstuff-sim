@@ -38,7 +38,8 @@ def stats(logs, epoch_length=50):
     f = (n - 1) // 3
     stalls = sorted(r for r, nodes in timed_out.items() if len(nodes) >= f + 1)
     top = max(committed, default=0)
-    anchors = sorted(terminals) or list(range(epoch_length, top + epoch_length, epoch_length))
+    # A run without any commit (e.g. liveness collapsed) still has a reference anchor.
+    anchors = sorted(terminals) or list(range(epoch_length, top + epoch_length, epoch_length)) or [epoch_length]
     offsets = Counter()
     for r in stalls:
         nearest = min(anchors, key=lambda a: abs(r - a))

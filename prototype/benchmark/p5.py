@@ -342,6 +342,21 @@ def cmpg():
 
 
 
+def a1():
+    """How often honest leaders are accused (AT) under late messages, with and without framing colluders, on the
+    prototype (DESIGN.md §15.16; the mock review's A1: the simulator gave 0 at 10% late where the prototype shows
+    0.15%-1.8%). n = 31, base, 25-round epochs. A first pass (180 s: late 10% with 0 and 7 framers, late 20% without)
+    showed that 7 framers (share 0.226) at 20% late commit nothing, so accusations never reach the ledger; this pass
+    keeps to arms that commit, 300 s each (late 10% without framers 180 s). Logs in results-p5/a1_logs/ (a1stat.py)."""
+    arms = [(0.1, 7, 300, range(2, 7)), (0.2, 0, 300, range(2, 5)), (0.3, 0, 300, range(1, 4)),
+            (0.2, 4, 300, range(1, 4)), (0.1, 0, 180, range(2, 4))]
+    for late, frame, duration, reps in arms:
+        for rep in reps:
+            name = f"late{int(late * 100)}-frame{frame}"
+            run("a1", dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=25, rep=rep, late_p=late,
+                           frame=frame), duration, keep_logs=f"{name}-{rep}")
+
+
 def lc():
     """Where the cost under 10% late messages comes from (DESIGN.md §15.14): the baseline, Trust 2.0 with 25-round
     epochs and Trust 2.0 in a single epoch (no handover), alternating, 10 times each, n = 31, base, 90 s. Each run's
@@ -432,4 +447,4 @@ def compare_x2(rows):
 
 if __name__ == "__main__":
     {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "f25": f25,
-     "cmp": cmp, "cmpg": cmpg, "g100": g100, "lc": lc, "report": report}[sys.argv[1]]()
+     "cmp": cmp, "cmpg": cmpg, "g100": g100, "lc": lc, "a1": a1, "report": report}[sys.argv[1]]()

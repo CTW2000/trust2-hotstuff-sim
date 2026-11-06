@@ -65,8 +65,15 @@ def at_epoch(e):
     return e * 100 // scheme_kwargs()[0]["epoch"]
 
 
+def votes_to_leader():
+    """SIM_PROTOCOL=P1: the experiments of dirTtruV12 send votes to the next leader only, as the prototype does
+    (prototype DESIGN.md §15.16: with votes broadcast (P2) the next leader is never delayed by late votes, and honest
+    leaders are hardly ever accused at 10% late, where the prototype shows 0.2%-1.8%). Results get the suffix _p1."""
+    return os.environ.get("SIM_PROTOCOL") == "P1"
+
+
 def suffix():
-    return "_h1p" if adopted() else ""
+    return ("_h1p" if adopted() else "") + ("_p1" if votes_to_leader() else "")
 
 
 def population(n_L, n_U, n_A, seed, alpha=1.16, base=(3.0, 1.0, 0.2)):

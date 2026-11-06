@@ -75,7 +75,8 @@ def build(cls, s, base, double=False, graded=True, injected=(), forks=(), old_g1
     return rule, vw
 
 
-def config(seed, rule, vw, byz, adv, views, protocol="P2", **kw):
+def config(seed, rule, vw, byz, adv, views, protocol=None, **kw):
+    protocol = protocol or ("P1" if ttru.votes_to_leader() else "P2")
     opts = dict(at_share=2 / 3, nr_requires_data=True, vote_monotone=True)
     opts.update(kw)
     return RunConfig(n=N, views=views, seed=seed, protocol=protocol, leader_rule=rule,
