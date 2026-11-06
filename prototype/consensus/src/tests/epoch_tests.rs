@@ -15,6 +15,8 @@ fn config(length: Round) -> EpochConfig {
         governance_malicious: false,
         leader_rule: Default::default(),
         g2_threshold: 0,
+        g2_no_reputation: false,
+        aptos_failure_percent: 0,
     }
 }
 
@@ -609,4 +611,13 @@ fn no_rule_keeps_everyone_leading() {
     }
     assert!(epochs.reputation.facts().is_empty());
     assert!(epochs.current().authorities.values().all(|a| a.leader && a.lead == 0 && a.stake == 250_000));
+}
+
+#[test]
+fn ablation_switch_removes_the_reputation_budget() {
+    // DESIGN.md §15.18: g2_no_reputation sets B_rep to 0 and leaves the rest of G2 alone.
+    let (_, g2) = scaled(&EpochConfig { g2_no_reputation: true, ..config(25) });
+    assert_eq!(g2.b_rep, 0);
+    assert_eq!((g2.threshold, g2.exclusion), (G2Config::default().threshold, G2Config::default().exclusion));
+    assert_eq!(scaled(&config(25)).1.b_rep, G2Config::default().b_rep);
 }

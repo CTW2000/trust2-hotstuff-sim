@@ -75,6 +75,10 @@ pub struct EpochConfig {
     pub leader_rule: LeaderRule,
     /// Experiment switch: the G2 CUSUM threshold in millionths, 0 for the protocol's (DESIGN.md §15.13).
     pub g2_threshold: i64,
+    /// Ablation (DESIGN.md §15.18): no reputation cut (B_rep = 0); convictions still exclude from leading.
+    pub g2_no_reputation: bool,
+    /// LeaderRule::Aptos failure threshold in percent, 0 for aptos-core's (DESIGN.md §15.20).
+    pub aptos_failure_percent: u64,
 }
 
 pub struct Epochs {
@@ -151,6 +155,9 @@ pub fn scaled(config: &EpochConfig) -> (PunishConfig, G2Config) {
     let mut g2 = G2Config::default();
     if config.g2_threshold > 0 {
         g2.threshold = config.g2_threshold;
+    }
+    if config.g2_no_reputation {
+        g2.b_rep = 0;
     }
     let (length, reference) = (config.length, config.reference_length);
     if length > 0 && reference > 0 && length != reference {
@@ -342,7 +349,11 @@ impl Epochs {
         }
         (0..n)
             .map(|i| {
-                if failed[i] * 100 > (proposals[i] + failed[i]) * aptos::FAILURE_THRESHOLD_PERCENT {
+                let percent = match self.config.aptos_failure_percent {
+                    0 => aptos::FAILURE_THRESHOLD_PERCENT,
+                    p => p,
+                };
+                if failed[i] * 100 > (proposals[i] + failed[i]) * percent {
                     aptos::FAILED
                 } else if proposals[i] > 0 || votes[i] > 0 {
                     aptos::ACTIVE

@@ -82,6 +82,8 @@ fn core_on(
         governance_malicious: false,
         leader_rule: Default::default(),
         g2_threshold: 0,
+        g2_no_reputation: false,
+        aptos_failure_percent: 0,
     };
     Core::spawn(
         name,
@@ -691,6 +693,8 @@ fn node_with_proposer(store: Store) -> (Core, Receiver<ProposerMessage>) {
             governance_malicious: false,
             leader_rule: Default::default(),
             g2_threshold: 0,
+            g2_no_reputation: false,
+            aptos_failure_percent: 0,
         },
         Inclusion::new(Duration::from_millis(500), false),
         Faults::default(),

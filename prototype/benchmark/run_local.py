@@ -44,6 +44,10 @@ def node_parameters(args):
         consensus["leader_rule"] = args.leader_rule
     if args.g2_threshold:                                    # another G2 threshold, for comparisons (§15.13)
         consensus["g2_threshold"] = args.g2_threshold
+    if args.g2_no_reputation:                                # ablation: convictions only exclude (§15.18)
+        consensus["g2_no_reputation"] = True
+    if args.aptos_failure_percent:                           # LeaderRule::Aptos threshold sweep (§15.20)
+        consensus["aptos_failure_percent"] = args.aptos_failure_percent
     return {
         "consensus": consensus,
         "mempool": {"gc_depth": 50, "sync_retry_delay": 5_000, "sync_retry_nodes": 3,
@@ -106,10 +110,24 @@ def delays_file(args, committee):
             addresses[address] = i
     path = os.path.abspath(".delays.json")
     with open(path, "w") as fh:
-        json.dump(dict(addresses=addresses, base_ms=net["base_ms"], jitter_ms=net["jitter_ms"],
-                       bandwidth_mbps=net["bandwidth_mbps"], late_p=args.late_p, late_ms=args.late_ms,
-                       late_to=committee.consensus[:args.nodes]), fh)
+        table = dict(addresses=addresses, base_ms=net["base_ms"], jitter_ms=net["jitter_ms"],
+                     bandwidth_mbps=net["bandwidth_mbps"], late_p=args.late_p, late_ms=args.late_ms,
+                     late_to=committee.consensus[:args.nodes])
+        if args.fault == "outage":                           # region outage (DESIGN.md §15.22)
+            start = int((args.start + args.fault_at) * 1000)
+            table.update(outage=fault_nodes(args), outage_from_ms=start,
+                         outage_until_ms=start + int(args.fault_for * 1000))
+        json.dump(table, fh)
     return path
+
+
+def fault_nodes(args):
+    """The honest nodes a crash, restart or region outage hits (DESIGN.md §15.22): right after the client nodes, so
+    that the clients, node 0's ledger and the experiment switches (taken from the last nodes) are not affected."""
+    if args.fault == "none":
+        return []
+    first = min(args.clients, args.nodes - args.faults)
+    return list(range(first, first + args.fault_nodes))
 
 
 def run(args):
@@ -131,9 +149,20 @@ def run(args):
     committee.print(PathMaker.committee_file())
     params = NodeParameters(node_parameters(args))
     params.print(PathMaker.parameters_file())
+    args.start = time.time()
     delays = delays_file(args, committee)
+    hit = fault_nodes(args)
+    if hit and (hit[-1] >= args.nodes - args.faults - sum((args.censor, args.equivocate, args.lie_nr,
+                                                            args.invalid_block, args.regress, args.frame,
+                                                            args.silent))):
+        sys.exit("the fault nodes overlap the experiment switches")
+    if args.fault == "outage" and not delays:
+        sys.exit("a region outage needs a network (--net base or wide)")
+    with open(join(PathMaker.logs_path(), "faulted.txt"), "w") as fh:
+        fh.write(f"{args.fault} at {args.fault_at} s for {args.fault_for} s\n")
+        fh.writelines(f"{names[i]}\n" for i in hit)
 
-    procs = []
+    procs, node_procs = [], {}
     up = args.nodes - args.faults                            # faulty nodes are not booted
     clients = min(args.clients, up)
     rate_share = ceil(args.rate / clients)
@@ -158,14 +187,27 @@ def run(args):
                f"--parameters {PathMaker.parameters_file()}{censor}")
         env = dict(os.environ, TTRU_DELAYS=delays, TTRU_NODE=str(i)) if delays else None
         procs.append(launch(cmd, PathMaker.node_log_file(i), env))
+        node_procs[i] = (cmd, env, len(procs) - 1)
     if observer:
         targets = " ".join(committee.consensus[:up])
         cmd = f"{observer} --rate {args.otx_rate} {targets}"
         procs.append(launch(cmd, join(PathMaker.logs_path(), "observer.log")))
 
     try:
-        time.sleep(2 * args.timeout_delay / 1000)            # let the nodes synchronize
-        time.sleep(args.warmup + args.duration)
+        end = time.time() + 2 * args.timeout_delay / 1000 + args.warmup + args.duration   # synchronize, then run
+        if args.fault in ("crash", "restart"):               # crash or maintenance restart (DESIGN.md §15.22)
+            time.sleep(max(0.0, args.start + args.fault_at - time.time()))
+            for i in hit:
+                try:
+                    os.killpg(procs[node_procs[i][2]].pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if args.fault == "restart":
+                time.sleep(args.fault_for)
+                for i in hit:
+                    cmd, env, k = node_procs[i]
+                    procs[k] = launch(cmd, PathMaker.node_log_file(i), env, append=True)
+        time.sleep(max(0.0, end - time.time()))
     finally:
         stop(procs)
     parser = LogParser.process(PathMaker.logs_path(), faults=args.faults, warmup=args.warmup)
@@ -175,8 +217,8 @@ def run(args):
         fh.write(summary)
 
 
-def launch(cmd, log_file, env=None):
-    return subprocess.Popen(shlex.split(cmd), stdout=subprocess.DEVNULL, stderr=open(log_file, "w"),
+def launch(cmd, log_file, env=None, append=False):
+    return subprocess.Popen(shlex.split(cmd), stdout=subprocess.DEVNULL, stderr=open(log_file, "a" if append else "w"),
                             start_new_session=True, env=env)
 
 
@@ -218,8 +260,18 @@ def main():
     ap.add_argument("--silent", type=int, default=0, help="number of booted nodes that never propose (Byzantine)")
     ap.add_argument("--leader-rule", choices=["trust2", "none", "aptos", "failed"], default="trust2",
                     help="leader rule of the Trust 2.0 build, for comparisons (DESIGN.md §15.12)")
+    ap.add_argument("--aptos-failure-percent", type=int, default=0,
+                    help="failure threshold of the Aptos-style leader rule in percent (0: aptos-core's 10)")
+    ap.add_argument("--g2-no-reputation", action="store_true",
+                    help="ablation: G2 convictions only exclude from leading, reputation stays 1 (B_rep = 0)")
     ap.add_argument("--g2-threshold", type=int, default=0,
                     help="G2 CUSUM threshold ln(gamma) in millionths (0: the protocol's), for comparisons")
+    ap.add_argument("--fault", choices=["none", "crash", "restart", "outage"], default="none",
+                    help="benign fault of honest nodes (DESIGN.md §15.22): crash, maintenance restart, region outage")
+    ap.add_argument("--fault-nodes", type=int, default=3, help="number of honest nodes the fault hits")
+    ap.add_argument("--fault-at", type=float, default=40.0, help="seconds after the launch the fault starts")
+    ap.add_argument("--fault-for", type=float, default=20.0,
+                    help="seconds a restarted node is down, or a region outage lasts")
     ap.add_argument("--l-max-ppm", type=int, default=100_000, help="G1 suspension cap L_max in ppm")
     ap.add_argument("--governance-malicious", action="store_true", help="G1: an L4 without a fork evicts")
     ap.add_argument("--entity-cap-ppm", type=int, default=50_000, help="CapNorm entity cap in ppm, at most L_max")

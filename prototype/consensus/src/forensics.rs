@@ -313,6 +313,7 @@ pub async fn report(committee: &Committee, parameters: &Parameters, a: &str, b: 
             "fork": true,
             "x_side": if x_from_a { "a" } else { "b" },
             "x_round": finding.x_round, "y_round": finding.y_round, "z_round": finding.z_round,
+            "x_epoch": cx.x.epoch, "y_epoch": cy.x.epoch,
             "case": format!("{:?}", finding.case),
             "e1": count(true),
             "e2": finding.evidence.iter().filter(|e| matches!(e, Evidence::InvalidBlock(..))).count(),

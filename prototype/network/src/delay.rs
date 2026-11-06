@@ -6,6 +6,10 @@
 //! in the simulator: the senders write the queued messages of a link in the order they are due, so a late message
 //! does not hold back the ones behind it.
 //!
+//! A region outage (DESIGN.md §15.22, fault experiments): between outage_from_ms and outage_until_ms (Unix time in
+//! milliseconds), a message between a node of `outage` and a node outside it waits until the outage ends, as on a
+//! link that is cut and then healed; messages inside the region, or outside it, are not affected.
+//!
 //! Configured through the environment: TTRU_DELAYS names a JSON file {"addresses": {"<ip:port>": node, ...},
 //! "base_ms": [[...]], "jitter_ms": x, "bandwidth_mbps": y, "late_p": p, "late_ms": z, "late_to": ["<ip:port>",
 //! ...]} and TTRU_NODE is this node's index. Without them there is no delay at all.
@@ -32,6 +36,12 @@ pub struct Delays {
     late_ms: f64,
     #[serde(default)]
     late_to: HashSet<SocketAddr>,
+    #[serde(default)]
+    outage: HashSet<usize>,
+    #[serde(default)]
+    outage_from_ms: u64,
+    #[serde(default)]
+    outage_until_ms: u64,
     #[serde(skip)]
     me: usize,
 }
@@ -58,8 +68,22 @@ impl Delays {
             true => self.late_ms,
             false => 0.0,
         };
-        Some(Duration::from_secs_f64((self.base_ms[self.me][j] + jitter + transmission + late) / 1e3))
+        let held = self.held_ms(j, unix_ms());
+        Some(Duration::from_secs_f64((held + self.base_ms[self.me][j] + jitter + transmission + late) / 1e3))
     }
+
+    /// How long a message to node `j` queued at `now_ms` (Unix time) waits for the region outage to end.
+    pub fn held_ms(&self, j: usize, now_ms: u64) -> f64 {
+        let crosses = self.outage.contains(&self.me) != self.outage.contains(&j);
+        match crosses && (self.outage_from_ms..self.outage_until_ms).contains(&now_ms) {
+            true => (self.outage_until_ms - now_ms) as f64,
+            false => 0.0,
+        }
+    }
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 static DELAYS: OnceLock<Option<Delays>> = OnceLock::new();

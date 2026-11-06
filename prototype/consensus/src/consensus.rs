@@ -188,5 +188,7 @@ pub(crate) fn epoch_config(parameters: &Parameters) -> EpochConfig {
         governance_malicious: parameters.governance_malicious,
         leader_rule: parameters.leader_rule,
         g2_threshold: parameters.g2_threshold,
+        g2_no_reputation: parameters.g2_no_reputation,
+        aptos_failure_percent: parameters.aptos_failure_percent,
     }
 }

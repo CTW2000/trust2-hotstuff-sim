@@ -50,3 +50,23 @@ fn queue_stays_in_due_order() {
     }
     assert_eq!(queue.iter().map(|(_, tag)| *tag).collect::<Vec<_>>(), vec![2, 4, 1, 3]);
 }
+
+#[test]
+fn a_region_outage_holds_messages_across_the_cut_until_it_ends() {
+    // Node 0 is in the region; between t = 1000 and 4000 ms a message to node 1 waits for the end of the outage.
+    let json = JSON.replace(
+        "\"bandwidth_mbps\": 1000.0",
+        "\"bandwidth_mbps\": 1000.0, \"outage\": [0], \"outage_from_ms\": 1000, \"outage_until_ms\": 4000",
+    );
+    let inside = Delays::from_json(&json, 0).unwrap();
+    assert_eq!(inside.held_ms(1, 999), 0.0);
+    assert_eq!(inside.held_ms(1, 1000), 3000.0);
+    assert_eq!(inside.held_ms(1, 3500), 500.0);
+    assert_eq!(inside.held_ms(1, 4000), 0.0);
+    // The other way round as well; within the region nothing is held.
+    let outside = Delays::from_json(&json, 1).unwrap();
+    assert_eq!(outside.held_ms(0, 2000), 2000.0);
+    assert_eq!(inside.held_ms(0, 2000), 0.0);
+    // Without an outage nothing is held.
+    assert_eq!(Delays::from_json(JSON, 0).unwrap().held_ms(1, 2000), 0.0);
+}

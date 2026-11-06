@@ -32,10 +32,15 @@ def roles(logs):
         name = re.search(r"Node (\S+) successfully booted", text)
         if name:
             out[name.group(1)] = next((r for marker, r in ROLES if marker in text), "honest")
+    if os.path.exists(f"{logs}/faulted.txt"):                # crash, restart, outage (DESIGN.md §15.22)
+        with open(f"{logs}/faulted.txt") as fh:
+            for who in fh.read().split("\n")[1:]:
+                if who.strip():
+                    out[who.strip()] = "faulted"
     return out
 
 
-def ledger_events(logs, role, n):
+def ledger_events(logs, role, n, budget=0.1):
     """G1/G2 outcomes on node-0's ledger, split into honest and the others (absent nodes count as faulty)."""
     side = lambda who: "honest" if role.get(who) == "honest" else "faulty"
     with open(f"{logs}/node-0.log") as fh:
@@ -79,7 +84,7 @@ def ledger_events(logs, role, n):
     # Voting share of the faulty members at the end: base * r, the total cut scaled down to the budget of 0.1.
     members = set(base) | set(r_ppm) | set(role)
     cut = {who: weight(who) * (1 - r_ppm.get(who, 1e6) / 1e6) for who in members}
-    scale = min(1.0, 0.1 / sum(cut.values())) if sum(cut.values()) > 0 else 1.0
+    scale = min(1.0, budget / sum(cut.values())) if sum(cut.values()) > 0 else 1.0
     left = {who: weight(who) - cut[who] * scale for who in members}
     if any(side(who) == "faulty" for who in members) and sum(left.values()) > 0:
         count["faulty_share_end"] = round(sum(v for who, v in left.items() if side(who) == "faulty") / sum(left.values()), 4)
@@ -135,7 +140,8 @@ def run(experiment, config, duration, keep_logs=None):
         rounds_per_s=round(lag["top_round"] / (duration + WARMUP), 1), epochs=lag["epochs"],
         lag_median_ms=round(lag["lag_median_ms"]), lag_max_ms=round(lag["lag_max_ms"]),
     )
-    row.update(ledger_events("logs", role, int(config["nodes"])))
+    budget = 0.0 if config.get("g2_no_reputation") else 0.1    # the ablation of DESIGN.md §15.18 cuts nothing
+    row.update(ledger_events("logs", role, int(config["nodes"]), budget))
     if keep_logs:
         stall = stall_stats("logs", int(config.get("epoch_length") or 25))
         row.update(stalls=len(stall["stalls"]), stalls_near=stall["near"], stall_anchors=stall["anchors"])
@@ -342,6 +348,86 @@ def cmpg():
 
 
 
+def a6():
+    """Trade-off of detection speed against honest demotion for the leader rules (DESIGN.md §15.20; mock review A6):
+    the Aptos-style rule at failure thresholds 10% (aptos-core), 30% and 50%, and Trust 2.0 at gamma 10^4, 10^2 (the
+    protocol) and 20, alternating, 3 times each, n = 31, base, 25-round epochs, in three scenarios: 3 Byzantine silent
+    leaders (90 s), 20% late messages (90 s), and 6 framers with 10% late (180 s)."""
+    rules = [("aptos", dict(aptos_failure_percent=p)) for p in (10, 30, 50)]
+    rules += [("trust2", dict(g2_threshold=t)) for t in (9_210_340, 0, 2_995_732)]
+    scenarios = [("silent", dict(silent=3), 90), ("late20", dict(late_p=0.2), 90),
+                 ("framers+late", dict(frame=6, late_p=0.1), 180)]
+    for rep in range(1, 4):
+        for name, extra, duration in scenarios:
+            for rule, knob in rules:
+                run("a6", dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                               leader_rule=rule, **knob, **extra), duration)
+
+
+def a7():
+    """Benign faults of honest nodes (DESIGN.md §15.22; mock review A7): Trust 2.0 against the Aptos-style rule, n = 31,
+    base, 25-round epochs, 150 s, 3 times each, alternating: 3 nodes crash at 40 s for good; 3 nodes restart after
+    20 s down (maintenance); a region of 6 nodes is cut off for 10 s at 40 s. No Byzantine nodes: every exclusion and
+    weight cut of the other honest nodes is a false demotion; those of the faulted nodes are what the rule does to a
+    member that was really unavailable. Logs in results-p5/a7_logs/ (a7stat.py)."""
+    scenarios = [("crash", dict(fault="crash", fault_nodes=3, fault_at=40, fault_for=0)),
+                 ("restart", dict(fault="restart", fault_nodes=3, fault_at=40, fault_for=20)),
+                 ("outage", dict(fault="outage", fault_nodes=6, fault_at=40, fault_for=10))]
+    for rep in range(1, 4):
+        for name, fault in scenarios:
+            for rule in ("trust2", "aptos"):
+                run("a7", dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                               leader_rule=rule, **fault), 150, keep_logs=f"{name}-{rule}-{rep}")
+
+
+def a5():
+    """Overhead on the final code (DESIGN.md §15.23; mock review A5): the normal case (the cells of x2, 3 runs), the
+    input rate up to and past the knee (the rates of xt, 2 runs) for both builds, and inclusion attestations by
+    observed-transaction rate (0 to 100 per second, n = 31, base, 2 runs, 60 s; Trust 2.0 only, the baseline has none)."""
+    for rep in (1, 2, 3):
+        for nodes in (4, 10, 31):
+            for net in ("none", "base", "wide"):
+                for build in ("baseline", "trust2"):
+                    run("a5_x2", dict(build=build, nodes=nodes, net=net, epoch_length=100, rep=rep), 30)
+    rates = {4: (50_000, 100_000, 200_000, 300_000, 350_000, 400_000),
+             10: (25_000, 50_000, 100_000, 150_000, 175_000, 200_000),
+             31: (20_000, 30_000, 40_000, 50_000, 60_000, 70_000)}
+    for rep in (1, 2):
+        for nodes, sweep in rates.items():
+            for rate in sweep:
+                for build in ("baseline", "trust2"):
+                    run("a5_xt", dict(build=build, nodes=nodes, net="base", rate=rate, epoch_length=100, rep=rep), 30)
+    for rep in (1, 2):
+        for otx in (0, 10, 25, 50, 100):
+            run("a5_otx", dict(scenario="control", build="trust2", nodes=31, net="base", epoch_length=100,
+                               otx_rate=otx, attest_guard=136, rep=rep), 60)
+
+
+def a3():
+    """Ablation (DESIGN.md §15.18; mock review A3): what reputation in the voting power adds to excluding from leading.
+    The protocol against g2_no_reputation (convictions only exclude, B_rep = 0), alternating, n = 31, base, 25-round
+    epochs: 3 Byzantine silent leaders (5 x 90 s), and 6 framers with 10% late (3 x 180 s)."""
+    for rep in range(1, 6):
+        for ablate in (False, True):
+            run("a3", dict(scenario="silent", build="trust2", nodes=31, net="base", epoch_length=25, rep=rep, silent=3,
+                           g2_no_reputation=ablate), 90)
+    for rep in range(1, 4):
+        for ablate in (False, True):
+            run("a3", dict(scenario="framers+late", build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                           frame=6, late_p=0.1, g2_no_reputation=ablate), 180)
+
+
+def a1b():
+    """Whether heavy late messages stop 2-chain HotStuff itself (DESIGN.md §15.16): the a1 runs at 30% late committed
+    nothing in 300 s. The baseline against Trust 2.0 at 25% and 30% late, alternating, 2 runs each, n = 31, base,
+    25-round epochs, 120 s."""
+    for rep in (1, 2):
+        for late in (0.25, 0.3):
+            for build in ("baseline", "trust2"):
+                run("a1b", dict(scenario=f"late{int(late * 100)}", build=build, nodes=31, net="base", epoch_length=25,
+                                rep=rep, late_p=late), 120)
+
+
 def a1():
     """How often honest leaders are accused (AT) under late messages, with and without framing colluders, on the
     prototype (DESIGN.md §15.16; the mock review's A1: the simulator gave 0 at 10% late where the prototype shows
@@ -397,7 +483,9 @@ def report():
                                                    "faults", "frame", "lie_nr", "equivocate", "otx_rate",
                                                    "attest_guard", "censor", "censor_adjacent", "late_p",
                                                    "stakes", "uncertified", "entity_cap_ppm", "class_cap_ppm",
-                                                   "silent", "leader_rule", "g2_threshold")]
+                                                   "silent", "leader_rule", "g2_threshold",
+                                                   "aptos_failure_percent", "g2_no_reputation", "fault",
+                                                   "fault_nodes", "fault_at", "fault_for")]
         keys = [k for k in rows[0] if k not in metrics and k != "rep"]
         groups = defaultdict(list)
         for r in rows:
@@ -447,4 +535,4 @@ def compare_x2(rows):
 
 if __name__ == "__main__":
     {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "f25": f25,
-     "cmp": cmp, "cmpg": cmpg, "g100": g100, "lc": lc, "a1": a1, "report": report}[sys.argv[1]]()
+     "cmp": cmp, "cmpg": cmpg, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()

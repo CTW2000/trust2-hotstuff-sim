@@ -79,6 +79,13 @@ pub struct Parameters {
     /// Experiment switch: the G2 CUSUM threshold ln γ in millionths (0: the protocol's, `G2Config::default`).
     #[serde(default)]
     pub g2_threshold: i64,
+    /// Experiment switch (DESIGN.md §15.18, ablation): G2 convictions only exclude from leading; reputation stays 1
+    /// (B_rep = 0), as a leader-only reputation would.
+    #[serde(default)]
+    pub g2_no_reputation: bool,
+    /// Experiment switch (DESIGN.md §15.20): the failure threshold of LeaderRule::Aptos in percent (0: aptos-core's 10).
+    #[serde(default)]
+    pub aptos_failure_percent: u64,
     /// Experiment switch (DESIGN.md §15.15): vote only in rounds fork_vote_from..=fork_vote_until (0: unbounded) --
     /// the two halves of a split-brain member keep their votes in disjoint rounds, so a fork leaves no E1.
     #[serde(default)]
@@ -134,6 +141,8 @@ impl Default for Parameters {
             silent: false,
             leader_rule: LeaderRule::default(),
             g2_threshold: 0,
+            g2_no_reputation: false,
+            aptos_failure_percent: 0,
             fork_vote_from: 0,
             fork_vote_until: 0,
             tc_outside_block: false,
@@ -205,6 +214,9 @@ impl Parameters {
         }
         if self.tc_outside_block {
             info!("TC outside the block (experiment)");
+        }
+        if self.g2_no_reputation {
+            info!("G2 convictions exclude from leading only, reputation stays 1 (experiment)");
         }
         if self.g2_threshold != 0 {
             info!("G2 threshold set to {} millionths (experiment)", self.g2_threshold);

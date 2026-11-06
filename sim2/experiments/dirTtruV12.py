@@ -97,7 +97,8 @@ def common(st, vw, byz, base):
     cut = max(float(x[~byz].sum()) for x in c.get("cuts", [np.zeros(N)]))
     b0 = float(base[byz].sum())
     return dict(beta=b0, bound=b0 / (1 - B_REP), honest_cut_max=cut, colluder_share_max=float(sh.max()),
-                colluder_share_end=float(sh[-3:].mean()), colluder_share_min=float(sh.min()))
+                colluder_share_end=float(sh[-3:].mean()), colluder_share_min=float(sh.min()),
+                colluder_share_mean=float(sh.mean()))
 
 
 def frame_job(args):

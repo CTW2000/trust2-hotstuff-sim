@@ -1,0 +1,7 @@
+arm | runs | committed top (created top) | honest-led rounds | accused (share) | P(acc|prev acc) / P(acc|prev not) | 2 / 3 in a row | honest convictions (per 1000) | framer convictions | honest cut max | CUSUM if independent (per 1000)
+late10-frame0 | 3 | 1194(1198)/1207(1210)/1217(1221) | 3510 | 10 (0.0028) | 0.000 / 0.0023 | 0 / 0 | 0 (0.00) | 0 | 0.0000 | 0.000 || P(acc | prev round stalled) 0.0917 (n=109) vs 0.0000; P(acc | same leader as prev round) 0.0000 (n=105) vs 0.0029
+late10-frame7 | 6 | 239(243)/366(376)/360(375)/358(362)/368(391)/375(402) | 1489 | 33 (0.0222) | 0.000 / 0.0236 | 0 / 0 | 0 (0.00) | 0 | 0.0000 | 0.020 || P(acc | prev round stalled) 0.0325 (n=1015) vs 0.0000; P(acc | same leader as prev round) 0.0000 (n=35) vs 0.0227
+late20-frame0 | 4 | 242(246)/391(402)/381(399)/390(403) | 1309 | 25 (0.0191) | 0.045 / 0.0206 | 1 / 0 | 0 (0.00) | 0 | 0.0000 | 0.015 || P(acc | prev round stalled) 0.0306 (n=817) vs 0.0000; P(acc | same leader as prev round) 0.0000 (n=29) vs 0.0195
+late20-frame4 | 3 | 304(307)/162(305)/245(311) | 559 | 6 (0.0107) | 0.000 / 0.0127 | 0 / 0 | 0 (0.00) | 0 | 0.0000 | 0.000 || P(acc | prev round stalled) 0.0117 (n=513) vs 0.0000; P(acc | same leader as prev round) 0.0000 (n=15) vs 0.0110
+late30-frame0 | 3 | 0(290)/0(289)/0(289) | 0 | 0 (0.0000) | 0.000 / 0.0000 | 0 / 0 | 0 (0.00) | 0 | 0.0000 | 0.000 || P(acc | prev round stalled) 0.0000 (n=0) vs 0.0000; P(acc | same leader as prev round) 0.0000 (n=0) vs 0.0000
+
