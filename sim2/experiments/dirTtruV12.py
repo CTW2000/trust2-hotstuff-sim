@@ -4,7 +4,7 @@ and the AT exclusion doubling (off / on; off is the default). Evictions recomput
 culprits; entities waiting in the suspension queue are barred from leading. Same populations as dirTtru (n = 31: 10 licensed, 12
 uncertified, 9 small; cap 0.10, u_max 0.25); colluders = the nodes of lowest stake per base weight until
 the target base share. Recommended protocol as in dirTtruReview: P2, AT share > 2/3, CUSUM q = 0.5,
-rho_bar = 0.1, D = 500, weight cap 0.5; r_min 0.7, step 0.1, recovery 0.02 per epoch of 100 views,
+rho_bar = 0.1, gamma = ttru.GAMMA (10^2; 10^4 before 2026-11-05), D = 500, weight cap 0.5; r_min 0.7, step 0.1, recovery 0.02 per epoch of 100 views,
 B_rep = 0.10; NR with data; R3.
 
 Parts:
@@ -52,6 +52,7 @@ PROCS = int(os.environ.get("SIM_PROCS", "8"))
 SEEDS = int(os.environ.get("SIM_SEEDS", "50"))
 N, NL, NU, NA = 31, 10, 12, 9
 CAP, UMAX, B_REP, D, L_MAX = 0.10, 0.25, 0.10, 500, 0.10
+R_MIN = 0.7          # reputation floor (dirTtruSens varies it with CAP, UMAX and B_REP)
 VIEWS = 2000
 
 
@@ -62,13 +63,13 @@ def setup(seed):
 
 def build(cls, s, base, double=False, graded=True, injected=(), forks=(), old_g1=False, rho_bar=0.1, evidence="at",
           recompute="fork"):
-    rule = S.CusumExclusion(q=0.5, evidence=evidence, rho_bar=rho_bar, D=D, cap=0.5, Wq=500, cap_weights=base,
-                            double=double, g1=old_g1)
+    rule = S.CusumExclusion(q=0.5, evidence=evidence, rho_bar=rho_bar, gamma=ttru.GAMMA, D=D, cap=0.5, Wq=500,
+                            cap_weights=base, double=double, g1=old_g1)
     wk, gk = ttru.scheme_kwargs()
     # The v0.13 runs evicted non-malicious repeat offenders; the adopted scheme (SIM_SCHEME=h1p) runs the current rule.
     pun = GradedPunishment(cls, s, CAP, UMAX, l_max=L_MAX, injected=injected, forks=forks, recompute=recompute,
                            repeat_evict=not ttru.adopted(), **gk) if graded else None
-    vw = ttru.TtruWeights(base, r_min=0.7, b_rep=B_REP, rule=rule, punish=pun, g1=old_g1, **wk)
+    vw = ttru.TtruWeights(base, r_min=R_MIN, b_rep=B_REP, rule=rule, punish=pun, g1=old_g1, **wk)
     if graded:
         rule.bars = vw.bars
     return rule, vw
@@ -374,7 +375,7 @@ def m(g, c, d=3):
 def report():
     L = ["# 新方案（v0.12）的协议级仿真\n",
          "公式 A：基础权重 = CapNorm(质押)，不计牌照价值；分级处罚（L1–L4、同时暂停份额上限 10%、L4 经治理确认）；"
-         "AT 排除期加倍分\"关\"与\"开\"。其余同推荐协议：P2；AT 份额 > 2/3、CUSUM q=0.5、ρ̄=0.1、D=500、排除上限按权重 0.5；"
+         "AT 排除期加倍分\"关\"与\"开\"。其余同推荐协议：P2；AT 份额 > 2/3、CUSUM q=0.5、ρ̄=0.1、γ=10²（2026-11-05 前为 10⁴）、D=500、排除上限按权重 0.5；"
          "r_min=0.7、步长 0.1、每纪元（100 视图）恢复 0.02、B_rep=0.10；NR 含块；R3。n=31（10 家持牌、12 家未认证、9 个小节点），"
          "cap=0.10、u_max=0.25。区间为对人群的自助法 95% 区间。\n"]
     fr = load("frame")

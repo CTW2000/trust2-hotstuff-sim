@@ -1,7 +1,7 @@
 """Threshold sweep of the G2 CUSUM (2026-11-04, after the prototype comparison of leader rules, prototype/DESIGN.md
 §15.12): how much faster silent leaders are convicted at a lower threshold h = ln(gamma), and what it costs the
 honest replicas. With q = 0.5 and rho_bar = 0.1 a run of bad facts convicts after 6, 5, 3, 2 and 1 leads for the
-gammas below (10^4 is the recommended protocol). Everything else is dirTtruV12 under the adopted scheme:
+gammas below (10^4 was the recommended protocol; 10^2 since 2026-11-05, ttru.GAMMA). The sweep sets h itself. Everything else is dirTtruV12 under the adopted scheme:
   silent   colluding leaders send nothing (target 0.2 / 0.25, eps 0 / 0.1, doubling off);
   frame    colluders claim NR = 1 and withhold votes in honest views, late messages eps 0.1 / 0.2 / 0.3, base
            network only (the wide network gives the same results);

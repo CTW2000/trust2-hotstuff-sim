@@ -1,6 +1,6 @@
 """Supplementary experiments for the v0.12 scheme (验证 v0.13 §4.6 follow-up): long horizons, parameter
 sensitivity of the graded G1 punishment, and n = 100. Same recommended protocol and graded punishment as
-dirTtruV12 (P2, AT share > 2/3, CUSUM q = 0.5, rho_bar = 0.1, D = 500, weight cap 0.5; r_min 0.7, step 0.1,
+dirTtruV12 (P2, AT share > 2/3, CUSUM q = 0.5, rho_bar = 0.1, gamma = ttru.GAMMA, D = 500, weight cap 0.5; r_min 0.7, step 0.1,
 recovery 0.02 per epoch of 100 views, B_rep = 0.10; NR with data; R3; AT doubling off; evictions recompute
 CapNorm only for fork culprits; queued suspensions barred from leading). Colluders = cheapest nodes per base
 weight up to a base share of 0.2; the framing adversary runs on top of every injected scenario.
@@ -32,9 +32,10 @@ Parts:
          alpha 1.16) and a heavier one (alpha 0.8): frame, silent, budget, g1live, g1safe (iso, repeat,
          decoy, bug, fork), with the adopted rule (no eviction of non-malicious repeat offenders). About 2.6 GB
          per run: keep SIM_PROCS small (5 on the 31 GB server) and run under a memory cap.
-Environment: SIM_PROCS (default 8), SIM_SEEDS (default 24: long uses all, sens 2/3, n100 half).
+Environment: SIM_PROCS (default 8), SIM_SEEDS (default 24: long uses all, sens 2/3, n100 half); SIM_SCHEME=h1p runs the
+adopted scheme (25-view epochs, the next table an epoch ahead, durations kept in views; suffix _h1p), as dirTtruV12.
 Run from the repository root:  python -m sim2.experiments.dirTtruV12b [long|sens|rev|n100|all|report]
-Out: results/dirTtru_v12b_<part>.csv and results/dirTtru_v12b.md.
+Out: results/dirTtru_v12b_<part><suffix>.csv and results/dirTtru_v12b<suffix>.md.
 """
 import csv
 import os
@@ -74,11 +75,27 @@ def setup(pop, seed, alpha=1.16):
     return cls, s, ttru.base_weights(cls, s, 0.0, 0.0, cap, UMAX), cap
 
 
+def punish_kwargs(pk):
+    """GradedPunishment kwargs for the punishment parameters pk (durations in epochs of 100 views). Under the adopted
+    scheme (SIM_SCHEME=h1p, ttru.scheme) the durations keep their views at 25 views per epoch, as in dirTtruV12."""
+    pk = pk or DEFAULTS
+    if not ttru.adopted():
+        return dict(pk)
+    gk = ttru.scheme_kwargs()[1]
+    f = 100 / gk["epoch"]
+    ep = lambda x: 0 if x == 0 else max(1, round(x * f))
+    out = dict(gk)
+    out.update(pk, sus=tuple(ep(x) for x in pk["sus"]), win_chain=ep(pk["win_chain"]), lookback=ep(pk["lookback"]),
+               gov_delay=ep(pk["gov_delay"]))
+    return out
+
+
 def build(cls, s, base, cap, graded=True, old_g1=False, rho_bar=0.1, evidence="at", injected=(), forks=(), pk=None):
-    rule = S.CusumExclusion(q=0.5, evidence=evidence, rho_bar=rho_bar, D=D, cap=0.5, Wq=500, cap_weights=base,
-                            g1=old_g1)
-    pun = GradedPunishment(cls, s, cap, UMAX, injected=injected, forks=forks, **(pk or DEFAULTS)) if graded else None
-    vw = ttru.TtruWeights(base, epoch=100, r_min=0.7, b_rep=B_REP, rule=rule, punish=pun, g1=old_g1)
+    rule = S.CusumExclusion(q=0.5, evidence=evidence, rho_bar=rho_bar, gamma=ttru.GAMMA, D=D, cap=0.5, Wq=500,
+                            cap_weights=base, g1=old_g1)
+    pun = GradedPunishment(cls, s, cap, UMAX, injected=injected, forks=forks, **punish_kwargs(pk)) if graded else None
+    wk = ttru.scheme_kwargs()[0]
+    vw = ttru.TtruWeights(base, r_min=0.7, b_rep=B_REP, rule=rule, punish=pun, g1=old_g1, **wk)
     if graded:
         rule.bars = vw.bars
     return rule, vw
@@ -267,6 +284,9 @@ def scenario(scen, cls, s, base, byz, cap, l_max, epochs, seed):
             acc += base[i]
         forks = [(cul, 10)]
         who, at = [int(i) for i in cul], 10
+    # Epochs above are for epochs of 100 views; at_epoch keeps them at the same views under the adopted scheme.
+    inj = [(i, ttru.at_epoch(a), ttru.at_epoch(b), m) for i, a, b, m in inj]
+    forks = [(c, ttru.at_epoch(e)) for c, e in forks]
     return inj, forks, who, at
 
 
@@ -303,8 +323,9 @@ def g1safe_job(args):
                                               for lvl in [ev[1]]) for i in who[:1])
         sus = [k for ev, j, k in p.log if ev == "suspend" and j in who]
         rel = [k for ev, j, k in p.log if ev in ("release", "evict") and j in who]
-        row["served_after"] = (max(sus) - at) if sus else -1         # last queued suspension takes effect
-        row["recovered_after"] = (max(rel) - at) if rel else -1       # last release or eviction
+        k0 = ttru.at_epoch(at)                                         # the event in the punisher's epochs
+        row["served_after"] = (max(sus) - k0) if sus else -1         # last queued suspension takes effect
+        row["recovered_after"] = (max(rel) - k0) if rel else -1       # last release or eviction
         if scen in ("bug", "fork"):
             a, b = 100 * at, min(100 * (at + 30), end)
             row["qc_event"] = float(np.mean(st.qc_exists[a:b]))
@@ -398,13 +419,13 @@ def run(part):
     else:
         with Pool(PROCS) as pool:
             rows = pool.map(run_job, jobs_of(part), chunksize=1)
-    write(f"dirTtru_v12b_{part}.csv", rows)
+    write(f"dirTtru_v12b_{part}{ttru.suffix()}.csv", rows)
     print(f"{part}: {len(rows)} runs, {time.time() - t0:.0f}s", flush=True)
 
 
 # ---- report --------------------------------------------------------------------------------------------------
 def load(part):
-    p = os.path.join(OUT, f"dirTtru_v12b_{part}.csv")
+    p = os.path.join(OUT, f"dirTtru_v12b_{part}{ttru.suffix()}.csv")
     if not os.path.exists(p):
         return []
     rows = list(csv.DictReader(open(p)))
@@ -614,7 +635,7 @@ def report():
                                  f"{evicted_cell(g, sc, 1)} | "
                                  f"{int(sum(r['infeasible'] for r in g))}/{len(g)} / {mx(g, 'cap_used')} | "
                                  f"{bounds_cell(g)} | {fmt([r['commit'] for r in g])} |")
-    with open(os.path.join(OUT, "dirTtru_v12b.md"), "w") as fh:
+    with open(os.path.join(OUT, f"dirTtru_v12b{ttru.suffix()}.md"), "w") as fh:
         fh.write("\n".join(L) + "\n")
     print("\n".join(L))
 
