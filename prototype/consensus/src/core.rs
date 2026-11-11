@@ -8,7 +8,7 @@ use crate::inclusion::Inclusion;
 use crate::leader::leader;
 use crate::mempool::MempoolDriver;
 use crate::messages::{
-    extends_validly, vote_digest, Accusation, Attestation, Block, Evidence, OmitProof, Otx, SignedTimeout, Timeout,
+    extends_validly, table_digest, vote_digest, Accusation, Attestation, Block, Evidence, OmitProof, Otx, SignedTimeout, Timeout,
     Vote, QC, TC,
 };
 use crate::proposer::ProposerMessage;
@@ -225,9 +225,12 @@ impl Core {
         tx_proposer: Sender<ProposerMessage>,
         tx_commit: Sender<Block>,
     ) -> Self {
+        let epochs = Epochs::new(&committee, epoch_config);
+        let mut detector = Detector::new();
+        detector.set_tables(epochs.tables());
         Self {
             name,
-            epochs: Epochs::new(&committee, epoch_config),
+            epochs,
             signature_service,
             store,
             mempool_driver,
@@ -248,7 +251,7 @@ impl Core {
             accuser: Accuser::new(),
             inclusion,
             last_certified: 0,
-            detector: Detector::new(),
+            detector,
             faults,
             network: SimpleSender::new(),
             deferred: Deferred::default(),
@@ -378,6 +381,10 @@ impl Core {
 
     /// G2: a block we hold is certified; an omission it makes provable goes to the proposer.
     async fn certify(&mut self, block: &Block) {
+        // H4: a block after the terminal block of its epoch only certifies that block and carries no transactions.
+        if block.qc.epoch == block.epoch && self.epochs.suffix_after(block.epoch, block.qc.round) {
+            return;
+        }
         let proofs = match self.epochs.get(block.epoch) {
             Some(committee) => self.inclusion.certify(block, committee),
             None => return,
@@ -516,7 +523,9 @@ impl Core {
     /// The ledger reaches a terminal block (H1): the next epoch's table is ready, and we enter it now unless we
     /// already did (enter_on_proof).
     fn reach_terminal(&mut self, terminal: &Block) {
-        if self.epochs.enter_next(terminal) {
+        let entered = self.epochs.enter_next(terminal);
+        self.detector.set_tables(self.epochs.tables());
+        if entered {
             self.entered(terminal);
         } else {
             self.accuser.cleanup(self.epochs.done() + 1);
@@ -645,6 +654,13 @@ impl Core {
 
         // Send all the newly committed blocks to the node's application layer.
         while let Some(block) = to_commit.pop_front() {
+            // H4: a block after the terminal block of its epoch only certifies that block: nothing in it goes on
+            // the ledger, nor to the application.
+            if self.epochs.after_terminal(&block) {
+                // NOTE: this log entry is used to count the blocks left off the ledger (benchmark/p5.py).
+                info!("Committed {} after the terminal block of epoch {}: not on the ledger (H4)", block, block.epoch);
+                continue;
+            }
             // G2: the evidence on the ledger, up to and including the terminal block, decides the next table.
             self.epochs.record(&block);
             self.inclusion.commit(&block, Instant::now());
@@ -907,6 +923,9 @@ impl Core {
             true => (older, None),
             false => (self.high_qc.clone(), tc),
         };
+        // H4: a block after the terminal block of the epoch only certifies it: propose it empty.
+        let suffix = qc.epoch == committee.epoch && self.epochs.suffix_after(committee.epoch, qc.round);
+        let otxs = if suffix { Vec::new() } else { self.inclusion.select() };
         self.tx_proposer
             .send(ProposerMessage::Make {
                 round: self.round,
@@ -914,7 +933,8 @@ impl Core {
                 tc,
                 committee,
                 done: self.epochs.done(),
-                otxs: self.inclusion.select(),
+                otxs,
+                suffix,
             })
             .await
             .expect("Failed to send message to proposer");
@@ -1036,6 +1056,32 @@ impl Core {
         Ok(())
     }
 
+    /// H2: whether `block`, whose parent is `parent`, has as an ancestor the terminal block of the epoch before its
+    /// own that we entered its epoch on. A parent of the same epoch was stored, so it passed this check already.
+    async fn extends_terminal(&mut self, block: &Block, parent: &Block) -> bool {
+        let epoch = block.epoch;
+        if epoch <= self.epochs.origin() || parent.epoch == epoch {
+            return true;
+        }
+        let (terminal, terminal_round) = match self.epochs.terminal(epoch - 1) {
+            Some((digest, round)) => (digest.clone(), *round),
+            None => return true, // not kept any more: the block is far too old to be voted on
+        };
+        let mut current = parent.clone();
+        loop {
+            if current.digest() == terminal {
+                return true;
+            }
+            if current.epoch + 1 != epoch || current.round <= terminal_round {
+                return false;
+            }
+            current = match self.read_block(&current.qc.hash).await {
+                Ok(Some(ancestor)) => ancestor,
+                _ => return false,
+            };
+        }
+    }
+
     #[async_recursion]
     async fn process_block(&mut self, block: &Block) -> ConsensusResult<()> {
         debug!("Processing {:?}", block);
@@ -1060,6 +1106,14 @@ impl Core {
                 return Ok(());
             }
         };
+
+        // H2: a block of a later epoch must have the terminal block we entered its epoch on as an ancestor. A block
+        // that does not is never stored, so nothing built on it can be committed here either.
+        if !self.extends_terminal(block, &b1).await {
+            // NOTE: this log entry is used to count the blocks refused by H2 (benchmark/fork_local.py).
+            warn!("Refusing {}: it does not extend the terminal block of epoch {} (H2)", block, block.epoch - 1);
+            return Ok(());
+        }
 
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
@@ -1171,11 +1225,18 @@ impl Core {
             }
         );
 
-        // Check the block is correctly formed, and its certificates against the tables of their epochs.
+        // Check the block is correctly formed, names our table of its epoch (E2: the table of its chain), and its
+        // certificates against the tables of their epochs.
         block.verify(committee)?;
+        ensure!(block.table == table_digest(committee), ConsensusError::MalformedBlock(digest.clone()));
         self.verify_qc(&block.qc)?;
         if let Some(ref tc) = block.tc {
-            self.verify_tc(tc)?;
+            if let Err(e) = self.verify_tc(tc) {
+                // E2: the block is invalid; votes for it that reach us are evidence, so the detector keeps it.
+                let found = self.detector.block(block);
+                self.propose_evidence(found).await;
+                return Err(e);
+            }
         }
         for accusation in &block.accusations {
             accusation.verify(self.table(accusation.epoch)?)?;
@@ -1184,7 +1245,8 @@ impl Core {
             omission.verify(self.table(omission.epoch)?)?;
         }
         for evidence in &block.evidence {
-            evidence.verify()?;
+            let epochs = &self.epochs;
+            evidence.verify_with(|digest| epochs.table_by_digest(digest))?;
         }
         let mut found = self.detector.block(block);
         if let Some(ref tc) = block.tc {

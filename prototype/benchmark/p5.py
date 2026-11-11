@@ -473,6 +473,24 @@ def g100():
                                 attest_guard=136, censor=10, rep=rep), 300)
 
 
+def h24():
+    """H2, H4 and the E2 table rule (DESIGN.md §15.24): the normal case, 10% late messages and silent leaders with the
+    new handover code, the baseline alternating, as in f25; and the weighted path with equivocators."""
+    for rep in (1, 2, 3):
+        for build in ("baseline", "trust2"):
+            run("h24_x2", dict(build=build, nodes=31, net="base", epoch_length=25, rep=rep), 30)
+    for rep in range(1, 6):
+        for build in ("baseline", "trust2"):
+            run("h24_late", dict(scenario="late", build=build, nodes=31, net="base", epoch_length=25, rep=rep,
+                                 late_p=0.1), 90)
+    for rep in (1, 2):
+        run("h24_silent", dict(scenario="silent", build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                               faults=3), 90)
+        weighted = dict(stakes="lognormal:1", uncertified=10, entity_cap_ppm=50_000, class_cap_ppm=250_000)
+        run("h24_xc", dict(scenario="equivocators", build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                           equivocate=3, **weighted), 60)
+
+
 def report():
     for path in sorted(glob(f"{OUT}/*.csv")):
         with open(path) as fh:
@@ -535,4 +553,4 @@ def compare_x2(rows):
 
 if __name__ == "__main__":
     {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "f25": f25,
-     "cmp": cmp, "cmpg": cmpg, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()
+     "cmp": cmp, "cmpg": cmpg, "h24": h24, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()

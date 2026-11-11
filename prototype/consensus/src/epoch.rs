@@ -13,11 +13,15 @@
 //!   (Core::commit), or earlier, with G_e, its child and the proof at hand but some block before G_e still
 //!   missing (enter_early; DESIGN.md §15.10). From then on it signs no message of an older epoch. The tables
 //!   of the last few epochs are kept to verify old blocks received through synchronization.
+//! - H2: a block of epoch e+1 has G_e as an ancestor; Core rejects any other (Core::extends_terminal), against the
+//!   terminal blocks kept here (`terminal`).
+//! - H4: a block of epoch e after G_e only certifies G_e: nothing in it goes on the ledger (`after_terminal`), and an
+//!   honest leader proposes it empty (`suffix_after`).
 
 use crate::config::{Authority, Committee, EpochNumber, LeaderRule, Stake};
 use crate::consensus::Round;
 use crate::leader::leader;
-use crate::messages::{Block, OmitProof};
+use crate::messages::{table_digest, Block, OmitProof};
 use crate::punish::{G1Event, Kind, PunishConfig, Punishment};
 use crate::reputation::{Event, G2Config, Reputation};
 use crate::ttru::{self, Class};
@@ -93,8 +97,12 @@ pub struct Epochs {
     /// G1 graded punishment from the ledger; its base shares change only when a fork culprit is evicted.
     punishment: Punishment,
     current: EpochNumber,
+    /// The epoch of the configuration (the first one).
+    origin: EpochNumber,
     /// s_e: round of the terminal block of the previous epoch.
     start: Round,
+    /// H2: the terminal block G_e of each kept epoch e that we entered the next epoch on (digest, round).
+    terminals: BTreeMap<EpochNumber, (Digest, Round)>,
     /// The epoch the committed ledger is in, and the round of the terminal block before it. It is one behind
     /// `current` after an early entry, until the ledger reaches that terminal block.
     ledger: EpochNumber,
@@ -241,7 +249,9 @@ impl Epochs {
             reputation: Reputation::new(base, g2_config),
             punishment,
             current: roster.epoch,
+            origin: roster.epoch,
             start: 0,
+            terminals: BTreeMap::new(),
             ledger: roster.epoch,
             ledger_start: 0,
             tables: BTreeMap::new(),
@@ -534,6 +544,50 @@ impl Epochs {
         self.tables.get(&epoch)
     }
 
+    /// The weight tables kept, oldest first.
+    pub fn tables(&self) -> impl Iterator<Item = &Committee> {
+        self.tables.values()
+    }
+
+    /// The kept weight table with this digest (E2: the table a block names).
+    pub fn table_by_digest(&self, digest: &crypto::Digest) -> Option<&Committee> {
+        self.tables.values().find(|t| table_digest(t) == *digest)
+    }
+
+    /// The epoch of the configuration.
+    pub fn origin(&self) -> EpochNumber {
+        self.origin
+    }
+
+    /// H2: the terminal block G_e of epoch e that we entered epoch e+1 on, if kept.
+    pub fn terminal(&self, epoch: EpochNumber) -> Option<&(Digest, Round)> {
+        self.terminals.get(&epoch)
+    }
+
+    /// s_e, the round of G_{e-1} (0 for the first epoch), if known.
+    fn epoch_start(&self, epoch: EpochNumber) -> Option<Round> {
+        if epoch == self.current {
+            Some(self.start)
+        } else if epoch == self.origin {
+            Some(0)
+        } else {
+            self.terminals.get(&(epoch - 1)).map(|(_, round)| *round)
+        }
+    }
+
+    /// H4: whether a block of `epoch` whose parent, of the same epoch, is at `parent_round` comes after the terminal
+    /// block of that epoch on its chain (the parent is G_e or after it): an honest leader proposes it empty.
+    pub fn suffix_after(&self, epoch: EpochNumber, parent_round: Round) -> bool {
+        self.config.length > 0
+            && self.epoch_start(epoch).map_or(false, |start| parent_round >= start + self.config.length)
+    }
+
+    /// H4: whether `block`, the next block of the ledger in chain order, is of an epoch whose terminal block the
+    /// ledger has passed: it only certifies that block and is not part of the ledger.
+    pub fn after_terminal(&self, block: &Block) -> bool {
+        self.config.length > 0 && block.epoch < self.ledger
+    }
+
     /// H1: whether `block`, the next block of the ledger in chain order, is the terminal block of the ledger's
     /// epoch.
     pub fn is_terminal(&self, block: &Block) -> bool {
@@ -613,6 +667,7 @@ impl Epochs {
             let oldest = *self.tables.keys().next().unwrap();
             self.tables.remove(&oldest);
             self.first_rounds.remove(&oldest);
+            self.terminals.remove(&oldest);
         }
         entering
     }
@@ -624,6 +679,7 @@ impl Epochs {
         // holds that proof, even if the new table suspends it (it then proposes without voting).
         let next = self.current + 1;
         let first = terminal.round + 2;
+        self.terminals.insert(self.current, (terminal.digest(), terminal.round));
         let handover = leader(self.current(), first);
         let table = self.tables.get_mut(&next).expect("the next table is known an epoch ahead");
         table.handover = Some((first, handover));

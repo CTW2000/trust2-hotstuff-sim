@@ -1,5 +1,5 @@
 use super::*;
-use crate::common::{chain, committee, committee_with_base_port, keys, listener, signed_otx, EPOCH};
+use crate::common::{chain, committee, committee_with_base_port, keys, listener, signed_otx, table_at, EPOCH};
 use crate::leader::LeaderElector;
 use crypto::{SecretKey, Signature};
 use futures::future::try_join_all;
@@ -1220,4 +1220,125 @@ fn parameter_check_keeps_the_class_cap_below_the_tolerated_share() {
     assert_eq!(Parameters::default().class_cap_ppm, 250_000);
     assert!(Parameters { class_cap_ppm: 290_000, ..Parameters::default() }.check().is_err());
     assert!(Parameters { class_cap_ppm: 1_000_000, ..Parameters::default() }.check().is_ok());
+}
+
+/// The key of the leader of `round` in `epoch` (the fixture tables all have equal stakes). The first round of the
+/// next epoch (12 with epochs of 10 rounds) keeps the old table's leader.
+fn leader_in(epoch: EpochNumber, round: Round) -> (PublicKey, SecretKey) {
+    if epoch == EPOCH || round == 12 {
+        return leader_keys(round);
+    }
+    let leader = LeaderElector::new(Committee { epoch, ..committee() }).get_leader(round);
+    keys().into_iter().find(|(key, _)| *key == leader).unwrap()
+}
+
+/// The QC of every member for `block`, in its epoch.
+fn qc_in(block: &Block) -> QC {
+    let digest = vote_digest(block.epoch, &block.digest(), block.round);
+    let votes = keys().iter().map(|(key, secret)| (*key, Signature::new(&digest, secret))).collect();
+    QC { hash: block.digest(), round: block.round, epoch: block.epoch, votes }
+}
+
+/// Block `round` of `epoch` on `qc` (and `tc`), naming the fixture table of its epoch, by the right leader.
+fn block_in(qc: QC, tc: Option<TC>, round: Round, epoch: EpochNumber) -> Block {
+    let (author, secret) = leader_in(epoch, round);
+    let mut block = Block::new_from_key_with_tc(qc, tc, author, round, Vec::new(), &secret);
+    block.epoch = epoch;
+    block.table = table_at(epoch);
+    block.signature = Signature::new(&block.digest(), &secret);
+    block
+}
+
+/// The TC of `round` in `epoch` that every member makes, each reporting `high_qc`.
+fn tc_in(round: Round, epoch: EpochNumber, high_qc: &QC) -> TC {
+    let table = Committee { epoch, ..committee() };
+    let mut aggregator = Aggregator::new();
+    keys()
+        .into_iter()
+        .find_map(|(author, secret)| {
+            let mut timeout =
+                Timeout { high_qc: high_qc.clone(), round, epoch, nr: false, author, signature: Signature::default() };
+            timeout.signature = Signature::new(&timeout.digest(), &secret);
+            aggregator.add_timeout(timeout, &table).unwrap()
+        })
+        .unwrap()
+}
+
+/// Epochs of 10 rounds: B9 <- B10 (terminal) <- B11 (its child, the commit proof) <- B12 <- B13 <- B14, the last
+/// three of the next epoch.
+fn handover_chain() -> Vec<Block> {
+    let b9 = block_in(QC::genesis(), None, 9, EPOCH);
+    let b10 = block_in(qc_in(&b9), None, 10, EPOCH);
+    let b11 = block_in(qc_in(&b10), None, 11, EPOCH);
+    let b12 = block_in(qc_in(&b11), None, 12, EPOCH + 1);
+    let b13 = block_in(qc_in(&b12), None, 13, EPOCH + 1);
+    let b14 = block_in(qc_in(&b13), None, 14, EPOCH + 1);
+    vec![b9, b10, b11, b12, b13, b14]
+}
+
+#[tokio::test]
+async fn h4_the_child_of_the_terminal_block_stays_off_the_ledger() {
+    // H4: B11 is committed (with B12 <- B13) but only certifies the terminal block B10: it is not on the ledger and
+    // never reaches the application. The ledger goes B9, B10, B12.
+    let blocks = handover_chain();
+    let (b9, b10, b12) = (blocks[0].clone(), blocks[1].clone(), blocks[3].clone());
+    let store_path = ".db_test_h4_the_child_of_the_terminal_block_stays_off_the_ledger";
+    let (name, secret) = keys().pop().unwrap();
+    let (tx_core, mut rx_proposer, mut rx_commit) =
+        core_with_epochs(name, secret, committee_with_base_port(18_400), store_path, 10);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    // Read the commits as they come: the commit channel holds one block, and the core waits on it.
+    let ledger = tokio::spawn(async move {
+        let mut ledger = Vec::new();
+        while ledger.len() < 3 {
+            match timeout(Duration::from_secs(3), rx_commit.recv()).await {
+                Ok(Some(block)) => ledger.push(block),
+                _ => break,
+            }
+        }
+        ledger
+    });
+    for block in blocks {
+        tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+    }
+    let ledger = ledger.await.unwrap();
+    assert!(ledger == vec![b9, b10, b12], "{:?}", ledger.iter().map(|b| b.round).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn h2_no_vote_for_a_block_of_the_new_epoch_off_the_terminal_block() {
+    // H2: after entering the next epoch on B10, a block of that epoch must have B10 as an ancestor. B13' extends B9
+    // (before B10) through a TC of round 12 whose signers report B9's QC: it passes the voting rule, but not H2, so
+    // the node neither stores nor votes for it. The proper B13, extending B12, gets the vote of round 13.
+    let committee = committee_with_base_port(18_500);
+    let blocks = handover_chain();
+    let b9 = blocks[0].clone();
+    let good = blocks[4].clone();
+    let bad = block_in(qc_in(&b9), Some(tc_in(12, EPOCH + 1, &qc_in(&b9))), 13, EPOCH + 1);
+    assert!(extends_validly(bad.round, bad.qc.round, bad.tc.as_ref()));
+
+    let next = leader_in(EPOCH + 1, 14).0;
+    let mut received = all_frames(committee.address(&next).unwrap());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (name, secret) = keys().into_iter().find(|(key, _)| *key != next).unwrap();
+    let store_path = ".db_test_h2_no_vote_for_a_block_of_the_new_epoch_off_the_terminal_block";
+    let (tx_core, mut rx_proposer, mut rx_commit) = core_with_epochs(name, secret, committee.clone(), store_path, 10);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tokio::spawn(async move { while rx_commit.recv().await.is_some() {} });
+    for block in blocks[..4].iter().cloned().chain([bad.clone(), good.clone()]) {
+        tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+    }
+    let vote_13 = async {
+        while let Some(frame) = received.recv().await {
+            if let Ok(ConsensusMessage::Vote(vote)) = bincode::deserialize(&frame) {
+                if vote.round == 13 {
+                    return Some(vote.hash);
+                }
+            }
+        }
+        None
+    };
+    let voted = timeout(Duration::from_secs(2), vote_13).await.unwrap_or(None);
+    assert!(voted != Some(bad.digest()), "voted for a block off the terminal block");
+    assert_eq!(voted, Some(good.digest()));
 }

@@ -3,16 +3,16 @@
 //! of a signer's own messages gives a piece of evidence for the ledger:
 //!
 //! - E1: two votes of one signer for the same (epoch, round) and different blocks;
-//! - E2: a vote for a block that breaks the voting rule;
+//! - E2: a vote for a block that breaks the voting rule (its TC judged by the weight table the block names);
 //! - E3: a vote for a block certifying round j and a timeout of a round at least as high reporting hq < j;
 //! - NR: a vote and an NR = 1 timeout for the same (epoch, round).
 //!
 //! Honest nodes never produce these (rules R1-R6). One piece is reported per culprit, class and epoch: the
 //! graded punishment counts one window per (entity, class, sign epoch), so further evidence adds nothing.
 
-use crate::config::EpochNumber;
+use crate::config::{Committee, EpochNumber};
 use crate::consensus::Round;
-use crate::messages::{Block, Evidence, SignedTimeout, Vote, QC, TC};
+use crate::messages::{table_digest, Block, Evidence, SignedTimeout, Vote, QC, TC};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -32,6 +32,8 @@ pub struct Detector {
     certificates: HashSet<(EpochNumber, Round, Digest)>,
     /// (culprit, safety class, epoch) already reported.
     reported: HashSet<(PublicKey, bool, EpochNumber)>,
+    /// The weight tables we hold, by digest: E2 judges a block's TC by the table the block names, if we hold it.
+    tables: HashMap<Digest, Committee>,
 }
 
 impl Detector {
@@ -42,7 +44,13 @@ impl Detector {
             blocks: HashMap::new(),
             certificates: HashSet::new(),
             reported: HashSet::new(),
+            tables: HashMap::new(),
         }
+    }
+
+    /// The weight tables we hold now (E2).
+    pub fn set_tables<'a>(&mut self, tables: impl IntoIterator<Item = &'a Committee>) {
+        self.tables = tables.into_iter().map(|t| (table_digest(t), t.clone())).collect();
     }
 
     fn report(&mut self, evidence: Evidence, found: &mut Vec<Evidence>) {
@@ -51,9 +59,10 @@ impl Detector {
         }
     }
 
-    /// The block a vote is for breaks the voting rule (Evidence::InvalidBlock checks the same).
-    fn invalid(vote: &Vote, block: &Block) -> bool {
-        Evidence::InvalidBlock(vote.clone(), block.header()).holds()
+    /// The block a vote is for breaks the voting rule (Evidence::InvalidBlock checks the same), its TC judged by
+    /// the table the block names when we hold it.
+    fn invalid(&self, vote: &Vote, block: &Block) -> bool {
+        Evidence::InvalidBlock(vote.clone(), block.header()).holds_under(self.tables.get(&block.table))
     }
 
     /// Contradictions of a vote with what we hold.
@@ -78,7 +87,7 @@ impl Detector {
 
     /// E2 and E3 for a vote whose block we hold.
     fn check_vote_on_block(&mut self, vote: &Vote, block: &Block, found: &mut Vec<Evidence>) {
-        if Self::invalid(vote, block) {
+        if self.invalid(vote, block) {
             self.report(Evidence::InvalidBlock(vote.clone(), block.header()), found);
         }
         let later: Vec<SignedTimeout> = self

@@ -8,7 +8,10 @@ experiment switches to the Byzantine halves:
   s2  disjoint vote windows: side 1's halves vote only in rounds <= K, side 2's only in rounds > K, so the fork
       goes through TCs whose Byzantine signers report the genesis on side 2 (E3 only);
   s3  s2 with tc_outside_block on every process: the TC travels with the proposal but is not part of the block.
-After the run, `node forensics` reads the stores of one honest node of each side. A single epoch (epoch_length 0).
+After the run, `node forensics` reads the stores of one honest node of each side. A single epoch (epoch_length 0),
+or (DESIGN.md §15.24) epochs with --prephase: the forensics then judges the fork in the first epoch both sides committed
+off the other's chain, replays each side's tables, and sweeps the other side's blocks for E2 by the judge's own tables
+and by the tables the blocks name; the row also counts the blocks refused by H2 and left off the ledger by H4.
 
 Populations (n = 19, equal stakes):
   equal     7 Byzantine, 6 + 6 honest, all licensed;
@@ -165,6 +168,13 @@ def run(args):
         for i, (g, _) in enumerate(roles):
             if g == "B":
                 shutil.copytree(store[(i, 1)], store[(i, 2)])
+        if args.scenario in ("s2", "s3"):
+            # DESIGN.md §15.24: with a prephase, --k counts from the highest round reached before the split.
+            top = max((int(m) for f in glob(join(LOGS, "node-*-prephase.log"))
+                       for m in re.findall(r"Committed B(\d+)", open(f).read())), default=0)
+            args.k += top
+            for tag, side in (("b1", 1), ("b2", 2)):
+                parameters(args, side).print(params[tag])
 
     running = []
     for k, (i, side) in enumerate(procs):
@@ -184,10 +194,14 @@ def run(args):
         stop(running)
 
     byz = {names[i] for i, (g, _) in enumerate(roles) if g == "B"}
-    found = sum(len(re.findall(r"G1: found", open(f).read())) for f in glob(join(LOGS, "node-*.log")))
+    logs = [open(f).read() for f in glob(join(LOGS, "node-*.log"))]
+    found = sum(len(re.findall(r"G1: found", text)) for text in logs)
+    h2_refused = sum(len(re.findall(r"\(H2\)", text)) for text in logs)
+    h4_off_ledger = sum(len(re.findall(r"not on the ledger \(H4\)", text)) for text in logs)
     row = dict(scenario=args.scenario, population=args.population, k=args.k, duration=args.duration,
                prephase=args.prephase, epoch_length=args.epoch_length,
-               rep=args.rep, n=n, processes=len(procs), byzantine=len(byz), online_g1=found, pairs=[])
+               rep=args.rep, n=n, processes=len(procs), byzantine=len(byz), online_g1=found,
+               h2_refused=h2_refused, h4_off_ledger=h4_off_ledger, pairs=[])
     sides = {s: [k for k, (i, side) in enumerate(procs) if side == s and roles[i][0] != "B"] for s in (1, 2)}
     for a, b in zip(sides[1][:2], sides[2][:2]):
         out = subprocess.run([NODE, "forensics", "--committee", committees[1], "--parameters", params["honest"],
@@ -200,10 +214,22 @@ def run(args):
         culprits = set(report.get("culprits", []))
         report.update(culprits=len(culprits), culprits_byzantine=len(culprits & byz),
                       honest_blamed=len(culprits - byz), a=procs[a][0], b=procs[b][0])
+        epochs = report.get("epochs") or {}
+        ta, tb = epochs.pop("terminals_a", []), epochs.pop("terminals_b", [])
+        shared = next((k for k, (x, y) in enumerate(zip(ta, tb)) if x != y), min(len(ta), len(tb)))
+        epochs.update(terminals_a=len(ta), terminals_b=len(tb), terminals_shared=shared,
+                      first_terminals_apart=[ta[shared] if shared < len(ta) else None,
+                                             tb[shared] if shared < len(tb) else None])
+        for sweep in epochs.values():
+            if isinstance(sweep, dict) and "own_voters" in sweep:
+                for kind in ("own", "named"):
+                    voters = set(sweep.pop(f"{kind}_voters"))
+                    sweep[f"{kind}_voters_honest"] = len(voters - byz)
+                    sweep[f"{kind}_voters_byzantine"] = len(voters & byz)
         row["pairs"].append(report)
     line = json.dumps(row)
     print(line, flush=True)
-    with open(join(OUT, "fork.jsonl"), "a") as fh:
+    with open(join(OUT, args.out), "a") as fh:
         fh.write(line + "\n")
 
 
@@ -211,7 +237,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--scenario", choices=["s1", "s2", "s3"], default="s1")
     ap.add_argument("--population", choices=sorted(POPULATIONS), default="equal")
-    ap.add_argument("--k", type=int, default=20, help="s2/s3: last round side 1's Byzantine halves vote in")
+    ap.add_argument("--k", type=int, default=20,
+                    help="s2/s3: last round side 1's Byzantine halves vote in (after --prephase: rounds after the split)")
     ap.add_argument("--duration", type=int, default=60)
     ap.add_argument("--rep", type=int, default=1)
     ap.add_argument("--prephase", type=int, default=0,
@@ -220,6 +247,7 @@ def main():
                     help="rounds per epoch (0: a single epoch; the evidence needs both sides in one epoch)")
     ap.add_argument("--rate", type=int, default=500, help="transactions per second of each of the four clients")
     ap.add_argument("--timeout-delay", type=int, default=1_000)
+    ap.add_argument("--out", default="fork.jsonl", help="results file in results-p5/")
     ap.add_argument("--cpu-quota", type=int, default=1200, help="percent of one core (1200 = 12 cores)")
     ap.add_argument("--mem-max", default="12G")
     args = ap.parse_args()

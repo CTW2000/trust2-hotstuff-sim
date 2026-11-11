@@ -42,6 +42,10 @@ pub struct Block {
     pub author: PublicKey,
     pub round: Round,
     pub epoch: EpochNumber,
+    /// E2 (theory §2.3): the digest of the weight table of `epoch` that the block's own chain determines
+    /// (`table_digest`). Honest nodes vote only for a block that names their table of its epoch, so a vote binds
+    /// the table its block is judged by; votes on another branch name that branch's table.
+    pub table: Digest,
     pub payload: Vec<Digest>,
     pub signature: Signature,
 }
@@ -58,6 +62,7 @@ impl Block {
         author: PublicKey,
         round: Round,
         epoch: EpochNumber,
+        table: Digest,
         payload: Vec<Digest>,
         mut signature_service: SignatureService,
     ) -> Self {
@@ -71,6 +76,7 @@ impl Block {
             author,
             round,
             epoch,
+            table,
             payload,
             signature: Signature::default(),
         };
@@ -140,6 +146,7 @@ impl Hash for Block {
     fn digest(&self) -> Digest {
         block_digest(
             self.epoch,
+            &self.table,
             &self.author,
             self.round,
             &self.payload,
@@ -166,6 +173,7 @@ pub struct BlockHeader {
     pub author: PublicKey,
     pub round: Round,
     pub epoch: EpochNumber,
+    pub table: Digest,
     pub payload: Vec<Digest>,
     pub accusations: Vec<Digest>,
     pub otxs: Vec<Digest>,
@@ -182,6 +190,7 @@ impl Block {
             author: self.author,
             round: self.round,
             epoch: self.epoch,
+            table: self.table.clone(),
             payload: self.payload.clone(),
             accusations: self.accusations.iter().map(|a| a.digest()).collect(),
             otxs: self.otxs.iter().map(|x| x.id()).collect(),
@@ -195,6 +204,7 @@ impl Hash for BlockHeader {
     fn digest(&self) -> Digest {
         block_digest(
             self.epoch,
+            &self.table,
             &self.author,
             self.round,
             &self.payload,
@@ -222,6 +232,7 @@ pub fn set_tc_outside_block(on: bool) {
 #[allow(clippy::too_many_arguments)]
 fn block_digest(
     epoch: EpochNumber,
+    table: &Digest,
     author: &PublicKey,
     round: Round,
     payload: &[Digest],
@@ -241,6 +252,7 @@ fn block_digest(
     }
     let mut hasher = Sha512::new();
     hasher.update(epoch.to_le_bytes());
+    hasher.update(table);
     hasher.update(author.0);
     hasher.update(round.to_le_bytes());
     for x in payload {
@@ -344,6 +356,20 @@ pub fn timeout_digest(epoch: EpochNumber, round: Round, high_qc_round: Round, nr
     hasher.update(round.to_le_bytes());
     hasher.update(high_qc_round.to_le_bytes());
     hasher.update([nr as u8]);
+    Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+}
+
+/// The digest of a weight table (E2, `Block::table`): its epoch and every member's stake, in key order. Addresses,
+/// leader flags and the handover are left out: they do not decide whether a certificate has a quorum.
+pub fn table_digest(committee: &Committee) -> Digest {
+    let mut members: Vec<_> = committee.authorities.iter().map(|(name, a)| (*name, a.stake)).collect();
+    members.sort_by_key(|(name, _)| *name);
+    let mut hasher = Sha512::new();
+    hasher.update(committee.epoch.to_le_bytes());
+    for (name, stake) in members {
+        hasher.update(name.0);
+        hasher.update((stake as u64).to_le_bytes());
+    }
     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
 }
 
@@ -886,9 +912,10 @@ impl From<&Timeout> for SignedTimeout {
 pub enum Evidence {
     /// E1: two votes of one signer for the same (epoch, round) and different blocks.
     DoubleVote(Vote, Vote),
-    /// E2: a vote for a block that breaks the voting rule: its round is neither the one after its QC nor
-    /// justified by its TC (structural check; the certificates' signatures are not needed). The block is given
-    /// by its header, which hashes to the digest the vote signs.
+    /// E2: a vote for a block that breaks the voting rule. Either its round is neither the one after its QC nor
+    /// justified by its TC (structural, no weight table needed), or its TC is not a valid TC under the weight
+    /// table the block itself names (`Block::table`, theory §2.3: the table of the block's own chain). The block
+    /// is given by its header, which hashes to the digest the vote signs and so binds both the TC and the table.
     InvalidBlock(Vote, BlockHeader),
     /// E3: a vote at round v1 for a block certifying round j, and a timeout of the same signer at a round
     /// v2 >= v1 reporting a high QC below j. The block is given by its header.
@@ -933,9 +960,55 @@ impl Evidence {
         !matches!(self, Evidence::NrContradiction(..))
     }
 
+    /// The weight table the evidence is judged by, if it needs one: for E2, the table its block names.
+    pub fn table(&self) -> Option<&Digest> {
+        match self {
+            Evidence::InvalidBlock(_, block) => Some(&block.table),
+            _ => None,
+        }
+    }
+
+    /// `holds`, with the E2 check of the block's TC against `table`: the weight table whose digest the block
+    /// names, when the judge has it. A judge without that table (another branch's) cannot tell, and does not
+    /// count the TC check: it never judges a block by a table the block did not name.
+    pub fn holds_under(&self, table: Option<&Committee>) -> bool {
+        if self.holds() {
+            return true;
+        }
+        match (self, table) {
+            (Evidence::InvalidBlock(vote, block), Some(table)) => {
+                vote.hash == block.digest()
+                    && vote.round == block.round
+                    && vote.epoch == block.epoch
+                    && !TC_OUTSIDE_BLOCK.load(Ordering::Relaxed)
+                    && table_digest(table) == block.table
+                    // A TC of the previous epoch (the first block of an epoch) is judged by that epoch's table,
+                    // which the block does not name: no verdict then.
+                    && block.tc.as_ref().map_or(false, |tc| tc.epoch == block.epoch && tc.verify(table).is_err())
+            }
+            _ => false,
+        }
+    }
+
+    /// `verify` with the weight tables the judge holds, looked up by digest (E2).
+    pub fn verify_with<'a, F>(&self, tables: F) -> ConsensusResult<()>
+    where
+        F: Fn(&Digest) -> Option<&'a Committee>,
+    {
+        let vote = self.vote();
+        let table = self.table().and_then(|digest| tables(digest));
+        ensure!(self.holds_under(table), ConsensusError::MalformedEvidence(vote.author));
+        self.check_signatures()
+    }
+
     pub fn verify(&self) -> ConsensusResult<()> {
         let vote = self.vote();
         ensure!(self.holds(), ConsensusError::MalformedEvidence(vote.author));
+        self.check_signatures()
+    }
+
+    fn check_signatures(&self) -> ConsensusResult<()> {
+        let vote = self.vote();
         vote.signature.verify(&vote.digest(), &vote.author)?;
         match self {
             Evidence::DoubleVote(_, other) => other.signature.verify(&other.digest(), &other.author)?,

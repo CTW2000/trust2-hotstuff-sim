@@ -1,5 +1,6 @@
 use super::*;
 use crate::common::{committee, keys, EPOCH};
+use crate::config::EpochNumber;
 use crate::messages::{Block, Timeout, Vote, QC, TC};
 use crypto::{Digest, PublicKey};
 
@@ -179,4 +180,68 @@ fn without_the_tc_in_the_block_the_e2_step_would_blame_honest_voters() {
     let (cx, cy) = first_conflict(&a, &b).unwrap();
     assert_eq!(judge(&cx, &cy, &b, true).case, Case::Invalid);
     assert_eq!(judge(&cx, &cy, &b, false).case, Case::C3);
+}
+
+/// A chain from `start` with a block at each (round, epoch), certified by QCs whose signatures do not matter here.
+fn chain_in(start: QC, blocks: &[(Round, EpochNumber)], tag: u8) -> Records {
+    let keys = keys();
+    let mut qc = start;
+    let mut chain = Vec::new();
+    for &(round, epoch) in blocks {
+        let (author, secret) = &keys[round as usize % keys.len()];
+        let mut block = Block::new_from_key(qc.clone(), *author, round, vec![Digest([tag; 32])], secret);
+        block.epoch = epoch;
+        qc = QC { hash: block.digest(), round, epoch, votes: Vec::new() };
+        chain.push(block);
+    }
+    Records { chain, high_qc: qc }
+}
+
+fn rounds_in(rounds: std::ops::RangeInclusive<Round>, epoch: EpochNumber) -> Vec<(Round, EpochNumber)> {
+    rounds.map(|r| (r, epoch)).collect()
+}
+
+/// Epochs of 10 rounds; the sides share rounds 1..=fork-1, then each has its own blocks up to round 15. The first epoch
+/// ends at its first block of round >= 10 (B10), and the next starts at round 12.
+fn forked_at(fork: Round) -> (Records, Records) {
+    let shared = chain_in(QC::genesis(), &rounds_in(1..=fork - 1, EPOCH), 0);
+    let side = |tag| {
+        let mut blocks = Vec::new();
+        for r in fork..=15 {
+            blocks.push((r, if r <= 11 { EPOCH } else { EPOCH + 1 }));
+        }
+        let own = chain_in(shared.high_qc.clone(), &blocks, tag);
+        Records { chain: [shared.chain.clone(), own.chain].concat(), high_qc: own.high_qc }
+    };
+    (side(1), side(2))
+}
+
+#[test]
+fn a_fork_is_judged_in_the_first_epoch_both_sides_committed_off_the_other() {
+    // Theorem 5: forked at round 8, before the terminal block, both sides commit off the other's chain in the first
+    // epoch already (round 8 onwards), so e* is the first epoch even though both go on into the next one.
+    let (a, b) = forked_at(8);
+    let (epoch, cx, cy) = conflict_by_epoch(&a, &b).unwrap();
+    assert_eq!(epoch, EPOCH);
+    assert_eq!((cx.x.epoch, cy.x.epoch, cx.x.round), (EPOCH, EPOCH, 8));
+
+    // Forked at round 13, after both entered the next epoch on the same terminal block: e* is the next epoch.
+    let (a, b) = forked_at(13);
+    let (epoch, cx, _) = conflict_by_epoch(&a, &b).unwrap();
+    assert_eq!((epoch, cx.x.round), (EPOCH + 1, 13));
+}
+
+#[test]
+fn replayed_ledgers_share_the_table_of_the_fork_epoch() {
+    // H1': W_{e*} depends on the ledger up to G_{e*-2} only, so both sides replay the same table for e*. Each side's
+    // ledger reaches its own terminal block B10 of the first epoch; the suffix block B11 stays off the ledger (H4).
+    let config = crate::common::test_epoch_config(10);
+    let (a, b) = forked_at(8);
+    let (ta, tb) = (replay_tables(&a, &committee(), config), replay_tables(&b, &committee(), config));
+    assert_eq!(table_digest(&ta[&EPOCH]), table_digest(&tb[&EPOCH]));
+    assert!(ta.contains_key(&(EPOCH + 2)), "the table two epochs ahead is computed at the terminal block");
+    assert_eq!(terminals(&a, &committee(), config), vec![(EPOCH, 10)]);
+    assert_eq!(terminals(&b, &committee(), config), vec![(EPOCH, 10)]);
+    let sweep = e2_sweep(&a, &ta, &b);
+    assert_eq!((sweep.blocks, sweep.own_blocks, sweep.named_blocks), (0, 0, 0), "no TC in these chains");
 }

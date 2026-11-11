@@ -13,13 +13,20 @@
 //! the QC of the first block that breaks it have E2 (the theorem's first step; honest code never certifies one).
 //! Only the TC embedded in Z ties C3 to the records: a node keeps no other TC (DESIGN.md §15.15, S3). Where the TC
 //! is not part of the block (`tc_outside_block`), stored blocks lack it and look invalid, so the E2 step is skipped.
+//!
+//! Across epochs (theorem 5 of the paper, DESIGN.md §15.24): the two ledgers are replayed through the same `Epochs` as
+//! the nodes (H4 included) to get each side's weight tables; the fork is judged in the first epoch e* in which both
+//! sides committed off the other's chain, by the table W_{e*}, which both sides share (H1': it depends on the ledger
+//! up to G_{e*-2} only). An E2 sweep also judges the other side's blocks after the fork by the judge's own tables (as a
+//! judge that ignored H2/E2's table rule would) and by the table each block names (the protocol).
 
 use crate::config::{Committee, EpochNumber, Parameters, Stake};
+use crate::epoch::EpochConfig;
 use crate::epoch::Epochs;
 use crate::consensus::Round;
-use crate::messages::{extends_validly, Block, Evidence, SignedTimeout, Timeout, Vote, QC, TC};
+use crate::messages::{extends_validly, table_digest, Block, Evidence, SignedTimeout, Timeout, Vote, QC, TC};
 use crypto::{Digest, Hash as _, PublicKey};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use store::Store;
 
 #[cfg(test)]
@@ -99,6 +106,128 @@ pub fn first_conflict(a: &Records, b: &Records) -> Option<(CommitProof, CommitPr
     let x = a.commit_proofs().into_iter().find(|p| !db.contains(&p.x.digest()))?;
     let y = b.commit_proofs().into_iter().find(|p| !da.contains(&p.x.digest()))?;
     Some(if x.x.round <= y.x.round { (x, y) } else { (y, x) })
+}
+
+/// Theorem 5: the first epoch in which each side committed a block off the other's chain, with those first direct
+/// commits (the one of the smaller view first). Within it both sides judge by the same table.
+pub fn conflict_by_epoch(a: &Records, b: &Records) -> Option<(EpochNumber, CommitProof, CommitProof)> {
+    let (da, db) = (a.digests(), b.digests());
+    let off = |records: &Records, other: &HashSet<Digest>| {
+        let mut first = BTreeMap::new();
+        for proof in records.commit_proofs() {
+            if !other.contains(&proof.x.digest()) {
+                first.entry(proof.x.epoch).or_insert(proof);
+            }
+        }
+        first
+    };
+    let (oa, ob) = (off(a, &db), off(b, &da));
+    let epoch = *oa.keys().find(|e| ob.contains_key(e))?;
+    let (x, y) = (oa[&epoch].clone(), ob[&epoch].clone());
+    let (x, y) = if x.x.round <= y.x.round { (x, y) } else { (y, x) };
+    Some((epoch, x, y))
+}
+
+/// The weight tables of every epoch a node's ledger reached, replayed from its records: the blocks up to its last
+/// direct commit, in chain order, through the same `Epochs` as the node (H4: blocks after a terminal block skipped).
+pub fn replay_tables(records: &Records, roster: &Committee, config: EpochConfig) -> BTreeMap<EpochNumber, Committee> {
+    fn keep(epochs: &Epochs, tables: &mut BTreeMap<EpochNumber, Committee>) {
+        for table in epochs.tables() {
+            tables.entry(table.epoch).or_insert_with(|| table.clone());
+        }
+    }
+    let mut epochs = Epochs::new(roster, config);
+    let mut tables = BTreeMap::new();
+    keep(&epochs, &mut tables);
+    let last = match records.commit_proofs().last() {
+        Some(proof) => proof.x.round,
+        None => return tables,
+    };
+    for block in records.chain.iter().take_while(|b| b.round <= last) {
+        if epochs.after_terminal(block) {
+            continue;
+        }
+        epochs.record(block);
+        if epochs.is_terminal(block) {
+            epochs.enter_next(block);
+            keep(&epochs, &mut tables);
+        }
+    }
+    tables
+}
+
+/// The terminal blocks of a node's records as its ledger saw them: (epoch, round).
+pub fn terminals(records: &Records, roster: &Committee, config: EpochConfig) -> Vec<(EpochNumber, Round)> {
+    let mut epochs = Epochs::new(roster, config);
+    let mut found = Vec::new();
+    let last = records.commit_proofs().last().map_or(0, |proof| proof.x.round);
+    for block in records.chain.iter().take_while(|b| b.round <= last) {
+        if epochs.after_terminal(block) {
+            continue;
+        }
+        if epochs.is_terminal(block) {
+            found.push((block.epoch, block.round));
+            epochs.enter_next(block);
+        }
+    }
+    found
+}
+
+/// What an E2 judge holding `judge`'s records and tables makes of the blocks of `other`'s records off its own chain
+/// that carry a TC of their own epoch and are certified in those records.
+#[derive(Default)]
+pub struct Sweep {
+    pub blocks: usize,
+    /// Blocks naming a table other than the judge's own for their epoch (the tables diverged).
+    pub other_table: usize,
+    /// Judged by the judge's own table of the block's epoch: blocks found invalid and the voters blamed.
+    pub own_blocks: usize,
+    pub own_voters: BTreeSet<PublicKey>,
+    /// Judged by the table the block names (the protocol): found invalid, voters blamed, and blocks left unjudged
+    /// because the judge does not hold that table.
+    pub named_blocks: usize,
+    pub named_voters: BTreeSet<PublicKey>,
+    pub unjudged: usize,
+}
+
+pub fn e2_sweep(judge: &Records, tables: &BTreeMap<EpochNumber, Committee>, other: &Records) -> Sweep {
+    let own_chain = judge.digests();
+    let by_digest: HashMap<Digest, &Committee> = tables.values().map(|t| (table_digest(t), t)).collect();
+    let mut sweep = Sweep::default();
+    for (i, block) in other.chain.iter().enumerate() {
+        if own_chain.contains(&block.digest()) {
+            continue;
+        }
+        let tc_of_epoch = block.tc.as_ref().map_or(false, |tc| tc.epoch == block.epoch);
+        let qc = match other.qc_of(i) {
+            Some(qc) if tc_of_epoch => qc,
+            _ => continue,
+        };
+        let tc = block.tc.as_ref().unwrap();
+        let signers = qc.votes.iter().map(|(name, _)| *name);
+        sweep.blocks += 1;
+        let own = tables.get(&block.epoch);
+        if own.map_or(false, |t| table_digest(t) != block.table) {
+            sweep.other_table += 1;
+        }
+        if own.map_or(false, |t| tc.verify(t).is_err()) {
+            sweep.own_blocks += 1;
+            sweep.own_voters.extend(signers.clone());
+        }
+        match by_digest.get(&block.table) {
+            None => sweep.unjudged += 1,
+            Some(_) if qc.votes.is_empty() => (),
+            Some(table) => {
+                let (name, signature) = &qc.votes[0];
+                let first = vote(&qc.hash, qc.round, qc.epoch, *name, signature);
+                if Evidence::InvalidBlock(first, block.header()).holds_under(Some(table)) {
+                    sweep.named_blocks += 1;
+                    sweep.named_voters.extend(signers);
+                }
+            }
+        }
+    }
+    sweep
 }
 
 /// The accountability theorem for the commit proofs `cx` and `cy` (view(X) <= view(Y)); `y_records` are the records
@@ -285,19 +414,43 @@ pub async fn read_records(path: &str) -> Result<Records, String> {
     Ok(Records { chain, high_qc })
 }
 
-/// `node forensics` (DESIGN.md §15.15): the stores of two stopped nodes, one of each side. The culprits' share is
-/// taken in the weight table of the first epoch (the experiment runs a single epoch).
+/// `node forensics` (DESIGN.md §15.15, §15.24): the stores of two stopped nodes, one of each side. The fork is judged
+/// in the first epoch e* in which both sides committed off the other's chain, and the culprits' share taken in W_{e*}.
 pub async fn report(committee: &Committee, parameters: &Parameters, a: &str, b: &str) -> Result<String, String> {
-    let table = Epochs::new(committee, crate::consensus::epoch_config(parameters)).current().clone();
+    let config = crate::consensus::epoch_config(parameters);
     let (ra, rb) = (read_records(a).await?, read_records(b).await?);
+    let (tables_a, tables_b) = (replay_tables(&ra, committee, config), replay_tables(&rb, committee, config));
+    let sweep_json = |s: Sweep| {
+        serde_json::json!({
+            "blocks": s.blocks, "other_table": s.other_table,
+            "own_blocks": s.own_blocks,
+            "own_voters": s.own_voters.iter().map(|k| k.encode_base64()).collect::<Vec<_>>(),
+            "named_blocks": s.named_blocks,
+            "named_voters": s.named_voters.iter().map(|k| k.encode_base64()).collect::<Vec<_>>(),
+            "unjudged": s.unjudged,
+        })
+    };
+    let epochs_json = serde_json::json!({
+        "terminals_a": terminals(&ra, committee, config),
+        "terminals_b": terminals(&rb, committee, config),
+        "e2_a_judges_b": sweep_json(e2_sweep(&ra, &tables_a, &rb)),
+        "e2_b_judges_a": sweep_json(e2_sweep(&rb, &tables_b, &ra)),
+    });
     let top = |r: &Records| r.chain.last().map_or(0, |b| b.round);
     let mut out = serde_json::json!({
         "a_top": top(&ra), "b_top": top(&rb),
         "a_commits": ra.commit_proofs().len(), "b_commits": rb.commit_proofs().len(),
         "fork": false,
     });
-    if let Some((cx, cy)) = first_conflict(&ra, &rb) {
+    let conflict = conflict_by_epoch(&ra, &rb).or_else(|| first_conflict(&ra, &rb).map(|(x, y)| (x.x.epoch, x, y)));
+    if let Some((e_star, cx, cy)) = conflict {
         let x_from_a = ra.digests().contains(&cx.x.digest());
+        let first = Epochs::new(committee, config).current().clone();
+        let table = tables_a.get(&e_star).cloned().unwrap_or(first);
+        let tables_agree = match (tables_a.get(&e_star), tables_b.get(&e_star)) {
+            (Some(ta), Some(tb)) => Some(table_digest(ta) == table_digest(tb)),
+            _ => None,
+        };
         let finding = judge(&cx, &cy, if x_from_a { &rb } else { &ra }, !parameters.tc_outside_block);
         let count = |e1: bool| {
             finding.evidence.iter().filter(|e| matches!(e, Evidence::DoubleVote(..)) == e1).count()
@@ -313,7 +466,7 @@ pub async fn report(committee: &Committee, parameters: &Parameters, a: &str, b: 
             "fork": true,
             "x_side": if x_from_a { "a" } else { "b" },
             "x_round": finding.x_round, "y_round": finding.y_round, "z_round": finding.z_round,
-            "x_epoch": cx.x.epoch, "y_epoch": cy.x.epoch,
+            "x_epoch": cx.x.epoch, "y_epoch": cy.x.epoch, "e_star": e_star, "tables_agree": tables_agree,
             "case": format!("{:?}", finding.case),
             "e1": count(true),
             "e2": finding.evidence.iter().filter(|e| matches!(e, Evidence::InvalidBlock(..))).count(),
@@ -324,5 +477,6 @@ pub async fn report(committee: &Committee, parameters: &Parameters, a: &str, b: 
             "missing": finding.missing,
         });
     }
+    out["epochs"] = epochs_json;
     Ok(out.to_string())
 }

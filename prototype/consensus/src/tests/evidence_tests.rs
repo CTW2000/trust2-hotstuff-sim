@@ -1,5 +1,8 @@
 use super::*;
-use crate::common::{keys, EPOCH};
+use crate::common::{committee, keys, test_epoch_config, EPOCH};
+use crate::aggregator::Aggregator;
+use crate::epoch::Epochs;
+use crate::messages::table_digest;
 use crate::messages::Timeout;
 use crypto::SecretKey;
 
@@ -152,4 +155,96 @@ fn regression_in_either_order() {
     let found = detector.block(&b3);
     assert_eq!(kinds(&found), vec!["E3"]);
     assert!(found[0].verify().is_ok());
+}
+
+/// The weight table of the fixture members with base weights `stakes` (in key order), in its first epoch.
+fn table_with(stakes: [u32; 4]) -> Committee {
+    let mut roster = committee();
+    for ((name, _), stake) in keys().iter().zip(stakes) {
+        roster.authorities.get_mut(name).unwrap().stake = stake;
+    }
+    Epochs::new(&roster, test_epoch_config(0)).current().clone()
+}
+
+/// The TC of round 4 that members 1, 2 and 3 make, each reporting high QC 2, under `table`.
+fn tc_of_three(table: &Committee) -> TC {
+    let mut aggregator = Aggregator::new();
+    (1..4)
+        .find_map(|i| {
+            let (name, secret) = key(i);
+            let timeout = Timeout::new_from_key(qc_of(2), 4, false, name, &secret);
+            aggregator.add_timeout(timeout, table).unwrap()
+        })
+        .unwrap()
+}
+
+/// Block 5 extending QC 2 with `tc`, naming the table `table`.
+fn block_naming(tc: TC, table: &Committee) -> Block {
+    let (name, secret) = key(0);
+    let mut block = Block::new_from_key_with_tc(qc_of(2), Some(tc), name, 5, Vec::new(), &secret);
+    block.table = table_digest(table);
+    block.signature = crypto::Signature::new(&block.digest(), &secret);
+    block
+}
+
+#[test]
+fn e2_judges_the_tc_by_the_table_the_block_names() {
+    // E2 (theory §2.3): members 1-3 hold 3/4 of table A but only 3/10 of table B. Their TC is valid under A and not
+    // under B. A block naming A with it is valid; a vote for it is no E2 under any table. A block naming B with it is
+    // invalid: a vote for it is E2 to a judge holding B, while a judge without B gives no verdict, and A, which the
+    // block does not name, is never used to judge it.
+    let a = table_with([1, 1, 1, 1]);
+    let b = table_with([7, 1, 1, 1]);
+    let tc = tc_of_three(&a);
+    assert!(tc.verify(&a).is_ok() && tc.verify(&b).is_err());
+
+    let valid = block_naming(tc.clone(), &a);
+    let e2 = |block: &Block| Evidence::InvalidBlock(vote(block, 2), block.header());
+    for table in [None, Some(&a), Some(&b)] {
+        assert!(!e2(&valid).holds_under(table));
+    }
+
+    let invalid = block_naming(tc, &b);
+    assert!(e2(&invalid).holds_under(Some(&b)));
+    assert!(!e2(&invalid).holds_under(None));
+    assert!(!e2(&invalid).holds_under(Some(&a)));
+    assert!(e2(&invalid).verify_with(|d| [&a, &b].iter().copied().find(|t| table_digest(t) == *d)).is_ok());
+    assert!(e2(&invalid).verify_with(|d| [&a].iter().copied().find(|t| table_digest(t) == *d)).is_err());
+}
+
+#[test]
+fn e2_gives_no_verdict_on_a_tc_of_the_previous_epoch() {
+    // The first block of an epoch may carry a TC of the previous one, judged by that epoch's table, which the block
+    // does not name: no verdict from the table check, whatever the table says.
+    let b = table_with([7, 1, 1, 1]);
+    let tc = tc_of_three(&table_with([1, 1, 1, 1]));
+    let (name, secret) = key(0);
+    let mut block = Block::new_from_key_with_tc(qc_of(2), Some(tc), name, 5, Vec::new(), &secret);
+    block.epoch = EPOCH + 1;
+    block.table = table_digest(&Committee { epoch: EPOCH + 1, ..b.clone() });
+    block.signature = crypto::Signature::new(&block.digest(), &secret);
+    let (voter, voter_secret) = key(2);
+    let vote = Vote { epoch: EPOCH + 1, ..Vote::new_from_key(block.digest(), 5, voter, &voter_secret) };
+    let next = Committee { epoch: EPOCH + 1, ..b };
+    assert!(!Evidence::InvalidBlock(vote, block.header()).holds_under(Some(&next)));
+}
+
+#[test]
+fn detector_finds_e2_only_with_the_named_table() {
+    // The detector judges a block's TC by the table the block names, if it holds that table.
+    let a = table_with([1, 1, 1, 1]);
+    let b = table_with([7, 1, 1, 1]);
+    let invalid = block_naming(tc_of_three(&a), &b);
+
+    let mut without = Detector::new();
+    without.set_tables([&a]);
+    let mut found = without.block(&invalid);
+    found.extend(without.vote(vote(&invalid, 2)));
+    assert!(found.is_empty(), "{:?}", found);
+
+    let mut with = Detector::new();
+    with.set_tables([&a, &b]);
+    let mut found = with.block(&invalid);
+    found.extend(with.vote(vote(&invalid, 2)));
+    assert_eq!(kinds(&found), vec!["E2"]);
 }

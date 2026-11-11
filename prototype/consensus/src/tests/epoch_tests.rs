@@ -621,3 +621,44 @@ fn ablation_switch_removes_the_reputation_budget() {
     assert_eq!((g2.threshold, g2.exclusion), (G2Config::default().threshold, G2Config::default().exclusion));
     assert_eq!(scaled(&config(25)).1.b_rep, G2Config::default().b_rep);
 }
+
+#[test]
+fn terminal_blocks_and_the_suffix_after_them() {
+    // H2 / H4 with epochs of 10 rounds: B10 is the terminal block G of the first epoch. A block whose parent is G or
+    // after it, in the same epoch, is a suffix block (proposed empty); once the ledger has passed G, the blocks of
+    // that epoch it commits are off the ledger. Entering the next epoch on G keeps G for the H2 check.
+    let mut epochs = Epochs::new(&committee(), config(10));
+    assert!(!epochs.suffix_after(EPOCH, 9));
+    assert!(epochs.suffix_after(EPOCH, 10));
+    assert!(epochs.terminal(EPOCH).is_none());
+
+    let g = block(EPOCH, 10);
+    assert!(epochs.is_terminal(&g));
+    assert!(!epochs.after_terminal(&g));
+    epochs.enter_next(&g);
+    assert_eq!(epochs.epoch(), EPOCH + 1);
+    assert_eq!(epochs.terminal(EPOCH), Some(&(g.digest(), 10)));
+    assert!(epochs.after_terminal(&block(EPOCH, 11)));
+    assert!(!epochs.after_terminal(&block(EPOCH + 1, 12)));
+    assert!(epochs.suffix_after(EPOCH, 10));
+    // The new epoch starts at G's round: its own end is 10 rounds later.
+    assert!(!epochs.suffix_after(EPOCH + 1, 19));
+    assert!(epochs.suffix_after(EPOCH + 1, 20));
+}
+
+#[test]
+fn a_single_epoch_run_has_no_suffix() {
+    let epochs = Epochs::new(&committee(), config(0));
+    assert!(!epochs.suffix_after(EPOCH, 1_000));
+    assert!(!epochs.after_terminal(&block(EPOCH, 1_000)));
+}
+
+#[test]
+fn tables_are_found_by_digest() {
+    // E2: the table a block names is looked up by digest among the kept ones.
+    let epochs = Epochs::new(&committee(), config(10));
+    let table = epochs.current().clone();
+    assert!(epochs.table_by_digest(&crate::messages::table_digest(&table)).is_some());
+    let other = Committee { epoch: EPOCH + 7, ..table };
+    assert!(epochs.table_by_digest(&crate::messages::table_digest(&other)).is_none());
+}

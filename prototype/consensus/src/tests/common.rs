@@ -1,6 +1,7 @@
 use crate::config::{Committee, EpochNumber};
 use crate::consensus::Round;
-use crate::messages::{Accusation, Attestation, Block, Evidence, OmitProof, Otx, Timeout, Vote, QC, TC};
+use crate::epoch::{EpochConfig, Epochs};
+use crate::messages::{table_digest, Accusation, Attestation, Block, Evidence, OmitProof, Otx, Timeout, Vote, QC, TC};
 use bytes::Bytes;
 use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
@@ -15,6 +16,32 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 // Epoch of the fixture committee.
 pub const EPOCH: EpochNumber = 100;
+
+// The epoch configuration of the core tests (no caps; `length` rounds per epoch, 0 for a single epoch).
+pub fn test_epoch_config(length: Round) -> EpochConfig {
+    EpochConfig {
+        length,
+        reference_length: 0,
+        entity_cap_ppm: 1_000_000,
+        class_cap_ppm: 1_000_000,
+        l_max_ppm: 100_000,
+        governance_malicious: false,
+        leader_rule: Default::default(),
+        g2_threshold: 0,
+        g2_no_reputation: false,
+        aptos_failure_percent: 0,
+    }
+}
+
+// E2: the digest of the fixture committee's weight table in its first epochs, which the fixture blocks name.
+pub fn table() -> Digest {
+    table_digest(Epochs::new(&committee(), test_epoch_config(0)).current())
+}
+
+// The digest of the fixture committee's weight table of `epoch` (EPOCH or EPOCH + 1: the first two epochs share it).
+pub fn table_at(epoch: EpochNumber) -> Digest {
+    table_digest(Epochs::new(&committee(), test_epoch_config(0)).get(epoch).expect("a table of the first two epochs"))
+}
 
 // An observed transaction of owner `owner`, signed by it; `tag` tells apart two with the same nonce.
 pub fn signed_otx(owner: u8, nonce: u64, tag: u8) -> Otx {
@@ -113,6 +140,7 @@ impl Block {
             author,
             round,
             epoch: EPOCH,
+            table: table(),
             payload,
             signature: Signature::default(),
         };

@@ -1,6 +1,6 @@
 use crate::config::{Committee, EpochNumber, Stake};
 use crate::consensus::{ConsensusMessage, Round};
-use crate::messages::{Accusation, Block, Evidence, OmitProof, Otx, MAX_ACCUSATIONS, MAX_EVIDENCE, MAX_OMISSIONS, QC, TC};
+use crate::messages::{table_digest, Accusation, Block, Evidence, OmitProof, Otx, MAX_ACCUSATIONS, MAX_EVIDENCE, MAX_OMISSIONS, QC, TC};
 use bytes::Bytes;
 use crypto::{Digest, PublicKey, SignatureService};
 use futures::stream::futures_unordered::FuturesUnordered;
@@ -21,6 +21,9 @@ pub enum ProposerMessage {
         committee: Committee,
         done: Round,
         otxs: Vec<Otx>,
+        /// H4: the block comes after the terminal block of its epoch and only certifies it: propose it empty
+        /// (no transactions, no ledger facts; they wait for the next epoch's blocks).
+        suffix: bool,
     },
     Cleanup(Vec<Digest>),
     /// G2: an AT accusation to put on the ledger.
@@ -88,23 +91,26 @@ impl Proposer {
         deliver
     }
 
-    async fn make_block(&mut self, round: Round, qc: QC, tc: Option<TC>, otxs: Vec<Otx>) {
+    async fn make_block(&mut self, round: Round, qc: QC, tc: Option<TC>, otxs: Vec<Otx>, suffix: bool) {
+        // H4: a block after the terminal block carries nothing for the ledger.
+        let keep = if suffix { 0 } else { usize::MAX };
         // G2 evidence waits here until it is committed (or processed); the oldest goes first.
         let accusations: Vec<_> = self
             .accusations
             .values()
             .filter(|a| a.round < round)
-            .take(MAX_ACCUSATIONS)
+            .take(MAX_ACCUSATIONS.min(keep))
             .cloned()
             .collect();
         let omissions: Vec<_> = self
             .omissions
             .values()
             .filter(|o| o.round < round)
-            .take(MAX_OMISSIONS)
+            .take(MAX_OMISSIONS.min(keep))
             .cloned()
             .collect();
-        let evidence: Vec<_> = self.evidence.values().take(MAX_EVIDENCE).cloned().collect();
+        let evidence: Vec<_> = self.evidence.values().take(MAX_EVIDENCE.min(keep)).cloned().collect();
+        let payload = if suffix { Vec::new() } else { self.buffer.drain().collect() };
 
         // Generate a new block.
         let block = Block::new(
@@ -117,7 +123,8 @@ impl Proposer {
             self.name,
             round,
             self.committee.epoch,
-            /* payload */ self.buffer.drain().collect(),
+            table_digest(&self.committee),
+            payload,
             self.signature_service.clone(),
         )
         .await;
@@ -182,11 +189,11 @@ impl Proposer {
                     //}
                 },
                 Some(message) = self.rx_message.recv() => match message {
-                    ProposerMessage::Make { round, qc, tc, committee, done, otxs } => {
+                    ProposerMessage::Make { round, qc, tc, committee, done, otxs, suffix } => {
                         self.committee = committee;
                         self.accusations.retain(|(_, r), _| *r > done);
                         self.omissions.retain(|(_, r, _), _| *r > done);
-                        self.make_block(round, qc, tc, otxs).await
+                        self.make_block(round, qc, tc, otxs, suffix).await
                     }
                     ProposerMessage::Cleanup(digests) => {
                         for x in &digests {
