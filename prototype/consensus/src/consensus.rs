@@ -110,6 +110,8 @@ impl Consensus {
                 regress: parameters.regress,
                 frame: parameters.frame,
                 silent: parameters.silent,
+                fill_suffix: parameters.fill_suffix,
+                withhold_proof: parameters.withhold_proof,
                 vote_from: parameters.fork_vote_from,
                 vote_until: parameters.fork_vote_until,
                 tc_outside_block: parameters.tc_outside_block,

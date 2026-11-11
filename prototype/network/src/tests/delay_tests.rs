@@ -70,3 +70,35 @@ fn a_region_outage_holds_messages_across_the_cut_until_it_ends() {
     // Without an outage nothing is held.
     assert_eq!(Delays::from_json(JSON, 0).unwrap().held_ms(1, 2000), 0.0);
 }
+
+#[test]
+fn a_recurring_outage_holds_messages_in_every_window() {
+    // From t = 1000, an outage of 3000 ms every 10000 ms.
+    let json = JSON.replace(
+        "\"bandwidth_mbps\": 1000.0",
+        "\"bandwidth_mbps\": 1000.0, \"outage\": [0], \"outage_from_ms\": 1000, \"outage_until_ms\": 4000, \"outage_period_ms\": 10000",
+    );
+    let inside = Delays::from_json(&json, 0).unwrap();
+    assert_eq!(inside.held_ms(1, 999), 0.0);
+    assert_eq!(inside.held_ms(1, 1500), 2500.0);
+    assert_eq!(inside.held_ms(1, 5000), 0.0);
+    assert_eq!(inside.held_ms(1, 11000), 3000.0);
+    assert_eq!(inside.held_ms(1, 13999), 1.0);
+    assert_eq!(inside.held_ms(1, 14000), 0.0);
+    assert_eq!(inside.held_ms(0, 11000), 0.0);
+}
+
+#[test]
+fn bursts_raise_the_late_probability_for_a_while() {
+    // From t = 0, the first 2000 ms of every 10000 ms are a burst with late_p 0.5; otherwise 0.05.
+    let json = JSON.replace(
+        "\"bandwidth_mbps\": 1000.0",
+        "\"bandwidth_mbps\": 1000.0, \"late_p\": 0.05, \"burst_period_ms\": 10000, \"burst_ms\": 2000, \"burst_late_p\": 0.5",
+    );
+    let delays = Delays::from_json(&json, 0).unwrap();
+    assert_eq!(delays.late_p_at(500), 0.5);
+    assert_eq!(delays.late_p_at(2500), 0.05);
+    assert_eq!(delays.late_p_at(11999), 0.5);
+    assert_eq!(delays.late_p_at(12000), 0.05);
+    assert_eq!(Delays::from_json(JSON, 0).unwrap().late_p_at(500), 0.0);
+}

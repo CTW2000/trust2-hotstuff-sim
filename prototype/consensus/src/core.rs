@@ -107,6 +107,10 @@ pub struct Faults {
     pub frame: bool,
     /// As leader, never propose; vote and time out as usual (a Byzantine silent leader).
     pub silent: bool,
+    /// As leader, fill blocks after the terminal block (H4 test, DESIGN.md §15.25).
+    pub fill_suffix: bool,
+    /// As leader of the first block of an epoch, send it to half of the other nodes (handover test, §15.25).
+    pub withhold_proof: bool,
     /// Vote only in rounds vote_from..=vote_until (0: unbounded): one half of a split-brain member (§15.15).
     pub vote_from: Round,
     pub vote_until: Round,
@@ -658,9 +662,20 @@ impl Core {
             // the ledger, nor to the application.
             if self.epochs.after_terminal(&block) {
                 // NOTE: this log entry is used to count the blocks left off the ledger (benchmark/p5.py).
-                info!("Committed {} after the terminal block of epoch {}: not on the ledger (H4)", block, block.epoch);
+                info!(
+                    "Committed {} after the terminal block of epoch {}: not on the ledger (H4), {} batches",
+                    block,
+                    block.epoch,
+                    block.payload.len()
+                );
+                for x in &block.payload {
+                    // NOTE: this log entry is used to check that no batch of such a block is committed.
+                    info!("Off the ledger {} -> {:?}", block, x);
+                }
                 continue;
             }
+            // NOTE: this log entry is used to compare the ledgers of the nodes (benchmark/localstat.py).
+            info!("Ledger: {} {}", block, block.digest());
             // G2: the evidence on the ledger, up to and including the terminal block, decides the next table.
             self.epochs.record(&block);
             self.inclusion.commit(&block, Instant::now());
@@ -924,8 +939,12 @@ impl Core {
             false => (self.high_qc.clone(), tc),
         };
         // H4: a block after the terminal block of the epoch only certifies it: propose it empty.
-        let suffix = qc.epoch == committee.epoch && self.epochs.suffix_after(committee.epoch, qc.round);
+        let suffix = qc.epoch == committee.epoch
+            && self.epochs.suffix_after(committee.epoch, qc.round)
+            && !self.faults.fill_suffix;
         let otxs = if suffix { Vec::new() } else { self.inclusion.select() };
+        // Experiment switch: the first block of an epoch (its QC is of the previous one) to half the nodes only.
+        let withhold = self.faults.withhold_proof && qc.epoch < committee.epoch;
         self.tx_proposer
             .send(ProposerMessage::Make {
                 round: self.round,
@@ -935,6 +954,7 @@ impl Core {
                 done: self.epochs.done(),
                 otxs,
                 suffix,
+                withhold,
             })
             .await
             .expect("Failed to send message to proposer");

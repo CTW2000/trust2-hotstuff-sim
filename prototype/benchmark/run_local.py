@@ -116,7 +116,11 @@ def delays_file(args, committee):
         if args.fault == "outage":                           # region outage (DESIGN.md §15.22)
             start = int((args.start + args.fault_at) * 1000)
             table.update(outage=fault_nodes(args), outage_from_ms=start,
-                         outage_until_ms=start + int(args.fault_for * 1000))
+                         outage_until_ms=start + int(args.fault_for * 1000),
+                         outage_period_ms=int(args.fault_every * 1000))  # recurring (DESIGN.md §15.25)
+        if args.burst_period > 0:                            # bursts of congestion (DESIGN.md §15.25)
+            table.update(burst_period_ms=int(args.burst_period * 1000), burst_ms=int(args.burst_len * 1000),
+                         burst_late_p=args.burst_late_p, schedule_from_ms=int(args.start * 1000))
         json.dump(table, fh)
     return path
 
@@ -154,7 +158,7 @@ def run(args):
     hit = fault_nodes(args)
     if hit and (hit[-1] >= args.nodes - args.faults - sum((args.censor, args.equivocate, args.lie_nr,
                                                             args.invalid_block, args.regress, args.frame,
-                                                            args.silent))):
+                                                            args.silent, args.fill_suffix, args.withhold_proof))):
         sys.exit("the fault nodes overlap the experiment switches")
     if args.fault == "outage" and not delays:
         sys.exit("a region outage needs a network (--net base or wide)")
@@ -175,7 +179,8 @@ def run(args):
     tail = list(range(up - 1, -1, -1))
     roles = (("--censor", args.censor), ("--equivocate", args.equivocate), ("--lie-nr", args.lie_nr),
              ("--invalid-block", args.invalid_block), ("--regress", args.regress), ("--frame", args.frame),
-             ("--silent", args.silent))
+             ("--silent", args.silent), ("--fill-suffix", args.fill_suffix),
+             ("--withhold-proof", args.withhold_proof))
     for flag, count in roles:
         for i in tail[:count]:
             switches.setdefault(i, []).append(flag)
@@ -190,7 +195,8 @@ def run(args):
         node_procs[i] = (cmd, env, len(procs) - 1)
     if observer:
         targets = " ".join(committee.consensus[:up])
-        cmd = f"{observer} --rate {args.otx_rate} {targets}"
+        cmd = (f"{observer} --rate {args.otx_rate} --burst-size {args.otx_burst_size} "
+               f"--burst-every {args.otx_burst_every} --fanout {args.otx_fanout} {targets}")
         procs.append(launch(cmd, join(PathMaker.logs_path(), "observer.log")))
 
     try:
@@ -250,6 +256,15 @@ def main():
     ap.add_argument("--timeout-delay", type=int, default=1_000)
     ap.add_argument("--epoch-length", type=int, default=25, help="rounds per epoch (0: a single epoch)")
     ap.add_argument("--otx-rate", type=int, default=0, help="observed transactions per second (0: no observer)")
+    ap.add_argument("--otx-burst-size", type=int, default=0, help="observed transactions per burst (0: none)")
+    ap.add_argument("--otx-burst-every", type=int, default=20, help="seconds between bursts")
+    ap.add_argument("--otx-fanout", type=int, default=0, help="nodes each observed transaction goes to (0: f + 1)")
+    ap.add_argument("--burst-period", type=float, default=0.0, help="seconds between bursts of congestion (0: none)")
+    ap.add_argument("--burst-len", type=float, default=5.0, help="seconds each burst of congestion lasts")
+    ap.add_argument("--burst-late-p", type=float, default=0.4, help="late probability inside a burst")
+    ap.add_argument("--fill-suffix", type=int, default=0, help="booted nodes that fill blocks after a terminal block")
+    ap.add_argument("--withhold-proof", type=int, default=0,
+                    help="booted nodes that send the first block of an epoch to half the nodes")
     ap.add_argument("--attest-guard", type=int, default=500, help="attestation guard in ms")
     ap.add_argument("--censor", type=int, default=0, help="number of booted nodes that censor victim accounts")
     ap.add_argument("--equivocate", type=int, default=0, help="number of booted nodes that vote twice (E1)")
@@ -270,6 +285,7 @@ def main():
                     help="benign fault of honest nodes (DESIGN.md §15.22): crash, maintenance restart, region outage")
     ap.add_argument("--fault-nodes", type=int, default=3, help="number of honest nodes the fault hits")
     ap.add_argument("--fault-at", type=float, default=40.0, help="seconds after the launch the fault starts")
+    ap.add_argument("--fault-every", type=float, default=0.0, help="the outage recurs every this many seconds (0: once)")
     ap.add_argument("--fault-for", type=float, default=20.0,
                     help="seconds a restarted node is down, or a region outage lasts")
     ap.add_argument("--l-max-ppm", type=int, default=100_000, help="G1 suspension cap L_max in ppm")

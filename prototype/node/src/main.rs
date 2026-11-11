@@ -67,6 +67,12 @@ enum Command {
         /// Experiment switch: as leader, never propose (Byzantine silent leader, DESIGN.md §15.12).
         #[clap(long)]
         silent: bool,
+        /// Experiment switch: as leader, fill blocks after the terminal block (H4, DESIGN.md §15.25).
+        #[clap(long)]
+        fill_suffix: bool,
+        /// Experiment switch: send the first block of an epoch to half the nodes (handover, DESIGN.md §15.25).
+        #[clap(long)]
+        withhold_proof: bool,
     },
     /// Offline forensics of a fork between the stores of two stopped nodes (DESIGN.md §15.15).
     Forensics {
@@ -124,12 +130,14 @@ async fn main() {
             regress,
             frame,
             silent,
+            fill_suffix,
+            withhold_proof,
         } => match Node::new(
             &committee,
             &keys,
             &store,
             parameters,
-            Experiment { censor, equivocate, lie_nr, invalid_block, regress, frame, silent },
+            Experiment { censor, equivocate, lie_nr, invalid_block, regress, frame, silent, fill_suffix, withhold_proof },
         )
         .await
         {

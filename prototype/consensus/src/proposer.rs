@@ -24,6 +24,8 @@ pub enum ProposerMessage {
         /// H4: the block comes after the terminal block of its epoch and only certifies it: propose it empty
         /// (no transactions, no ledger facts; they wait for the next epoch's blocks).
         suffix: bool,
+        /// Experiment switch (DESIGN.md §15.25): send the block to half of the other nodes only.
+        withhold: bool,
     },
     Cleanup(Vec<Digest>),
     /// G2: an AT accusation to put on the ledger.
@@ -91,7 +93,7 @@ impl Proposer {
         deliver
     }
 
-    async fn make_block(&mut self, round: Round, qc: QC, tc: Option<TC>, otxs: Vec<Otx>, suffix: bool) {
+    async fn make_block(&mut self, round: Round, qc: QC, tc: Option<TC>, otxs: Vec<Otx>, suffix: bool, withhold: bool) {
         // H4: a block after the terminal block carries nothing for the ledger.
         let keep = if suffix { 0 } else { usize::MAX };
         // G2 evidence waits here until it is committed (or processed); the oldest goes first.
@@ -139,15 +141,18 @@ impl Proposer {
             }
         }
         debug!("Created {:?}", block);
+        // NOTE: this log entry is used to count the rounds each node led (benchmark/localstat.py).
+        info!("Proposed {} at epoch {}", block, block.epoch);
 
-        // Broadcast our new block.
+        // Broadcast our new block (experiment switch: the first block of an epoch to half the nodes only).
         debug!("Broadcasting {:?}", block);
-        let (names, addresses): (Vec<_>, _) = self
-            .committee
-            .broadcast_addresses(&self.name)
-            .iter()
-            .cloned()
-            .unzip();
+        let mut targets = self.committee.broadcast_addresses(&self.name);
+        if withhold {
+            targets.sort_by_key(|(name, _)| *name);
+            targets.truncate(targets.len() / 2);
+            info!("Withholding {} from all but {} nodes (experiment)", block, targets.len());
+        }
+        let (names, addresses): (Vec<_>, _) = targets.into_iter().unzip();
         let message = bincode::serialize(&ConsensusMessage::Propose(block.clone()))
             .expect("Failed to serialize block");
         let handles = self
@@ -189,11 +194,11 @@ impl Proposer {
                     //}
                 },
                 Some(message) = self.rx_message.recv() => match message {
-                    ProposerMessage::Make { round, qc, tc, committee, done, otxs, suffix } => {
+                    ProposerMessage::Make { round, qc, tc, committee, done, otxs, suffix, withhold } => {
                         self.committee = committee;
                         self.accusations.retain(|(_, r), _| *r > done);
                         self.omissions.retain(|(_, r, _), _| *r > done);
-                        self.make_block(round, qc, tc, otxs, suffix).await
+                        self.make_block(round, qc, tc, otxs, suffix, withhold).await
                     }
                     ProposerMessage::Cleanup(digests) => {
                         for x in &digests {

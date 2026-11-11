@@ -14,13 +14,15 @@ from statistics import median
 
 from benchmark.logs import LogParser
 from lagstat import stats as lag_stats
+from localstat import stats as local_stats
 from stallstat import stats as stall_stats
 
 OUT = "results-p5"
 RATE, WARMUP = 10_000, 10
 ROLES = (("Voting twice", "equivocator"), ("Lying about NR", "liar"), ("Censoring", "censor"),
          ("Proposing and voting for invalid blocks", "invalid"), ("Regressing the high QC", "regressor"),
-         ("Framing:", "framer"), ("Silent leader:", "silent"))
+         ("Framing:", "framer"), ("Silent leader:", "silent"), ("Filling suffix blocks", "filler"),
+         ("Withholding the commit proof", "withholder"))
 
 
 def roles(logs):
@@ -109,7 +111,7 @@ def otx_stats(logs):
     return res
 
 
-def run(experiment, config, duration, keep_logs=None):
+def run(experiment, config, duration, keep_logs=None, extra=None):
     """One run_local.py run; keep_logs names a tarball of the run's logs under results-p5/<experiment>_logs/."""
     args = ["python3", "run_local.py", "--rate", str(RATE), "--warmup", str(WARMUP), "--duration", str(duration)]
     for key, value in config.items():
@@ -148,6 +150,8 @@ def run(experiment, config, duration, keep_logs=None):
         os.makedirs(f"{OUT}/{experiment}_logs", exist_ok=True)
         subprocess.run(["tar", "czf", f"{OUT}/{experiment}_logs/{keep_logs}.tgz", "logs"], check=True)
     row.update(otx_stats("logs"))
+    if extra:
+        row.update(extra("logs"))
     os.makedirs(OUT, exist_ok=True)
     path = f"{OUT}/{experiment}.csv"
     rows = []
@@ -491,6 +495,41 @@ def h24():
                            equivocate=3, **weighted), 60)
 
 
+def r3():
+    """Mock review R3 (DESIGN.md §15.25): CUSUM over long runs under correlated lateness -- sustained 20% late
+    messages, bursts of congestion, and a recurring region outage of five honest nodes."""
+    base = dict(build="trust2", nodes=31, net="base", epoch_length=25)
+    cases = (("late20", dict(late_p=0.2)),
+             ("bursts", dict(late_p=0.05, burst_period=30, burst_len=5, burst_late_p=0.4)),
+             ("region", dict(fault="outage", fault_nodes=5, fault_at=20, fault_for=3, fault_every=30)))
+    for rep in (1, 2):
+        for name, case in cases:
+            run("r3_long", dict(scenario=name, rep=rep, **base, **case), 600, extra=local_stats)
+
+
+def r4():
+    """Mock review R4 (DESIGN.md §15.25): inclusion attestations under load -- protected transactions at rising rates,
+    in bursts, and sent to a single node each."""
+    base = dict(build="trust2", nodes=31, net="base", epoch_length=25, attest_guard=136)
+    cases = (("rate500", dict(otx_rate=500)), ("rate2000", dict(otx_rate=2000)), ("rate5000", dict(otx_rate=5000)),
+             ("bursts", dict(otx_rate=200, otx_burst_size=5000, otx_burst_every=20)),
+             ("fanout1", dict(otx_rate=2000, otx_fanout=1)))
+    for name, case in cases:
+        run("r4_load", dict(scenario=name, rep=1, **base, **case), 120, extra=local_stats)
+
+
+def r2():
+    """Mock review R2 (DESIGN.md §15.25): the handover under disturbance -- a region outage that keeps hitting epoch
+    changes, Byzantine leaders that withhold the commit proof or fill suffix blocks, and both with late messages."""
+    base = dict(build="trust2", nodes=31, net="base", epoch_length=25)
+    outage = dict(fault="outage", fault_nodes=5, fault_at=15, fault_for=2, fault_every=7)
+    byz = dict(withhold_proof=6, fill_suffix=3)              # 9 of 31 Byzantine (29%)
+    cases = (("outage", outage), ("byzantine", byz), ("both", dict(late_p=0.1, **outage, **byz)))
+    for rep in (1, 2):
+        for name, case in cases:
+            run("r2_handover", dict(scenario=name, rep=rep, **base, **case), 120, extra=local_stats)
+
+
 def report():
     for path in sorted(glob(f"{OUT}/*.csv")):
         with open(path) as fh:
@@ -553,4 +592,4 @@ def compare_x2(rows):
 
 if __name__ == "__main__":
     {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "f25": f25,
-     "cmp": cmp, "cmpg": cmpg, "h24": h24, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()
+     "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()

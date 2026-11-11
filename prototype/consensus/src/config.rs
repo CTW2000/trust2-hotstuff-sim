@@ -73,6 +73,14 @@ pub struct Parameters {
     /// Experiment switch: as leader, never propose; otherwise run as usual (a Byzantine silent leader).
     #[serde(default)]
     pub silent: bool,
+    /// Experiment switch (DESIGN.md §15.25): as leader, put transactions and ledger facts into blocks after the
+    /// terminal block, against H4's empty proposals.
+    #[serde(default)]
+    pub fill_suffix: bool,
+    /// Experiment switch (DESIGN.md §15.25): as leader of the first block of a new epoch, which carries the commit
+    /// proof of the terminal block, send it to only half of the other nodes.
+    #[serde(default)]
+    pub withhold_proof: bool,
     /// Experiment switch: the leader rule (all nodes alike).
     #[serde(default)]
     pub leader_rule: LeaderRule,
@@ -139,6 +147,8 @@ impl Default for Parameters {
             regress: false,
             frame: false,
             silent: false,
+            fill_suffix: false,
+            withhold_proof: false,
             leader_rule: LeaderRule::default(),
             g2_threshold: 0,
             g2_no_reputation: false,
@@ -202,6 +212,12 @@ impl Parameters {
         }
         if self.silent {
             info!("Silent leader: never proposing (experiment)");
+        }
+        if self.fill_suffix {
+            info!("Filling suffix blocks: transactions after the terminal block (experiment)");
+        }
+        if self.withhold_proof {
+            info!("Withholding the commit proof: the first block of an epoch to half the nodes (experiment)");
         }
         if self.leader_rule != LeaderRule::Trust2 {
             info!("Leader rule set to {:?} (experiment)", self.leader_rule);

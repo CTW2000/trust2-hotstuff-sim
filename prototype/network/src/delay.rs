@@ -10,6 +10,10 @@
 //! milliseconds), a message between a node of `outage` and a node outside it waits until the outage ends, as on a
 //! link that is cut and then healed; messages inside the region, or outside it, are not affected.
 //!
+//! Correlated lateness (DESIGN.md §15.25, mock review R3): bursts of congestion, from schedule_from_ms on, use
+//! burst_late_p instead of late_p for the first burst_ms of every burst_period_ms; and the region outage recurs every
+//! outage_period_ms (0: it happens once).
+//!
 //! Configured through the environment: TTRU_DELAYS names a JSON file {"addresses": {"<ip:port>": node, ...},
 //! "base_ms": [[...]], "jitter_ms": x, "bandwidth_mbps": y, "late_p": p, "late_ms": z, "late_to": ["<ip:port>",
 //! ...]} and TTRU_NODE is this node's index. Without them there is no delay at all.
@@ -42,6 +46,16 @@ pub struct Delays {
     outage_from_ms: u64,
     #[serde(default)]
     outage_until_ms: u64,
+    #[serde(default)]
+    outage_period_ms: u64,
+    #[serde(default)]
+    burst_period_ms: u64,
+    #[serde(default)]
+    burst_ms: u64,
+    #[serde(default)]
+    burst_late_p: f64,
+    #[serde(default)]
+    schedule_from_ms: u64,
     #[serde(skip)]
     me: usize,
 }
@@ -64,20 +78,43 @@ impl Delays {
             false => 0.0,
         };
         let transmission = bytes as f64 * 8.0 / (self.bandwidth_mbps * 1e3);
-        let late = match self.late_p > 0.0 && self.late_to.contains(to) && rand::thread_rng().gen_bool(self.late_p) {
+        let now = unix_ms();
+        let late_p = self.late_p_at(now);
+        let late = match late_p > 0.0 && self.late_to.contains(to) && rand::thread_rng().gen_bool(late_p) {
             true => self.late_ms,
             false => 0.0,
         };
-        let held = self.held_ms(j, unix_ms());
+        let held = self.held_ms(j, now);
         Some(Duration::from_secs_f64((held + self.base_ms[self.me][j] + jitter + transmission + late) / 1e3))
     }
 
-    /// How long a message to node `j` queued at `now_ms` (Unix time) waits for the region outage to end.
+    /// How long a message to node `j` queued at `now_ms` (Unix time) waits for the region outage to end. With a
+    /// period the outage recurs: the same length, every `outage_period_ms` from `outage_from_ms` on.
     pub fn held_ms(&self, j: usize, now_ms: u64) -> f64 {
         let crosses = self.outage.contains(&self.me) != self.outage.contains(&j);
-        match crosses && (self.outage_from_ms..self.outage_until_ms).contains(&now_ms) {
-            true => (self.outage_until_ms - now_ms) as f64,
+        if !crosses || now_ms < self.outage_from_ms {
+            return 0.0;
+        }
+        let length = self.outage_until_ms.saturating_sub(self.outage_from_ms);
+        let phase = match self.outage_period_ms {
+            0 => now_ms - self.outage_from_ms,
+            period => (now_ms - self.outage_from_ms) % period,
+        };
+        match phase < length {
+            true => (length - phase) as f64,
             false => 0.0,
+        }
+    }
+
+    /// The probability that a message queued at `now_ms` is late: burst_late_p inside a burst, late_p otherwise.
+    pub fn late_p_at(&self, now_ms: u64) -> f64 {
+        let in_burst = self.burst_period_ms > 0
+            && now_ms >= self.schedule_from_ms
+            && (now_ms - self.schedule_from_ms) % self.burst_period_ms < self.burst_ms;
+        if in_burst {
+            self.burst_late_p
+        } else {
+            self.late_p
         }
     }
 }

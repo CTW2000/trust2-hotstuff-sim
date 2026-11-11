@@ -24,6 +24,8 @@ pub struct Experiment {
     pub regress: bool,
     pub frame: bool,
     pub silent: bool,
+    pub fill_suffix: bool,
+    pub withhold_proof: bool,
 }
 
 impl Node {
@@ -57,6 +59,8 @@ impl Node {
         parameters.consensus.regress |= experiment.regress;
         parameters.consensus.frame |= experiment.frame;
         parameters.consensus.silent |= experiment.silent;
+        parameters.consensus.fill_suffix |= experiment.fill_suffix;
+        parameters.consensus.withhold_proof |= experiment.withhold_proof;
 
         // Make the data store.
         let store = Store::new(store_path).expect("Failed to create store");
