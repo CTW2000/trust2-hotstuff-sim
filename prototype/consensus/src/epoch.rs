@@ -614,6 +614,7 @@ impl Epochs {
     pub fn enter_next(&mut self, terminal: &Block) -> bool {
         let horizon = (terminal.round + 1).saturating_sub(self.reputation.config().lag);
         let before = self.reputation.r_ppm().to_vec();
+        let peak_before = self.reputation.peak().to_vec();
         let (tables, first_rounds, members) = (&self.tables, &self.first_rounds, &self.members);
         let entity_of = &self.entity_of;
         let events = self.reputation.advance(horizon, |round, accused_in| {
@@ -631,6 +632,14 @@ impl Epochs {
             }
         }
         self.forget_blocks_before(self.reputation.done() + 1);
+        for (k, (old, new)) in peak_before.iter().zip(self.reputation.peak()).enumerate() {
+            if new > old {
+                for name in members_of(&self.members, &self.entity_of, k) {
+                    // NOTE: this log entry is used to measure the margin to the threshold (benchmark/localstat.py).
+                    info!("G2: CUSUM peak of {} is {} ppm", name, new);
+                }
+            }
+        }
         for (k, (old, new)) in before.iter().zip(self.reputation.r_ppm()).enumerate() {
             if old != new {
                 for name in members_of(&self.members, &self.entity_of, k) {

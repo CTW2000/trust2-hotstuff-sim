@@ -672,6 +672,11 @@ impl Core {
                     // NOTE: this log entry is used to check that no batch of such a block is committed.
                     info!("Off the ledger {} -> {:?}", block, x);
                 }
+                for x in &block.otxs {
+                    // NOTE: this log entry is used to check that such a block's protected transactions stay pending
+                    // and reach the ledger in a later block (benchmark/localstat.py).
+                    info!("Off the ledger {} -> observed transaction {}", block, x.id());
+                }
                 continue;
             }
             // NOTE: this log entry is used to compare the ledgers of the nodes (benchmark/localstat.py).

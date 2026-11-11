@@ -73,6 +73,8 @@ pub struct Reputation {
     /// CapNorm of the base weights (fixed point), by member index.
     base: Vec<u128>,
     cusum: Vec<i64>,
+    /// The highest value each statistic has reached (before a conviction resets it); for the experiments only.
+    peak: Vec<i64>,
     excluded: Vec<bool>,
     until: Vec<Round>,
     queue: Vec<(usize, Round)>,
@@ -91,6 +93,7 @@ impl Reputation {
             config,
             base,
             cusum: vec![0; n],
+            peak: vec![0; n],
             excluded: vec![false; n],
             until: vec![0; n],
             queue: Vec::new(),
@@ -112,6 +115,11 @@ impl Reputation {
 
     pub fn r_ppm(&self) -> &[u64] {
         &self.r_ppm
+    }
+
+    /// The highest value each statistic has reached so far, in millionths (experiments: the margin to the threshold).
+    pub fn peak(&self) -> &[i64] {
+        &self.peak
     }
 
     /// Members barred from leading.
@@ -219,6 +227,7 @@ impl Reputation {
             None => self.config.down,
         };
         self.cusum[leader] = (self.cusum[leader] + increment).max(0);
+        self.peak[leader] = self.peak[leader].max(self.cusum[leader]);
         if self.cusum[leader] >= self.config.threshold {
             self.convict(leader, u);
         }

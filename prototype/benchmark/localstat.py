@@ -2,9 +2,14 @@
     python3 localstat.py logs
 
 - ledgers: every node's ledger ("Ledger: B<round> <digest>") must be a prefix of every other's (safety);
-- H2 refusals and H4 blocks left off the ledger, with the batches of those blocks never committed anywhere;
+- H2 refusals and H4 blocks left off the ledger: no such block may be on any node's ledger (suffix_on_ledger);
+  their batches reach the ledger only if an honest leader includes them again in a block of its own
+  (filled_batches_reincluded: on receipt of a block every node drops its batches from its proposal buffer, as in
+  the code this prototype builds on), and their protected transactions stay pending and reach the ledger later
+  (suffix_otxs_on_ledger of suffix_otxs);
 - per node: rounds led ("Proposed B<round>"), and on node 0's ledger the AT accusation and omission facts against it,
-  its G2 convictions (exclusions, queueing) with the time of the first one, and its lowest reputation.
+  its G2 convictions (exclusions, queueing) with the time of the first one, its lowest reputation, and the highest
+  value its CUSUM reached (ppm; the threshold ln 10^2 is 4605170, one fact adds ln 5 = 1609438).
 Honest nodes are those without an experiment switch; nodes hit by a crash, restart or region outage count as honest
 here (they are: the outage only delays their messages), reported apart as "region".
 """
@@ -43,6 +48,8 @@ def stats(logs):
     names, roles, ledgers, led = {}, {}, {}, defaultdict(int)
     h2 = h4 = h4_filled = 0
     off_batches, committed_batches = set(), set()
+    off_rounds, ledger_rounds = set(), set()
+    off_otxs, ledger_otxs = set(), set()
     start = None
     for path in sorted(glob(f"{logs}/node-*.log")):
         node = int(re.search(r"node-(\d+)", path).group(1))
@@ -56,6 +63,7 @@ def stats(logs):
             elif msg.startswith("Ledger: "):
                 _, rnd, digest = msg.split()
                 ledger.append((int(rnd[1:]), digest))
+                ledger_rounds.add(int(rnd[1:]))
             elif msg.startswith("Proposed B"):
                 led[node] += 1
             elif "(H2)" in msg:
@@ -65,9 +73,18 @@ def stats(logs):
                 if not msg.endswith(" 0 batches"):
                     h4_filled += 1
             elif msg.startswith("Off the ledger "):
-                off_batches.add(msg.split(" -> ")[1])
-            elif msg.startswith("Committed B") and " -> " in msg and "observed transaction" not in msg:
-                committed_batches.add(msg.split(" -> ")[1])
+                block, what = msg[len("Off the ledger "):].split(" -> ")
+                off_rounds.add(int(block[1:]))
+                if what.startswith("observed transaction "):
+                    off_otxs.add(what.split()[-1])
+                else:
+                    off_batches.add(what)
+            elif msg.startswith("Committed B") and " -> " in msg:
+                what = msg.split(" -> ")[1]
+                if what.startswith("observed transaction "):
+                    ledger_otxs.add(what.split()[-1])
+                else:
+                    committed_batches.add(what)
         ledgers[node] = ledger
         name = names.get(node, str(node))
         # The logs print keys cut to 16 characters; faulted.txt has them in full.
@@ -81,7 +98,7 @@ def stats(logs):
     # G2 on node 0's ledger, by leader name.
     by_name = {v: k for k, v in names.items()}
     g2 = defaultdict(lambda: dict(accusations=0, omissions=0, exclusions=0, queued=0, first_conviction_s=None,
-                                  min_r_ppm=1_000_000))
+                                  min_r_ppm=1_000_000, peak_ppm=0))
     for t, msg in read(f"{logs}/node-0.log"):
         m = re.match(r"G2: accusation of round \d+ led by (\S+)", msg)
         if m:
@@ -98,6 +115,11 @@ def stats(logs):
             if entry["first_conviction_s"] is None:
                 entry["first_conviction_s"] = round(t - start, 1)
             continue
+        m = re.match(r"G2: CUSUM peak of (\S+) is (\d+) ppm", msg)
+        if m:
+            entry = g2[m.group(1)]
+            entry["peak_ppm"] = max(entry["peak_ppm"], int(m.group(2)))
+            continue
         m = re.match(r"G2: reputation of (\S+) is (\d+) ppm", msg)
         if m:
             entry = g2[m.group(1)]
@@ -105,8 +127,9 @@ def stats(logs):
 
     out = dict(ledger_nodes=len(ledgers), ledger_conflicts=conflicts,
                ledger_min=min((len(x) for x in ledgers.values()), default=0), ledger_max=len(longest),
-               h2_refused=h2, h4_off_ledger=h4, h4_filled=h4_filled, filled_batches=len(off_batches),
-               filled_batches_committed=len(off_batches & committed_batches))
+               h2_refused=h2, h4_off_ledger=h4, h4_filled=h4_filled, suffix_on_ledger=len(off_rounds & ledger_rounds),
+               filled_batches=len(off_batches), filled_batches_reincluded=len(off_batches & committed_batches),
+               suffix_otxs=len(off_otxs), suffix_otxs_on_ledger=len(off_otxs & ledger_otxs))
     for group in ("honest", "region"):
         nodes = [n for n, r in roles.items() if r == group]
         rows = [g2[names[n]] for n in nodes if n in names]
@@ -122,6 +145,8 @@ def stats(logs):
             f"{group}_first_conviction_s": min(firsts) if firsts else None,
             f"{group}_min_r_ppm": min((r["min_r_ppm"] for r in rows), default=1_000_000),
             f"{group}_max_accusations_per_node": max((r["accusations"] for r in rows), default=0),
+            f"{group}_max_facts_per_node": max((r["accusations"] + r["omissions"] for r in rows), default=0),
+            f"{group}_cusum_peak_ppm": max((r["peak_ppm"] for r in rows), default=0),
         })
     return out
 
