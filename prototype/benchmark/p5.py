@@ -530,6 +530,18 @@ def r4k():
     run("r4_load", dict(scenario="rate2000", rep=2, **base, otx_rate=2000), 120, extra=local_stats)
 
 
+def r34x():
+    """Mock review R3/R4 follow-up (DESIGN.md §15.25): one more 20 s region outage run with the per-node statistics
+    (convictions, exclusion lengths, recovery), and protected transactions sent to a single node each at rates the
+    prototype sustains (with the usual f+1 at 200/s for comparison)."""
+    base = dict(build="trust2", nodes=31, net="base", epoch_length=25)
+    for name, case in (("rate200", dict(otx_rate=200)), ("fanout1_200", dict(otx_rate=200, otx_fanout=1)),
+                       ("fanout1_500", dict(otx_rate=500, otx_fanout=1))):
+        run("r4_load", dict(scenario=name, rep=1, **base, attest_guard=136, **case), 120, extra=local_stats)
+    run("r3_long", dict(scenario="region20", rep=3, **base, fault="outage", fault_nodes=5, fault_at=20, fault_for=20,
+                        fault_every=120), 600, extra=local_stats)
+
+
 def r2():
     """Mock review R2 (DESIGN.md §15.25): the handover under disturbance -- a region outage that keeps hitting epoch
     changes, Byzantine leaders that withhold the commit proof or fill suffix blocks, and both with late messages."""
@@ -606,4 +618,4 @@ def compare_x2(rows):
 
 if __name__ == "__main__":
     {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "f25": f25,
-     "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()
+     "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "r34x": r34x, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()

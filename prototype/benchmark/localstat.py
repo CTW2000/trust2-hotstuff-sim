@@ -38,6 +38,15 @@ def read(path):
                 yield ts(m.group(1)), m.group(4)
 
 
+def detail(leads, e):
+    spans = [round(b - a) for a, b in zip(e["excluded_at"], e["released_at"])]
+    drops = [t for t, r in e["r_series"] if r < 1_000_000]
+    back = [t for t, r in e["r_series"] if r == 1_000_000 and drops and t > drops[0]]
+    recover = round(back[0] - drops[0]) if back else "-"
+    return (f"{leads}/{e['accusations'] + e['omissions']}/{e['exclusions'] + e['queued']}/{e['first_conviction_s']}/"
+            f"{','.join(map(str, spans)) or '-'}/{e['min_r_ppm']}/{recover}")
+
+
 def stats(logs):
     faulted = set()
     try:
@@ -98,7 +107,7 @@ def stats(logs):
     # G2 on node 0's ledger, by leader name.
     by_name = {v: k for k, v in names.items()}
     g2 = defaultdict(lambda: dict(accusations=0, omissions=0, exclusions=0, queued=0, first_conviction_s=None,
-                                  min_r_ppm=1_000_000, peak_ppm=0))
+                                  min_r_ppm=1_000_000, peak_ppm=0, excluded_at=[], released_at=[], r_series=[]))
     for t, msg in read(f"{logs}/node-0.log"):
         m = re.match(r"G2: accusation of round \d+ led by (\S+)", msg)
         if m:
@@ -112,8 +121,14 @@ def stats(logs):
         if m:
             entry = g2[m.group(1)]
             entry["exclusions" if m.group(2).startswith("excluded") else "queued"] += 1
+            if m.group(2).startswith("excluded"):
+                entry["excluded_at"].append(t - start)
             if entry["first_conviction_s"] is None:
                 entry["first_conviction_s"] = round(t - start, 1)
+            continue
+        m = re.match(r"G2: (\S+) may lead again at round \d+", msg)
+        if m:
+            g2[m.group(1)]["released_at"].append(t - start)
             continue
         m = re.match(r"G2: CUSUM peak of (\S+) is (\d+) ppm", msg)
         if m:
@@ -124,6 +139,7 @@ def stats(logs):
         if m:
             entry = g2[m.group(1)]
             entry["min_r_ppm"] = min(entry["min_r_ppm"], int(m.group(2)))
+            entry["r_series"].append((t - start, int(m.group(2))))
 
     out = dict(ledger_nodes=len(ledgers), ledger_conflicts=conflicts,
                ledger_min=min((len(x) for x in ledgers.values()), default=0), ledger_max=len(longest),
@@ -147,6 +163,11 @@ def stats(logs):
             f"{group}_max_accusations_per_node": max((r["accusations"] for r in rows), default=0),
             f"{group}_max_facts_per_node": max((r["accusations"] + r["omissions"] for r in rows), default=0),
             f"{group}_cusum_peak_ppm": max((r["peak_ppm"] for r in rows), default=0),
+            f"{group}_leads_per_node": f"{min((led[n] for n in nodes), default=0)}-{max((led[n] for n in nodes), default=0)}",
+            # Per convicted node: leads / facts / convictions / first conviction (s) / exclusion lengths (s) /
+            # lowest r (ppm) / time from the first drop of r back to 1 (s, "-" if not back by the end).
+            f"{group}_convicted_detail": " ".join(detail(led[n], g2[names[n]]) for n in nodes
+                                                  if n in names and g2[names[n]]["first_conviction_s"] is not None),
         })
     return out
 
