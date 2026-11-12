@@ -245,3 +245,29 @@ fn replayed_ledgers_share_the_table_of_the_fork_epoch() {
     let sweep = e2_sweep(&a, &ta, &b);
     assert_eq!((sweep.blocks, sweep.own_blocks, sweep.named_blocks), (0, 0, 0), "no TC in these chains");
 }
+
+#[test]
+fn only_h2_keeps_out_the_next_epoch_blocks_of_the_other_branch() {
+    // Forked at round 8: each side commits its own B10 and goes on into the next epoch (rounds 12-15) on it. The next
+    // epoch's table is the same on both sides (H1'), so b's blocks of that epoch, naming it, pass the table check of a
+    // judge on a; none has a's B10 as an ancestor, so H2 alone keeps them out.
+    let config = crate::common::test_epoch_config(10);
+    let name_the_table = |records: &mut Records, table: &Digest| {
+        for block in records.chain.iter_mut().filter(|x| x.epoch == EPOCH + 1) {
+            block.table = table.clone();
+        }
+    };
+    let (a, mut b) = forked_at(8);
+    let ta = replay_tables(&a, &committee(), config);
+    name_the_table(&mut b, &table_digest(&ta[&(EPOCH + 1)]));
+    let sweep = h2_sweep(&a, &committee(), config, &ta, &b);
+    assert_eq!((sweep.blocks, sweep.same_table, sweep.off_terminal), (4, 4, 4));
+    assert_eq!(sweep.epochs, Some((EPOCH + 1, EPOCH + 1)));
+
+    // Forked at round 13, after the shared terminal block B10: b's blocks of the next epoch extend it, H2 lets them in.
+    let (a, mut b) = forked_at(13);
+    let ta = replay_tables(&a, &committee(), config);
+    name_the_table(&mut b, &table_digest(&ta[&(EPOCH + 1)]));
+    let sweep = h2_sweep(&a, &committee(), config, &ta, &b);
+    assert_eq!((sweep.blocks, sweep.same_table, sweep.off_terminal), (3, 3, 0));
+}

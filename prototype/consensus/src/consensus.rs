@@ -115,6 +115,7 @@ impl Consensus {
                 vote_from: parameters.fork_vote_from,
                 vote_until: parameters.fork_vote_until,
                 tc_outside_block: parameters.tc_outside_block,
+                no_h2: parameters.no_h2,
             },
             signature_service.clone(),
             store.clone(),

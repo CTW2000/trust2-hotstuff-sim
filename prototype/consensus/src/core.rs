@@ -116,7 +116,10 @@ pub struct Faults {
     pub vote_until: Round,
     /// Keep blocks in the store without their TC (§15.15, S3; the digest leaves it out, see messages.rs).
     pub tc_outside_block: bool,
+    /// Ablation (§15.26): store and vote for blocks of a new epoch that do not extend our terminal block (H2 off).
+    pub no_h2: bool,
 }
+
 
 impl Faults {
     /// Whether the vote window lets us vote in `round` (DESIGN.md §15.15).
@@ -1135,13 +1138,18 @@ impl Core {
         // H2: a block of a later epoch must have the terminal block we entered its epoch on as an ancestor. A block
         // that does not is never stored, so nothing built on it can be committed here either.
         if !self.extends_terminal(block, &b1).await {
-            // NOTE: this log entry is used to count the blocks refused by H2 (benchmark/fork_local.py).
-            warn!("Refusing {}: it does not extend the terminal block of epoch {} (H2)", block, block.epoch - 1);
-            return Ok(());
+            if !self.faults.no_h2 {
+                // NOTE: this log entry is used to count the blocks refused by H2 (benchmark/fork_local.py).
+                warn!("Refusing {}: it does not extend the terminal block of epoch {} (H2)", block, block.epoch - 1);
+                return Ok(());
+            }
+            // NOTE: this log entry counts what H2 would have refused, in the ablation (benchmark/fork_local.py).
+            warn!("Storing {} although it does not extend the terminal block of epoch {} (H2 off)", block, block.epoch - 1);
         }
 
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
+
 
         // G2: the block's QC certifies its parent.
         self.certify(&b1).await;

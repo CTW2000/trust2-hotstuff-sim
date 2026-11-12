@@ -104,6 +104,10 @@ pub struct Parameters {
     /// the block -- not in its digest, not in the store -- as the TC of DiemBFT / Aptos travels in the sync info.
     #[serde(default)]
     pub tc_outside_block: bool,
+    /// Experiment switch (DESIGN.md §15.26, ablation): store and vote for a block of a new epoch even if it does not
+    /// extend the terminal block we entered that epoch on (H2 off).
+    #[serde(default)]
+    pub no_h2: bool,
 }
 
 fn default_attest_guard() -> u64 {
@@ -156,6 +160,7 @@ impl Default for Parameters {
             fork_vote_from: 0,
             fork_vote_until: 0,
             tc_outside_block: false,
+            no_h2: false,
         }
     }
 }
@@ -230,6 +235,9 @@ impl Parameters {
         }
         if self.tc_outside_block {
             info!("TC outside the block (experiment)");
+        }
+        if self.no_h2 {
+            info!("H2 off: blocks of a new epoch off the terminal block are stored and voted for (experiment)");
         }
         if self.g2_no_reputation {
             info!("G2 convictions exclude from leading only, reputation stays 1 (experiment)");

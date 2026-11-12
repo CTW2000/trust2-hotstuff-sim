@@ -230,6 +230,56 @@ pub fn e2_sweep(judge: &Records, tables: &BTreeMap<EpochNumber, Committee>, othe
     sweep
 }
 
+/// What H2 does with the other side's blocks (DESIGN.md §15.26): the blocks of `other`'s records off the judge's chain
+/// in an epoch the judge entered (its ledger has the terminal block of the epoch before). The table check stops those
+/// that name a table other than the judge's for their epoch; of the rest, those without the judge's terminal block as
+/// an ancestor -- they extend the other side's -- are kept out by H2 alone.
+#[derive(Default)]
+pub struct H2Sweep {
+    pub blocks: usize,
+    pub same_table: usize,
+    pub off_terminal: usize,
+    /// The lowest and highest epoch of the blocks only H2 keeps out.
+    pub epochs: Option<(EpochNumber, EpochNumber)>,
+}
+
+pub fn h2_sweep(
+    judge: &Records,
+    roster: &Committee,
+    config: EpochConfig,
+    tables: &BTreeMap<EpochNumber, Committee>,
+    other: &Records,
+) -> H2Sweep {
+    let own_chain = judge.digests();
+    let at_round: HashMap<Round, Digest> = judge.chain.iter().map(|b| (b.round, b.digest())).collect();
+    let terminal: HashMap<EpochNumber, Digest> = terminals(judge, roster, config)
+        .into_iter()
+        .filter_map(|(epoch, round)| at_round.get(&round).map(|digest| (epoch, digest.clone())))
+        .collect();
+    let mut sweep = H2Sweep::default();
+    // The records are one chain from the genesis: the blocks before a block are its ancestors.
+    let mut ancestors = HashSet::new();
+    for block in &other.chain {
+        let digest = block.digest();
+        let entered = block.epoch.checked_sub(1).and_then(|before| terminal.get(&before));
+        if let (Some(g), false) = (entered, own_chain.contains(&digest)) {
+            sweep.blocks += 1;
+            if tables.get(&block.epoch).map_or(false, |t| table_digest(t) == block.table) {
+                sweep.same_table += 1;
+                if !ancestors.contains(g) {
+                    sweep.off_terminal += 1;
+                    sweep.epochs = Some(match sweep.epochs {
+                        None => (block.epoch, block.epoch),
+                        Some((lo, hi)) => (lo.min(block.epoch), hi.max(block.epoch)),
+                    });
+                }
+            }
+        }
+        ancestors.insert(digest);
+    }
+    sweep
+}
+
 /// The accountability theorem for the commit proofs `cx` and `cy` (view(X) <= view(Y)); `y_records` are the records
 /// of one honest node that holds Y (Y and its ancestors). `tc_in_block`: blocks carry their TC (the protocol).
 pub fn judge(cx: &CommitProof, cy: &CommitProof, y_records: &Records, tc_in_block: bool) -> Finding {
@@ -430,11 +480,18 @@ pub async fn report(committee: &Committee, parameters: &Parameters, a: &str, b: 
             "unjudged": s.unjudged,
         })
     };
+    let h2_json = |s: H2Sweep| {
+        serde_json::json!({
+            "blocks": s.blocks, "same_table": s.same_table, "off_terminal": s.off_terminal, "epochs": s.epochs,
+        })
+    };
     let epochs_json = serde_json::json!({
         "terminals_a": terminals(&ra, committee, config),
         "terminals_b": terminals(&rb, committee, config),
         "e2_a_judges_b": sweep_json(e2_sweep(&ra, &tables_a, &rb)),
         "e2_b_judges_a": sweep_json(e2_sweep(&rb, &tables_b, &ra)),
+        "h2_a_judges_b": h2_json(h2_sweep(&ra, committee, config, &tables_a, &rb)),
+        "h2_b_judges_a": h2_json(h2_sweep(&rb, committee, config, &tables_b, &ra)),
     });
     let top = |r: &Records| r.chain.last().map_or(0, |b| b.round);
     let mut out = serde_json::json!({

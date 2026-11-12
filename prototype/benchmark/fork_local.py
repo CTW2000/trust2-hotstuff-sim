@@ -11,7 +11,9 @@ experiment switches to the Byzantine halves:
 After the run, `node forensics` reads the stores of one honest node of each side. A single epoch (epoch_length 0),
 or (DESIGN.md §15.24) epochs with --prephase: the forensics then judges the fork in the first epoch both sides committed
 off the other's chain, replays each side's tables, and sweeps the other side's blocks for E2 by the judge's own tables
-and by the tables the blocks name; the row also counts the blocks refused by H2 and left off the ledger by H4.
+and by the tables the blocks name, and (DESIGN.md §15.26) sweeps them for H2: the blocks of an epoch the judge entered
+that name its own table for that epoch (the table check lets them through) but do not extend its terminal block; the
+row also counts the blocks refused by H2 and left off the ledger by H4.
 
 Populations (n = 19, equal stakes):
   equal     7 Byzantine, 6 + 6 honest, all licensed;

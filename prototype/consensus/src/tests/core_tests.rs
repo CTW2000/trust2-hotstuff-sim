@@ -51,6 +51,21 @@ fn core_on(
     Receiver<ProposerMessage>,
     Receiver<Block>,
 ) {
+    core_on_with(name, secret, committee, store, length, Faults::default())
+}
+
+fn core_on_with(
+    name: PublicKey,
+    secret: SecretKey,
+    committee: Committee,
+    store: Store,
+    length: Round,
+    faults: Faults,
+) -> (
+    Sender<ConsensusMessage>,
+    Receiver<ProposerMessage>,
+    Receiver<Block>,
+) {
     let (tx_core, rx_core) = channel(1);
     let (tx_loopback, rx_loopback) = channel(1);
     let (tx_proposer, rx_proposer) = channel(1);
@@ -90,7 +105,7 @@ fn core_on(
         committee,
         epoch_config,
         Inclusion::new(Duration::from_millis(500), false),
-        Faults::default(),
+        faults,
         signature_service,
         store,
         mempool_driver,
@@ -1341,4 +1356,42 @@ async fn h2_no_vote_for_a_block_of_the_new_epoch_off_the_terminal_block() {
     let voted = timeout(Duration::from_secs(2), vote_13).await.unwrap_or(None);
     assert!(voted != Some(bad.digest()), "voted for a block off the terminal block");
     assert_eq!(voted, Some(good.digest()));
+}
+
+#[tokio::test]
+async fn h2_off_votes_for_a_block_of_the_new_epoch_off_the_terminal_block() {
+    // The ablation of the test above (DESIGN.md §15.26): with H2 off, B13' passes the voting rule, so the node stores
+    // it and gives it the vote of round 13 -- the check that keeps it out is H2 alone.
+    let committee = committee_with_base_port(18_600);
+    let blocks = handover_chain();
+    let b9 = blocks[0].clone();
+    let good = blocks[4].clone();
+    let bad = block_in(qc_in(&b9), Some(tc_in(12, EPOCH + 1, &qc_in(&b9))), 13, EPOCH + 1);
+
+    let next = leader_in(EPOCH + 1, 14).0;
+    let mut received = all_frames(committee.address(&next).unwrap());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (name, secret) = keys().into_iter().find(|(key, _)| *key != next).unwrap();
+    let store_path = ".db_test_h2_off_votes_for_a_block_of_the_new_epoch_off_the_terminal_block";
+    let _ = fs::remove_dir_all(store_path);
+    let faults = Faults { no_h2: true, ..Faults::default() };
+    let (tx_core, mut rx_proposer, mut rx_commit) =
+        core_on_with(name, secret, committee.clone(), Store::new(store_path).unwrap(), 10, faults);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tokio::spawn(async move { while rx_commit.recv().await.is_some() {} });
+    for block in blocks[..4].iter().cloned().chain([bad.clone(), good.clone()]) {
+        tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+    }
+    let vote_13 = async {
+        while let Some(frame) = received.recv().await {
+            if let Ok(ConsensusMessage::Vote(vote)) = bincode::deserialize(&frame) {
+                if vote.round == 13 {
+                    return Some(vote.hash);
+                }
+            }
+        }
+        None
+    };
+    let voted = timeout(Duration::from_secs(2), vote_13).await.unwrap_or(None);
+    assert_eq!(voted, Some(bad.digest()), "with H2 off the block off the terminal block should get the vote");
 }
