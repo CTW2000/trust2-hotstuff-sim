@@ -34,6 +34,10 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 #[path = "tests/epoch_tests.rs"]
 pub mod epoch_tests;
 
+#[cfg(test)]
+#[path = "tests/replay_tests.rs"]
+pub mod replay_tests;
+
 /// Tables kept: the next epoch's (H1'), the current epoch's and the previous ones, for verification.
 const KEEP: usize = 17;
 

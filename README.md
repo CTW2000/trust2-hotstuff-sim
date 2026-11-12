@@ -6,7 +6,7 @@
 
 > 仿真部分只运行抽象模型。`prototype/` 是在开源 asonnino/hotstuff 上实现的原型（开发中），只在单机上运行我们自己的节点，不连接、不测量任何现网系统。
 >
-> 现行规范见 [`prototype/SPEC.md`](prototype/SPEC.md)，论文各数字对应的结果文件见 [`prototype/PAPER_INDEX.md`](prototype/PAPER_INDEX.md)。本 README 的"主要结果"一节保留了较早的仿真结论，口径与论文不一致时以论文和这两份文件为准。
+> 现行规范见 [`prototype/SPEC.md`](prototype/SPEC.md)；独立实现可用账本重放向量 `prototype/consensus/src/tests/replay_vectors.json` 逐位核对（SPEC.md §9）。论文各数字对应的结果文件见 [`prototype/PAPER_INDEX.md`](prototype/PAPER_INDEX.md)。本 README 的"主要结果"一节保留了较早的仿真结论，口径与论文不一致时以论文和这两份文件为准。
 
 ## 方案要点
 

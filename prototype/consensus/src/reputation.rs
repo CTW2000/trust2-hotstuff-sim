@@ -137,6 +137,16 @@ impl Reputation {
         &self.queue
     }
 
+    /// The CUSUM statistic of each entity, in millionths (the ledger replay vectors check it).
+    pub fn cusum(&self) -> &[i64] {
+        &self.cusum
+    }
+
+    /// The events of the latest epoch change (`advance`).
+    pub fn events(&self) -> &[Event] {
+        &self.log
+    }
+
     /// An accusation of `round` (made with the table of `epoch`) found on the ledger. The first one counts;
     /// accusations of rounds already processed come too late and are ignored.
     pub fn record(&mut self, round: Round, epoch: EpochNumber) {

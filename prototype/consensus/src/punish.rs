@@ -401,6 +401,11 @@ impl Punishment {
             .collect()
     }
 
+    /// The events of the latest table (`update`).
+    pub fn events(&self) -> &[G1Event] {
+        &self.log
+    }
+
     /// Entities queued for a suspension, head first.
     pub fn queue(&self) -> Vec<usize> {
         self.queue.iter().map(|q| q.0).collect()
