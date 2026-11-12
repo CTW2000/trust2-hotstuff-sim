@@ -97,6 +97,7 @@ impl Consensus {
 
         // Spawn the consensus core.
         crate::messages::set_tc_outside_block(parameters.tc_outside_block);
+        crate::core::set_frame_targets(parameters.frame_targets.clone());
         let epoch_config = epoch_config(&parameters);
         Core::spawn(
             name,

@@ -210,35 +210,49 @@ fn members_of<'a>(
     members.iter().zip(entity_of).filter(move |(_, e)| **e == entity).map(|((name, _), _)| name)
 }
 
-impl Epochs {
-    /// `roster` is the committee of the configuration: `stake` is the base weight w_i.
-    pub fn new(roster: &Committee, config: EpochConfig) -> Self {
-        let mut members: Vec<_> = roster
-            .authorities
-            .iter()
-            .map(|(name, a)| (*name, a.clone()))
-            .collect();
-        members.sort_by_key(|(name, _)| *name);
-        let entity_of = entities(&members);
-        let count = entity_of.iter().max().map_or(0, |e| e + 1);
-        let mut classes = vec![Class::Licensed; count];
-        let mut weights = vec![0u64; count];
-        for ((_, a), e) in members.iter().zip(&entity_of) {
-            weights[*e] += a.stake as u64;
-            if !a.certified {
-                classes[*e] = Class::Uncertified;
-            }
+/// The members of a roster sorted by key, their entities, and each entity's class and raw base weight.
+type Roster = (Vec<(PublicKey, Authority)>, Vec<usize>, Vec<Class>, Vec<u64>);
+
+fn roster_entities(roster: &Committee) -> Roster {
+    let mut members: Vec<_> = roster
+        .authorities
+        .iter()
+        .map(|(name, a)| (*name, a.clone()))
+        .collect();
+    members.sort_by_key(|(name, _)| *name);
+    let entity_of = entities(&members);
+    let count = entity_of.iter().max().map_or(0, |e| e + 1);
+    let mut classes = vec![Class::Licensed; count];
+    let mut weights = vec![0u64; count];
+    for ((_, a), e) in members.iter().zip(&entity_of) {
+        weights[*e] += a.stake as u64;
+        if !a.certified {
+            classes[*e] = Class::Uncertified;
         }
+    }
+    (members, entity_of, classes, weights)
+}
+
+/// Whether CapNorm accepts the roster under the caps of `config` (DESIGN.md §15.28): a node refuses to start on a
+/// roster it would have to reject, and so does a membership change that would make it one.
+pub fn check_roster(roster: &Committee, config: &EpochConfig) -> Result<(), ttru::Infeasible> {
+    let (_, _, classes, weights) = roster_entities(roster);
+    let (cap, u_max) = (ttru::from_ppm(config.entity_cap_ppm), ttru::from_ppm(config.class_cap_ppm));
+    ttru::base_weights(&classes, &weights, cap, u_max).map(|_| ())
+}
+
+impl Epochs {
+    /// `roster` is the committee of the configuration: `stake` is the base weight w_i. It must pass
+    /// `check_roster` (the node checks it before it starts).
+    pub fn new(roster: &Committee, config: EpochConfig) -> Self {
+        let (members, entity_of, classes, weights) = roster_entities(roster);
         let (cap, u_max) = (ttru::from_ppm(config.entity_cap_ppm), ttru::from_ppm(config.class_cap_ppm));
-        let base = ttru::base_weights(&classes, &weights, cap, u_max);
+        let base = ttru::base_weights(&classes, &weights, cap, u_max)
+            .unwrap_or_else(|e| panic!("CapNorm rejects the roster: {}", e));
         for ((name, a), e) in members.iter().zip(&entity_of) {
             // NOTE: this log entry is used to weigh the reputation cuts by base weight (benchmark/p5.py).
             let b = base[*e] * a.stake as u128 / (weights[*e] as u128).max(1);
             info!("T_tru base weight of {} is {} ppm", name, b * ttru::PPM / ttru::ONE);
-        }
-        let largest = base.iter().copied().max().unwrap_or(0);
-        if largest > cap {
-            info!("Entity cap relaxed to {} ppm: the committee is too small for it", largest * ttru::PPM / ttru::ONE);
         }
         let (punish_config, g2_config) = scaled(&config);
         let punishment = Punishment::new(classes, weights, cap, u_max, punish_config);

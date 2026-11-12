@@ -1765,7 +1765,7 @@
    0.047499999999999994,
    0.05
   ],
-  "relaxed": false
+  "rejected": false
  },
  {
   "name": "licensed-infeasible",
@@ -1783,13 +1783,8 @@
   ],
   "cap_ppm": 100000,
   "u_max_ppm": 250000,
-  "base": [
-   0.25,
-   0.25,
-   0.25,
-   0.25
-  ],
-  "relaxed": true
+  "base": [],
+  "rejected": true
  },
  {
   "name": "both-classes-short",
@@ -1809,14 +1804,8 @@
   ],
   "cap_ppm": 100000,
   "u_max_ppm": 250000,
-  "base": [
-   0.26666666666666666,
-   0.2666666666666667,
-   0.2666666666666667,
-   0.1,
-   0.1
-  ],
-  "relaxed": true
+  "base": [],
+  "rejected": true
  },
  {
   "name": "all-uncertified",
@@ -1842,17 +1831,8 @@
   ],
   "cap_ppm": 300000,
   "u_max_ppm": 250000,
-  "base": [
-   0.027777777777777776,
-   0.05555555555555555,
-   0.08333333333333333,
-   0.1111111111111111,
-   0.1388888888888889,
-   0.16666666666666666,
-   0.19444444444444445,
-   0.2222222222222222
-  ],
-  "relaxed": true
+  "base": [],
+  "rejected": true
  },
  {
   "name": "all-uncertified-infeasible",
@@ -1870,12 +1850,179 @@
   ],
   "cap_ppm": 100000,
   "u_max_ppm": 250000,
-  "base": [
-   0.25,
-   0.25,
-   0.25,
-   0.25
+  "base": [],
+  "rejected": true
+ },
+ {
+  "name": "review-q1-small-uncertified",
+  "certified": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   false
   ],
-  "relaxed": true
+  "weights": [
+   99,
+   99,
+   99,
+   99,
+   99,
+   99,
+   99,
+   99,
+   99,
+   99,
+   99,
+   99,
+   99,
+   99,
+   99,
+   15
+  ],
+  "cap_ppm": 50000,
+  "u_max_ppm": 250000,
+  "base": [],
+  "rejected": true
+ },
+ {
+  "name": "review-q1-one-positive-licensed",
+  "certified": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   false,
+   false,
+   false,
+   false
+  ],
+  "weights": [
+   75,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   5,
+   5,
+   5,
+   5,
+   5
+  ],
+  "cap_ppm": 50000,
+  "u_max_ppm": 250000,
+  "base": [],
+  "rejected": true
+ },
+ {
+  "name": "zero-weight-members",
+  "certified": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "weights": [
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1,
+   0,
+   0
+  ],
+  "cap_ppm": 50000,
+  "u_max_ppm": 250000,
+  "base": [
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.05,
+   0.0,
+   0.0
+  ],
+  "rejected": false
  }
 ]

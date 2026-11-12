@@ -8,8 +8,8 @@ punishment (punish.GradedPunishment) and the AT exclusion doubling of CusumExclu
 - a client fault above 1/3 (malicious = False, no fork) is downgraded to L2 by governance and suspended
   through the FIFO queue without the suspended base share ever exceeding l_max; queued entities are barred
   from leading;
-- a fork with culprits above 1/3 evicts them all; an infeasible CapNorm relaxes the entity cap to the
-  smallest feasible value, so the class cap still holds;
+- a fork with culprits above 1/3 evicts them all; CapNorm rejects the rest when the caps cannot hold
+  (prototype/DESIGN.md §15.28), so the culprits are zeroed without recomputation and no cap is exceeded;
 - protocol run with greedy NR liars: liars climb L1 -> L2 -> L3, no honest replica is punished, the
   suspended share stays <= l_max and the colluder share stays below beta0 / (1 - B_rep);
 - AT doubling: the m-th hard exclusion of a silent leader within the lookback lasts D * min(2**m, 8).
@@ -137,10 +137,13 @@ def check_fork_infeasible():
     assert all(("evict", 7) in events(p, i) for i in lic)
     b = bases[-1]
     assert p.infeasible and all(b[i] == 0 for i in lic)           # 6 licensed x 0.10 < 0.75
-    assert abs(b.sum() - 1) < 1e-9 and b[cls != "L"].sum() <= UMAX + 1e-9 and p.cap_used > CAP
-    assert abs(b[cls == "L"].max() - p.cap_used) < 1e-9
+    # The culprits are evicted one by one: CapNorm is recomputed while the rest is a roster it accepts, and once it
+    # rejects one (prototype/DESIGN.md §15.28) the culprit is zeroed without recomputation. The cap is never relaxed,
+    # so no entity and not the uncertified class are above their caps (the table normalizes over what is left).
+    assert p.cap_used == CAP and b.max() <= CAP + 1e-9 and b[cls != "L"].sum() <= UMAX + 1e-9
     print(f"fork with 4 licensed culprits (> 1/3): all evicted after the governance delay; CapNorm infeasible "
-          f"(6 x 0.10 < 0.75): entity cap relaxed to {p.cap_used:.3f}, uncertified share {b[cls != 'L'].sum():.3f}")
+          f"(6 x 0.10 < 0.75): recomputed while accepted, then rejected and the rest zeroed, caps kept "
+          f"(uncertified {b[cls != 'L'].sum():.3f} of {b.sum():.3f})")
 
 
 def check_protocol_liars():

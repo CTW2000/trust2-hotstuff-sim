@@ -119,11 +119,11 @@ fn repeats_count_only_within_the_lookback() {
 
 #[test]
 fn one_member_of_a_small_committee_is_not_correlated() {
-    // 7 equal members cannot respect a 5% cap: CapNorm relaxes it to 1/7. One member's offence is then L2, not the
-    // L3 of a correlated fault; two members in one window still are.
+    // 7 equal members need a cap of at least 1/7 (CapNorm rejects a smaller one, DESIGN.md §15.28). One member's
+    // offence is then L2, not the L3 of a correlated fault; two members in one window still are.
     let levels = |culprits: &[usize]| -> Vec<u8> {
         let (classes, weights) = (vec![Class::Licensed; 7], vec![1; 7]);
-        let mut punishment = Punishment::new(classes, weights, from_ppm(50_000), ONE, PunishConfig::default());
+        let mut punishment = Punishment::new(classes, weights, from_ppm(142_858), ONE, PunishConfig::default());
         for i in culprits {
             punishment.record(*i, Kind::Safety, 1, 1, false, false);
         }

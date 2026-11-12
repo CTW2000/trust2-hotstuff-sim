@@ -4,6 +4,8 @@
 //! CapNorm gives every entity at most `cap` and the uncertified class at most `u_max` of the weight (and no
 //! more than its raw share, or than its entities can hold under the cap), as `base_weights` in sim2/ttru.py with
 //! K = 0; the test vectors in tests/ttru_vectors.json come from that function (prototype/scripts/gen_ttru_vectors.py).
+//! A roster on which the caps cannot hold is rejected, never relaxed (DESIGN.md §15.28): only entities with a
+//! positive weight count, and the licensed ones must be able to hold the licensed share under the cap.
 
 use serde::{Deserialize, Serialize};
 
@@ -26,15 +28,44 @@ pub enum Class {
     Uncertified,
 }
 
-/// Shares proportional to `v` that sum to `total`, none above `cap` (water filling, as `cap_normalize` in
-/// sim2/ttru.py). If no assignment respects the cap (n · cap < total), the cap is relaxed to the smallest
-/// feasible value, total / n rounded up: the governance default of the scheme (方案 §3.3).
-pub fn cap_normalize(v: &[u128], cap: u128, total: u128) -> Vec<u128> {
-    let n = v.len() as u128;
-    if n == 0 || total == 0 {
-        return vec![0; v.len()];
+/// Why a roster has no CapNorm table: the caps cannot hold, so the roster is rejected (DESIGN.md §15.28).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Infeasible {
+    /// No member has a positive base weight.
+    Empty,
+    /// No licensed entity has a positive weight: the uncertified class would take all of it, beyond u_max.
+    NoLicensed,
+    /// The positive-weight entities of a class cannot hold its share under the entity cap.
+    Cap { licensed: bool, entities: usize, share_ppm: u128 },
+}
+
+impl std::fmt::Display for Infeasible {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Infeasible::Empty => write!(f, "no member has a positive base weight"),
+            Infeasible::NoLicensed => write!(f, "no licensed entity has a positive base weight"),
+            Infeasible::Cap { licensed, entities, share_ppm } => write!(
+                f,
+                "{} {} entities with a positive weight cannot hold {} ppm under the entity cap",
+                entities,
+                if *licensed { "licensed" } else { "uncertified" },
+                share_ppm
+            ),
+        }
     }
-    let cap = cap.max((total + n - 1) / n);
+}
+
+/// Shares proportional to `v` that sum to `total`, none above `cap` (water filling, as `cap_normalize` in
+/// sim2/ttru.py); entries of weight 0 get 0. None if the positive entries cannot hold `total` under the cap
+/// (their count times cap is less than total): the caller rejects the roster, the cap is never relaxed.
+pub fn cap_normalize(v: &[u128], cap: u128, total: u128) -> Option<Vec<u128>> {
+    if total == 0 {
+        return Some(vec![0; v.len()]);
+    }
+    let positive = v.iter().filter(|x| **x > 0).count() as u128;
+    if positive * cap < total {
+        return None;
+    }
     let mut fixed = vec![false; v.len()];
     loop {
         let n_fixed = fixed.iter().filter(|f| **f).count() as u128;
@@ -62,17 +93,18 @@ pub fn cap_normalize(v: &[u128], cap: u128, total: u128) -> Vec<u128> {
             }
         }
         if !changed {
-            return out;
+            return Some(out);
         }
     }
 }
 
 /// CapNorm of the chain's base weights `w` (stake, equal weights or governance-set weights): the uncertified
-/// class gets min(its raw share, u_max, n_U · cap), the licensed class the rest, and each class is cap-normalized
-/// within its share, so the shares always sum to 1. If the licensed class cannot hold its share under the cap, its
-/// cap is relaxed (cap_normalize); with no licensed entity the uncertified class is the whole weight, relaxed
-/// likewise. `cap` and `u_max` are fixed point (ONE = 1.0). The weights must sum to at most u64::MAX.
-pub fn base_weights(classes: &[Class], w: &[u64], cap: u128, u_max: u128) -> Vec<u128> {
+/// class gets min(its raw share, u_max, n_U · cap), with n_U its entities of positive weight, the licensed class
+/// the rest, and each class is cap-normalized within its share, so the shares sum to 1 (up to floor rounding).
+/// Rejected (Err) if no member or no licensed entity has a positive weight, or if the licensed entities of
+/// positive weight cannot hold 1 - U under the cap (n_L · cap < 1 - U, with U the uncertified share actually
+/// given, not u_max). `cap` and `u_max` are fixed point (ONE = 1.0). The weights must sum to at most u64::MAX.
+pub fn base_weights(classes: &[Class], w: &[u64], cap: u128, u_max: u128) -> Result<Vec<u128>, Infeasible> {
     assert_eq!(classes.len(), w.len());
     let total: u128 = w.iter().map(|x| *x as u128).sum();
     assert!(total <= u64::MAX as u128, "base weights too large");
@@ -84,20 +116,33 @@ pub fn base_weights(classes: &[Class], w: &[u64], cap: u128, u_max: u128) -> Vec
             .collect()
     };
     let (lic, unc) = (in_class(Class::Licensed), in_class(Class::Uncertified));
-    let unc_share = match (total, lic.len()) {
-        (0, _) => 0,
-        (_, 0) => ONE,
-        _ => (unc.iter().sum::<u128>() * ONE / total).min(u_max).min(unc.len() as u128 * cap),
-    };
-    let mut lic_w = cap_normalize(&lic, cap, ONE - unc_share).into_iter();
-    let mut unc_w = cap_normalize(&unc, cap, unc_share).into_iter();
-    classes
+    let positive = |v: &[u128]| v.iter().filter(|x| **x > 0).count();
+    if total == 0 {
+        return Err(Infeasible::Empty);
+    }
+    if positive(&lic) == 0 {
+        return Err(Infeasible::NoLicensed);
+    }
+    let unc_share = (unc.iter().sum::<u128>() * ONE / total).min(u_max).min(positive(&unc) as u128 * cap);
+    let lic_share = ONE - unc_share;
+    let lic_w = cap_normalize(&lic, cap, lic_share).ok_or(Infeasible::Cap {
+        licensed: true,
+        entities: positive(&lic),
+        share_ppm: lic_share * PPM / ONE,
+    })?;
+    let unc_w = cap_normalize(&unc, cap, unc_share).ok_or(Infeasible::Cap {
+        licensed: false,
+        entities: positive(&unc),
+        share_ppm: unc_share * PPM / ONE,
+    })?;
+    let (mut lic_w, mut unc_w) = (lic_w.into_iter(), unc_w.into_iter());
+    Ok(classes
         .iter()
         .map(|c| match c {
             Class::Licensed => lic_w.next().unwrap(),
             Class::Uncertified => unc_w.next().unwrap(),
         })
-        .collect()
+        .collect())
 }
 
 /// The weight table of an epoch: T_i = base_i · r_i · z_i, normalized to integer stakes summing to about

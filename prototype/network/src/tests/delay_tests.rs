@@ -102,3 +102,22 @@ fn bursts_raise_the_late_probability_for_a_while() {
     assert_eq!(delays.late_p_at(12000), 0.05);
     assert_eq!(Delays::from_json(JSON, 0).unwrap().late_p_at(500), 0.0);
 }
+
+#[test]
+fn a_targeted_node_is_slow_only_towards_the_chosen_nodes_and_only_on_consensus_ports() {
+    // Node 0 is a target, node 1 a victim: node 0's consensus messages to node 1 are 3 s late, its other messages
+    // (to node 1's mempool port) are not, and node 1's messages to node 0 are not either.
+    let json = JSON.replace(
+        "\"bandwidth_mbps\": 1000.0",
+        "\"bandwidth_mbps\": 1000.0, \"late_to\": [\"127.0.0.1:9000\", \"127.0.0.1:9001\"], \
+         \"slow_from\": [0], \"slow_to\": [1], \"slow_ms\": 3000.0",
+    );
+    let target = Delays::from_json(&json, 0).unwrap();
+    let d = target.of(&"127.0.0.1:9001".parse().unwrap(), 0).unwrap().as_secs_f64() * 1e3;
+    assert!((3050.0..3060.0).contains(&d), "{}", d);
+    let d = target.of(&"127.0.0.1:9004".parse().unwrap(), 0).unwrap().as_secs_f64() * 1e3;
+    assert!(d < 60.0, "{}", d);
+    let victim = Delays::from_json(&json, 1).unwrap();
+    let d = victim.of(&"127.0.0.1:9000".parse().unwrap(), 0).unwrap().as_secs_f64() * 1e3;
+    assert!(d < 60.0, "{}", d);
+}

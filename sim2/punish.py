@@ -26,11 +26,10 @@ Effects (durations in epochs):
       queue (an upgrade while queued updates the entry, an upgrade while suspended extends it); a
       queued entity is barred from leading meanwhile (outside the cap: G1 never falls on honest
       replicas, and leading does not touch the weight table);
-  L4  decided by governance `gov_delay` epochs later: a fork or malicious evidence leads to eviction (removed from the set, CapNorm recomputed over the rest). If the recomputation
-      is infeasible (licensed count x cap < licensed class total 1 - U) the entity cap is relaxed to the
-      smallest feasible value (1 - U) / licensed count, a stand-in for the governance decision that keeps the
-      class cap; flagged "infeasible" (cap_used records the cap). Without any licensed entity left the
-      old base is kept with the evicted entities at zero. recompute = "fork" (default, 方案 v0.12 §3.3):
+  L4  decided by governance `gov_delay` epochs later: a fork or malicious evidence leads to eviction (removed from the set, CapNorm recomputed over the rest). If CapNorm rejects the rest
+      (no licensed entity of positive weight, or licensed count x cap < licensed class total 1 - U), the
+      base is not recomputed: the old base is kept with the evicted entities at zero, flagged "infeasible"
+      (prototype/DESIGN.md §15.28; the cap is never relaxed, governance has to add members). recompute = "fork" (default, 方案 v0.12 §3.3):
       only evictions of fork culprits recompute CapNorm; other evictions (repeat offences, confirmed
       malicious evidence) just zero the entity, like a permanent suspension, so its weight is not handed
       to the uncapped entities of its class (a recomputation can give all of it to colluders);
@@ -67,8 +66,8 @@ class GradedPunishment:
         self.forks = sorted(forks, key=lambda x: x[1])
         n = len(self.cls)
         self.base = ttru.base_weights(self.cls, self.stake, 0.0, 0.0, cap, u_max)
-        # CapNorm relaxes the cap for a committee too small to respect it. L_max rises with it, or the strict FIFO
-        # queue would stall for good at an entity above it; and one entity alone is still not a correlated fault.
+        # CapNorm rejects a roster the cap cannot hold (§15.28), so no entity is above it; L_max and the correlated
+        # threshold are kept at least the largest base share all the same.
         largest = float(self.base.max())
         self.l_max, self.correlated = max(l_max, largest), max(cap, largest)
         self.items = []                     # dicts: i, kind, es, ec, mal, fork, level, applied
@@ -176,21 +175,14 @@ class GradedPunishment:
         if self.recompute == "fork" and not fork:
             self.base = np.where(keep, self.base, 0.0)
             return
-        n_lic = int((self.cls[keep] == "L").sum())
-        if n_lic == 0:
+        try:
+            shares = ttru.base_weights(self.cls[keep], self.stake[keep], 0.0, 0.0, self.cap, self.u_max)
+        except ValueError:
             self.infeasible = True
             self.base = np.where(keep, self.base, 0.0)
             return
-        cap = self.cap
-        unc = self.cls[keep] != "L"
-        st_k = self.stake[keep]
-        lic_total = 1.0 - min(st_k[unc].sum() / st_k.sum(), self.u_max)   # as in ttru.base_weights
-        if n_lic * cap < lic_total - 1e-12:
-            cap = lic_total / n_lic
-            self.infeasible = True
-        self.cap_used = max(self.cap_used, cap)
         b = np.zeros(len(self.cls))
-        b[keep] = ttru.base_weights(self.cls[keep], self.stake[keep], 0.0, 0.0, cap, self.u_max)
+        b[keep] = shares
         self.base = b
 
     def update(self, st, k, horizon):

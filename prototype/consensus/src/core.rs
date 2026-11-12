@@ -21,9 +21,10 @@ use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, info, warn};
 use network::SimpleSender;
 use std::cmp::max;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
@@ -118,6 +119,16 @@ pub struct Faults {
     pub tc_outside_block: bool,
     /// Ablation (§15.26): store and vote for blocks of a new epoch that do not extend our terminal block (H2 off).
     pub no_h2: bool,
+}
+
+/// Experiment switch (DESIGN.md §15.27): with `Faults::frame`, frame only in the rounds these members lead (set once
+/// per process; unset or empty: every round).
+static FRAME_TARGETS: OnceLock<HashSet<PublicKey>> = OnceLock::new();
+
+pub fn set_frame_targets(targets: Vec<PublicKey>) {
+    if !targets.is_empty() {
+        let _ = FRAME_TARGETS.set(targets.into_iter().collect());
+    }
 }
 
 
@@ -762,7 +773,7 @@ impl Core {
                     self.high_qc.clone(),
                     self.round,
                     epoch,
-                    /* nr */ self.ready_round < self.round || self.faults.frame,
+                    /* nr */ self.ready_round < self.round || self.frames(self.round),
                     self.name,
                     self.signature_service.clone(),
                 )
@@ -1084,6 +1095,13 @@ impl Core {
         Ok(())
     }
 
+    /// Experiment switch (`Faults::frame`): whether we withhold our vote and report NR = 1 in `round` -- in every round,
+    /// or (targeted framing, §15.27) only in the rounds a target leads.
+    fn frames(&self, round: Round) -> bool {
+        self.faults.frame
+            && FRAME_TARGETS.get().map_or(true, |targets| targets.contains(&leader(self.committee(), round)))
+    }
+
     /// H2: whether `block`, whose parent is `parent`, has as an ancestor the terminal block of the epoch before its
     /// own that we entered its epoch on. A parent of the same epoch was stored, so it passed this check already.
     async fn extends_terminal(&mut self, block: &Block, parent: &Block) -> bool {
@@ -1189,7 +1207,7 @@ impl Core {
 
         // See if we can vote for this block.
         let vote = match self.make_vote(block).await {
-            Some(_) if self.faults.frame => None,
+            Some(_) if self.frames(block.round) => None,
             Some(vote) => Some(vote),
             // Experiment switch: vote for our own invalid block anyway (E2).
             None if self.faults.invalid_block && block.author == self.name && block.round == self.round => {

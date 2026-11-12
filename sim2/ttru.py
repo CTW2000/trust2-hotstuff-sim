@@ -3,9 +3,9 @@
 Base weight b = CapNorm(V), V_i = stake_i + pi * K for licensed entities (forfeitable value: stake
 plus the license value K discounted by the enforcement probability pi); the uncertified class gets
 min(its natural share, u_max, n_U * cap) of the total, the licensed class the rest, and inside each
-class no entity exceeds the cap (water-filling). The weights always sum to 1: if the licensed class
-cannot hold its share under the cap, its cap is relaxed to the smallest feasible value (方案 §3.3);
-with no licensed entity the uncertified class is the whole weight (and its cap is relaxed likewise).
+class no entity exceeds the cap (water-filling). The weights sum to 1. A roster on which the caps cannot
+hold is rejected (ValueError), never relaxed (prototype/DESIGN.md §15.28): only entities of positive weight
+count, no licensed one of positive weight, or licensed ones that cannot hold 1 - U under the cap, is rejected.
 Voting shares per epoch: T = b * r * z normalized, where reputation r in [r_min, 1] is lowered by
 `step` in an epoch with at least one conviction of the replica by the leader rule (CusumExclusion
 "exclude" events of views <= B - lag, B the first view of the epoch), stays put while the replica is
@@ -85,31 +85,43 @@ def population(n_L, n_U, n_A, seed, alpha=1.16, base=(3.0, 1.0, 0.2)):
 
 
 def cap_normalize(w, cap, total=1.0):
+    """Shares proportional to w summing to total, none above cap; entries of weight 0 get 0. ValueError if the
+    positive entries cannot hold total under the cap (the roster is rejected, the cap is never relaxed)."""
     w = np.asarray(w, float)
-    if cap * len(w) < total - 1e-12:
-        raise ValueError(f"infeasible cap: {len(w)} x {cap} < {total}")
+    out = np.zeros(len(w))
+    if total <= 0:
+        return out
+    pos = w > 0
+    if cap * pos.sum() < total - 1e-12:
+        raise ValueError(f"infeasible roster: {int(pos.sum())} entities of positive weight x {cap} < {total}")
     fixed = np.zeros(len(w), bool)
-    out = w / w.sum() * total
-    for _ in range(len(w)):
+    for _ in range(len(w) + 1):
         free = ~fixed
-        out = np.where(fixed, cap, w * (total - cap * fixed.sum()) / w[free].sum())
+        # Summed over every unfixed entry, zeros included, as before §15.28: the same floating-point result bit for
+        # bit on every roster the caps can hold (the zeros add nothing).
+        share = w[free].sum()
+        out = np.where(fixed, cap, w * (total - cap * fixed.sum()) / share if share > 0 else 0.0)
         over = (out > cap + 1e-12) & free
         if not over.any():
             return out
         fixed |= over
-    return np.where(fixed, cap, out)
+    return out
 
 
 def base_weights(cls, s, K, pi, cap, u_max):
     V = s + np.where(cls == "L", pi * K, 0.0)
     unc = cls != "L"
-    n_L, n_U = int((~unc).sum()), int(unc.sum())
-    U = 1.0 if n_L == 0 else min(V[unc].sum() / V.sum(), u_max, n_U * cap)
+    pos = V > 0
+    if V.sum() <= 0:
+        raise ValueError("infeasible roster: no positive base weight")
+    n_L, n_U = int((~unc & pos).sum()), int((unc & pos).sum())
+    if n_L == 0:
+        raise ValueError("infeasible roster: no licensed entity of positive weight")
+    U = min(V[unc].sum() / V.sum(), u_max, n_U * cap)
     w = np.zeros(len(s))
-    if n_L > 0:
-        w[~unc] = cap_normalize(V[~unc], max(cap, (1.0 - U) / n_L), 1.0 - U)
+    w[~unc] = cap_normalize(V[~unc], cap, 1.0 - U)
     if n_U > 0:
-        w[unc] = cap_normalize(V[unc], max(cap, U / n_U), U)
+        w[unc] = cap_normalize(V[unc], cap, U)
     return w
 
 

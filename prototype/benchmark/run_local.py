@@ -48,6 +48,8 @@ def node_parameters(args):
         consensus["g2_no_reputation"] = True
     if args.aptos_failure_percent:                           # LeaderRule::Aptos threshold sweep (§15.20)
         consensus["aptos_failure_percent"] = args.aptos_failure_percent
+    if getattr(args, "target_names", None):                  # targeted framing: whom the colluders frame (§15.27)
+        consensus["frame_targets"] = args.target_names
     return {
         "consensus": consensus,
         "mempool": {"gc_depth": 50, "sync_retry_delay": 5_000, "sync_retry_nodes": 3,
@@ -76,6 +78,39 @@ def base_weights(args):
         up = args.nodes - args.faults
         entities = [0 if i >= up - args.entity_size and i < up else None for i in range(args.nodes)]
     return stakes, certified, entities
+
+
+def feasible_caps(args):
+    """CapNorm rejects a roster on which the caps cannot hold (DESIGN.md §15.28), so a small committee needs a larger
+    entity cap: raise it to the smallest value the licensed entities can hold, (1 - U) / n_L, and L_max with it (at
+    least the cap, Parameters::check). Without uncertified members the class cap does nothing and is lifted, so that
+    the check on 3 u_max < 1 - B_rep - L_max still passes; with them, an infeasible setting is an error."""
+    stakes, certified, entities = base_weights(args)
+    n = args.nodes
+    stakes = stakes or [1] * n
+    certified = certified or [True] * n
+    groups = {}
+    for i in range(n):
+        key = ("entity", entities[i]) if entities and entities[i] is not None else ("node", i)
+        cls, w = groups.get(key, (True, 0))
+        groups[key] = (cls and certified[i], w + stakes[i])
+    licensed = [w for c, w in groups.values() if c and w > 0]
+    uncertified = [w for c, w in groups.values() if not c and w > 0]
+    total = sum(licensed) + sum(uncertified)
+    cap = args.entity_cap_ppm
+    u = min(sum(uncertified) * 1_000_000 // total, args.class_cap_ppm, len(uncertified) * cap)
+    if not licensed or len(licensed) * cap >= 1_000_000 - u:
+        return
+    need = -(-(1_000_000 - u) // len(licensed))
+    print(f"CapNorm rejects the roster under a {cap} ppm entity cap ({len(licensed)} licensed entities hold "
+          f"{1_000_000 - u} ppm): entity cap raised to {need} ppm, L_max to {max(args.l_max_ppm, need)} ppm",
+          flush=True)
+    args.entity_cap_ppm = need
+    args.l_max_ppm = max(args.l_max_ppm, need)
+    if not uncertified:
+        args.class_cap_ppm = 1_000_000
+    elif 3 * args.class_cap_ppm >= 1_000_000 - 100_000 - args.l_max_ppm:
+        sys.exit("no feasible caps for this committee: lower --class-cap-ppm or add licensed members")
 
 
 def in_scope(args):
@@ -118,11 +153,28 @@ def delays_file(args, committee):
             table.update(outage=fault_nodes(args), outage_from_ms=start,
                          outage_until_ms=start + int(args.fault_for * 1000),
                          outage_period_ms=int(args.fault_every * 1000))  # recurring (DESIGN.md §15.25)
+        if args.fault == "target":                           # targeted framing (DESIGN.md §15.27)
+            table.update(slow_from=fault_nodes(args), slow_to=victims(args), slow_ms=args.target_delay)
         if args.burst_period > 0:                            # bursts of congestion (DESIGN.md §15.25)
             table.update(burst_period_ms=int(args.burst_period * 1000), burst_ms=int(args.burst_len * 1000),
                          burst_late_p=args.burst_late_p, schedule_from_ms=int(args.start * 1000))
         json.dump(table, fh)
     return path
+
+
+def honest_nodes(args):
+    """The booted nodes without an experiment switch (the switches take the last booted nodes)."""
+    switches = sum((args.censor, args.equivocate, args.lie_nr, args.invalid_block, args.regress, args.frame,
+                    args.silent, args.fill_suffix, args.withhold_proof))
+    return list(range(args.nodes - args.faults - switches))
+
+
+def victims(args):
+    """Targeted framing (DESIGN.md §15.27): the honest nodes, other than the targets, that get the targets'
+    consensus messages late -- the first --target-victims of them (0: all)."""
+    targets = set(fault_nodes(args))
+    others = [i for i in honest_nodes(args) if i not in targets]
+    return others[:args.target_victims] if args.target_victims else others
 
 
 def fault_nodes(args):
@@ -149,8 +201,10 @@ def run(args):
     for f in key_files:
         subprocess.run([node, "keys", "--filename", f], check=True)
     names = [Key.from_file(f).name for f in key_files]
+    args.target_names = [names[i] for i in fault_nodes(args)] if args.fault == "target" else []
     committee = LocalCommittee(names, BASE_PORT, *base_weights(args))
     committee.print(PathMaker.committee_file())
+    feasible_caps(args)
     params = NodeParameters(node_parameters(args))
     params.print(PathMaker.parameters_file())
     args.start = time.time()
@@ -160,8 +214,8 @@ def run(args):
                                                             args.invalid_block, args.regress, args.frame,
                                                             args.silent, args.fill_suffix, args.withhold_proof))):
         sys.exit("the fault nodes overlap the experiment switches")
-    if args.fault == "outage" and not delays:
-        sys.exit("a region outage needs a network (--net base or wide)")
+    if args.fault in ("outage", "target") and not delays:
+        sys.exit("a region outage or targeted framing needs a network (--net base or wide)")
     with open(join(PathMaker.logs_path(), "faulted.txt"), "w") as fh:
         fh.write(f"{args.fault} at {args.fault_at} s for {args.fault_for} s\n")
         fh.writelines(f"{names[i]}\n" for i in hit)
@@ -281,8 +335,13 @@ def main():
                     help="ablation: G2 convictions only exclude from leading, reputation stays 1 (B_rep = 0)")
     ap.add_argument("--g2-threshold", type=int, default=0,
                     help="G2 CUSUM threshold ln(gamma) in millionths (0: the protocol's), for comparisons")
-    ap.add_argument("--fault", choices=["none", "crash", "restart", "outage"], default="none",
-                    help="benign fault of honest nodes (DESIGN.md §15.22): crash, maintenance restart, region outage")
+    ap.add_argument("--fault", choices=["none", "crash", "restart", "outage", "target"], default="none",
+                    help="fault of honest nodes (DESIGN.md §15.22): crash, maintenance restart, region outage, or "
+                         "targeted framing (§15.27: their consensus messages to --target-victims honest nodes late)")
+    ap.add_argument("--target-victims", type=int, default=0,
+                    help="targeted framing: how many other honest nodes get the targets' messages late (0: all)")
+    ap.add_argument("--target-delay", type=float, default=3000.0,
+                    help="targeted framing: how late the targets' consensus messages are, in ms")
     ap.add_argument("--fault-nodes", type=int, default=3, help="number of honest nodes the fault hits")
     ap.add_argument("--fault-at", type=float, default=40.0, help="seconds after the launch the fault starts")
     ap.add_argument("--fault-every", type=float, default=0.0, help="the outage recurs every this many seconds (0: once)")

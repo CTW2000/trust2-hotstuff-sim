@@ -60,7 +60,9 @@ POPULATIONS = {
     "margin9": [("H1", True)] * 5 + [("H2", True)] * 5 + [("B", True)] * 9,     # B 47%, each side 14 votes (13 needed)
     "margin8": [("H1", True)] * 6 + [("H2", True)] * 5 + [("B", True)] * 8,     # B 42%, sides 14 and 13
 }
-CAPS = {"equal": (100_000, 1_000_000), "weighted": (100_000, 250_000), "tiny": (100_000, 1_000_000),
+# Entity cap and class cap; CapNorm rejects a roster the caps cannot hold (DESIGN.md §15.28), so the 4 identities of
+# "tiny" need a cap of 1/4.
+CAPS = {"equal": (100_000, 1_000_000), "weighted": (100_000, 250_000), "tiny": (250_000, 1_000_000),
         "margin9": (100_000, 1_000_000), "margin8": (100_000, 1_000_000)}
 
 
@@ -77,7 +79,7 @@ def parameters(args, side=None):
     entity_cap, class_cap = CAPS[args.population]
     consensus = {"timeout_delay": args.timeout_delay, "sync_retry_delay": 10_000, "epoch_length": args.epoch_length,
                  "entity_cap_ppm": entity_cap, "class_cap_ppm": class_cap, "attest_guard": 500,
-                 "l_max_ppm": 100_000, "governance_malicious": False}
+                 "l_max_ppm": max(100_000, entity_cap), "governance_malicious": False}
     if args.scenario in ("s2", "s3") and side == 1:
         consensus["fork_vote_until"] = args.k
     if args.scenario in ("s2", "s3") and side == 2:

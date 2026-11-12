@@ -91,9 +91,10 @@ fn cap_above_l_max_is_refused() {
 
 #[test]
 fn every_member_fits_under_l_max() {
-    // 6.9: four members cannot respect a 5% cap, so CapNorm gives each of them 25%, above the 10% L_max. L_max rises
-    // with it: a double vote suspends its signer, instead of leaving it queued for good, ahead of everyone else.
-    let mut epochs = Epochs::new(&committee(), EpochConfig { entity_cap_ppm: 50_000, ..config(10) });
+    // 6.9: four members need a 25% cap (CapNorm rejects a smaller one, DESIGN.md §15.28), so each holds 25%, above
+    // the 10% L_max. L_max rises with it: a double vote suspends its signer, instead of leaving it queued for good,
+    // ahead of everyone else.
+    let mut epochs = Epochs::new(&committee(), EpochConfig { entity_cap_ppm: 250_000, ..config(10) });
     let cheat = keys().remove(0);
     let vote = |hash: u8| Vote::new_from_key(Digest([hash; 32]), 5, cheat.0, &cheat.1);
     let evidence = vec![Evidence::DoubleVote(vote(1), vote(2))];

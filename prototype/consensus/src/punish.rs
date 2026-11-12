@@ -112,10 +112,10 @@ pub struct Punishment {
 impl Punishment {
     /// `classes` and `weights` are the members' classes and base weights w_i; `cap` and `u_max` the CapNorm caps.
     pub fn new(classes: Vec<Class>, weights: Vec<u64>, cap: u128, u_max: u128, mut config: PunishConfig) -> Self {
-        let base = ttru::base_weights(&classes, &weights, cap, u_max);
-        // CapNorm relaxes the cap for a committee too small to respect it (no member can hold less than 1/n of an
-        // equal split). L_max rises with it, or the strict FIFO queue would stall for good at a member above it;
-        // and one member alone is still not a correlated fault.
+        let base = ttru::base_weights(&classes, &weights, cap, u_max)
+            .unwrap_or_else(|e| panic!("CapNorm rejects the roster: {}", e));
+        // CapNorm never relaxes the cap (DESIGN.md §15.28), so no entity is above it; L_max is kept at least the
+        // largest base share all the same, or the strict FIFO queue would stall for good at a member above it.
         let largest = base.iter().copied().max().unwrap_or(0);
         config.l_max = config.l_max.max(largest);
         let n = classes.len();
@@ -284,31 +284,20 @@ impl Punishment {
             self.base[i] = 0;
             return;
         }
-        // A fork culprit: CapNorm over the rest. If the licensed class cannot fill its share under the cap,
-        // the cap is relaxed to the smallest feasible value (the governance default), for both classes.
+        // A fork culprit: CapNorm over the rest. If the rest is a roster CapNorm rejects (the caps cannot hold, or
+        // no licensed entity is left), the base shares are not recomputed: the culprit is zeroed like any other
+        // evicted entity, and governance has to add members (DESIGN.md §15.28). The cap is never relaxed.
         let keep: Vec<usize> = (0..self.classes.len()).filter(|i| !self.evicted[*i]).collect();
-        let licensed = keep.iter().filter(|i| self.classes[**i] == Class::Licensed).count() as u128;
-        if licensed == 0 {
-            self.base[i] = 0;
-            return;
-        }
-        let total: u128 = keep.iter().map(|i| self.weights[*i] as u128).sum();
-        let uncertified: u128 = keep
-            .iter()
-            .filter(|i| self.classes[**i] == Class::Uncertified)
-            .map(|i| self.weights[*i] as u128)
-            .sum();
-        let licensed_total = ONE - (uncertified * ONE / total).min(self.u_max);
-        let mut cap = self.cap;
-        if licensed * cap < licensed_total {
-            cap = licensed_total / licensed;
-        }
         let classes: Vec<Class> = keep.iter().map(|i| self.classes[*i]).collect();
         let weights: Vec<u64> = keep.iter().map(|i| self.weights[*i]).collect();
-        let shares = ttru::base_weights(&classes, &weights, cap, self.u_max);
-        self.base = vec![0; self.classes.len()];
-        for (i, share) in keep.into_iter().zip(shares) {
-            self.base[i] = share;
+        match ttru::base_weights(&classes, &weights, self.cap, self.u_max) {
+            Ok(shares) => {
+                self.base = vec![0; self.classes.len()];
+                for (i, share) in keep.into_iter().zip(shares) {
+                    self.base[i] = share;
+                }
+            }
+            Err(_) => self.base[i] = 0,
         }
     }
 

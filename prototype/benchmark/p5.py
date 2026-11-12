@@ -37,8 +37,14 @@ def roles(logs):
     if os.path.exists(f"{logs}/faulted.txt"):                # crash, restart, outage (DESIGN.md §15.22)
         with open(f"{logs}/faulted.txt") as fh:
             for who in fh.read().split("\n")[1:]:
-                if who.strip():
-                    out[who.strip()] = "faulted"
+                who = who.strip()
+                if not who:
+                    continue
+                # The logs print keys cut to 16 characters, faulted.txt has them in full: mark the booted name, or the
+                # full one for a node that never booted. (Before 2026-11-12 both were kept, so a faulted node counted
+                # twice, once honest and once faulty, and faulty_share_end of such runs is not meaningful.)
+                short = next((name for name in out if who.startswith(name)), who)
+                out[short] = "faulted"
     return out
 
 
@@ -542,6 +548,45 @@ def r34x():
                         fault_every=120), 600, extra=local_stats)
 
 
+def thr():
+    """Mock review S1 (DESIGN.md §15.27): the G2 threshold was chosen in the simulator (§15.13); check the choice on
+    the prototype in new runs, at ln 4, ln 10^2 and ln 10^4 -- three silent Byzantine leaders (how fast they are
+    excluded) and six framing colluders with 20% late messages (whether honest leaders are convicted)."""
+    base = dict(build="trust2", nodes=31, net="base", epoch_length=25)
+    gammas = (("ln4", 1_386_294), ("ln1e2", 4_605_170), ("ln1e4", 9_210_340))
+    for rep in (1, 2, 3):
+        for name, g in gammas:
+            run("thr_silent", dict(scenario=name, rep=rep, **base, silent=3, g2_threshold=g), 90, extra=local_stats)
+    for rep in (1, 2):
+        for name, g in gammas:
+            run("thr_frame", dict(scenario=name, rep=rep, **base, frame=6, late_p=0.2, g2_threshold=g), 300,
+                extra=local_stats)
+
+
+def thr2():
+    """The framing half of thr() again with 10% late messages, as in the comparison of leader rules (§15.12): with
+    20% the six colluders' withheld votes leave too few on time for a QC, nothing is committed and no fact reaches
+    the ledger (thr_frame_late20.csv)."""
+    base = dict(build="trust2", nodes=31, net="base", epoch_length=25)
+    gammas = (("ln4", 1_386_294), ("ln1e2", 4_605_170), ("ln1e4", 9_210_340))
+    for rep in (1, 2):
+        for name, g in gammas:
+            run("thr_frame", dict(scenario=name, rep=rep, **base, frame=6, late_p=0.1, g2_threshold=g), 300,
+                extra=local_stats)
+
+
+def tgt():
+    """Mock review S1 (DESIGN.md §15.27): targeted framing before GST. Six colluders vote as usual except in the rounds
+    the targets lead, where they withhold their votes and report NR = 1; the network holds back the consensus messages
+    of T chosen honest nodes from 16 other honest nodes (all of them when fewer remain), so every round a target leads
+    ends in an AT accusation. T = 3, 5, 10 -- 10 is the most for which the accusation forms, as the targets' own NR = 0
+    must stay under 1/3. Prop. 1 predicts the colluders' vote share beta_0 / (1 - D)."""
+    base = dict(build="trust2", nodes=31, net="base", epoch_length=25, frame=6)
+    for t in (3, 5, 10):
+        run("tgt_frame", dict(scenario=f"t{t}", rep=1, **base, fault="target", fault_nodes=t, target_victims=16),
+            600, extra=local_stats)
+
+
 def r2():
     """Mock review R2 (DESIGN.md §15.25): the handover under disturbance -- a region outage that keeps hitting epoch
     changes, Byzantine leaders that withhold the commit proof or fill suffix blocks, and both with late messages."""
@@ -618,4 +663,4 @@ def compare_x2(rows):
 
 if __name__ == "__main__":
     {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "f25": f25,
-     "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "r34x": r34x, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()
+     "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "r34x": r34x, "thr": thr, "thr2": thr2, "tgt": tgt, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()

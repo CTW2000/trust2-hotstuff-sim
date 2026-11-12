@@ -52,6 +52,7 @@ impl Node {
             None => Parameters::default(),
         };
         parameters.consensus.check().map_err(ConfigError::InvalidParameters)?;
+        consensus::check_roster(&committee.consensus, &parameters.consensus).map_err(ConfigError::InvalidParameters)?;
         parameters.consensus.censor |= experiment.censor;
         parameters.consensus.equivocate |= experiment.equivocate;
         parameters.consensus.lie_nr |= experiment.lie_nr;

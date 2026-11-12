@@ -16,8 +16,11 @@ fn spawn_nodes(
         .enumerate()
         .map(|(i, (name, secret))| {
             let committee = committee.clone();
+            // Four members need an entity cap of 1/4: CapNorm rejects the default 5% (DESIGN.md §15.28).
             let parameters = Parameters {
                 timeout_delay: 100,
+                entity_cap_ppm: 250_000,
+                l_max_ppm: 250_000,
                 ..Parameters::default()
             };
             let store_path = format!("{}_{}", store_path, i);

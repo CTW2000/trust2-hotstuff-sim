@@ -86,12 +86,13 @@ def main():
     names = ["live-repeat", "iso", "safe-repeat", "correlated", "bug", "fork", "malicious", "small"]
     for seed, name in enumerate(names):
         cls, s = ttru.population(10, 12, 9, seed % 3, alpha=1.16)
-        if name == "small":
-            cls, s = np.array(["L"] * 7), np.ones(7)
+        cap = CAP
+        if name == "small":                            # 7 equal entities need a cap of at least 1/7: CapNorm rejects less
+            cls, s, cap = np.array(["L"] * 7), np.ones(7), 0.142858
         w = np.rint(s * 1e12).astype(np.int64)
-        base = ttru.base_weights(cls, w.astype(float), 0.0, 0.0, CAP, U_MAX)
+        base = ttru.base_weights(cls, w.astype(float), 0.0, 0.0, cap, U_MAX)
         script = script_of(name, base, np.random.default_rng([seed, 7]))
-        pun = Scripted(cls, w.astype(float), CAP, U_MAX, script=script, **PARAMS)
+        pun = Scripted(cls, w.astype(float), cap, U_MAX, script=script, **PARAMS)
         epochs, seen = [], 0
         for k in range(1, EPOCHS + 1):
             z, b = pun.update(None, k, 0)
@@ -100,7 +101,7 @@ def main():
                                events=[[ev, int(i), int(kk)] for ev, i, kk in pun.log[seen:]]))
             seen = len(pun.log)
         out.append(dict(name=name, certified=[bool(c == "L") for c in cls], weights=[int(x) for x in w],
-                        cap_ppm=round(CAP * 1e6), u_max_ppm=round(U_MAX * 1e6),
+                        cap_ppm=round(cap * 1e6), u_max_ppm=round(U_MAX * 1e6),
                         script=[[i, kind, es, ec, mal, fork] for i, kind, es, ec, mal, fork in script],
                         epochs=epochs))
         kinds = {}

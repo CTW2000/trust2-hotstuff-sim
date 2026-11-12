@@ -70,6 +70,10 @@ pub struct Parameters {
     /// Experiment switch: never vote, and report NR = 1 in every timeout (framing colluder).
     #[serde(default)]
     pub frame: bool,
+    /// With `frame` (DESIGN.md §15.27, targeted framing): frame only in the rounds these members lead, and vote as
+    /// usual otherwise (empty: every round).
+    #[serde(default)]
+    pub frame_targets: Vec<PublicKey>,
     /// Experiment switch: as leader, never propose; otherwise run as usual (a Byzantine silent leader).
     #[serde(default)]
     pub silent: bool,
@@ -150,6 +154,7 @@ impl Default for Parameters {
             invalid_block: false,
             regress: false,
             frame: false,
+            frame_targets: Vec::new(),
             silent: false,
             fill_suffix: false,
             withhold_proof: false,
@@ -214,6 +219,9 @@ impl Parameters {
         }
         if self.frame {
             info!("Framing: withholding votes and reporting NR = 1 (experiment)");
+            if !self.frame_targets.is_empty() {
+                info!("Framing only in the rounds {} targets lead (experiment)", self.frame_targets.len());
+            }
         }
         if self.silent {
             info!("Silent leader: never proposing (experiment)");

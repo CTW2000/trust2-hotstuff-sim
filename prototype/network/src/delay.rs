@@ -14,6 +14,10 @@
 //! burst_late_p instead of late_p for the first burst_ms of every burst_period_ms; and the region outage recurs every
 //! outage_period_ms (0: it happens once).
 //!
+//! Targeted framing (DESIGN.md §15.27): the consensus messages of the nodes in `slow_from` to the nodes in `slow_to`
+//! are late by slow_ms more, always -- an adversary that controls the network before GST holds back the proposals of
+//! chosen honest leaders from some honest nodes, so that their views end in AT accusations.
+//!
 //! Configured through the environment: TTRU_DELAYS names a JSON file {"addresses": {"<ip:port>": node, ...},
 //! "base_ms": [[...]], "jitter_ms": x, "bandwidth_mbps": y, "late_p": p, "late_ms": z, "late_to": ["<ip:port>",
 //! ...]} and TTRU_NODE is this node's index. Without them there is no delay at all.
@@ -56,6 +60,12 @@ pub struct Delays {
     burst_late_p: f64,
     #[serde(default)]
     schedule_from_ms: u64,
+    #[serde(default)]
+    slow_from: HashSet<usize>,
+    #[serde(default)]
+    slow_to: HashSet<usize>,
+    #[serde(default)]
+    slow_ms: f64,
     #[serde(skip)]
     me: usize,
 }
@@ -85,7 +95,11 @@ impl Delays {
             false => 0.0,
         };
         let held = self.held_ms(j, now);
-        Some(Duration::from_secs_f64((held + self.base_ms[self.me][j] + jitter + transmission + late) / 1e3))
+        let slow = match self.slow_from.contains(&self.me) && self.slow_to.contains(&j) && self.late_to.contains(to) {
+            true => self.slow_ms,
+            false => 0.0,
+        };
+        Some(Duration::from_secs_f64((held + self.base_ms[self.me][j] + jitter + transmission + late + slow) / 1e3))
     }
 
     /// How long a message to node `j` queued at `now_ms` (Unix time) waits for the region outage to end. With a
