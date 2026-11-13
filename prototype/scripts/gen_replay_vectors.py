@@ -8,7 +8,7 @@ after a terminal block). The ledger is built round by round with the reference r
 leads depends on the tables, and then replayed from scratch to record what is expected:
 
 - the terminal block of each epoch, and at each one the rounds processed, the G2 and G1 events, the CUSUM
-  statistics, reputations, exclusions, suspensions, bars and both queues;
+  statistics, reputations, exclusions, suspensions, bars and the G1 queue;
 - every weight table W_e (integer stakes, who may lead, the leader of the first round);
 - the leader of every round.
 
@@ -36,7 +36,8 @@ CASES = [
             "Seven members in key order: an entity of two licensed members (30 + 10), licensed members of 25, 20 "
             "and 15, an uncertified member of 10 and a licensed member of weight 0; cap 25%, u_max 25%, L_max 25%. "
             "Members 3, 0 and 2 stay silent as leaders in turn, members 3 and 0 twice: convictions, the 50% "
-            "exclusion cap and its queue, releases, recovery and the budget. Member 4 has "
+            "exclusion cap (convictions without room discarded, then a later one excluded), releases, recovery "
+            "and the budget. Member 4 has "
             "an NR self-contradiction twice in one sign window, then again (L1, then L2 by repeat); member 5 a "
             "double vote (L2), so that L_max queues member 4 until member 5 is released. Round 25 times out "
             "without an accusation, so the first terminal block is later."
@@ -44,8 +45,9 @@ CASES = [
         roster=[member(30, entity=1), member(10, entity=1), member(25), member(20), member(15),
                 member(10, certified=False), member(0)],
         length=25, cap_ppm=250_000, u_max_ppm=250_000, l_max_ppm=250_000,
-        rounds=1150,
-        silent=[(3, 5, 120, 1), (0, 200, 300, 1), (2, 330, 400, 1), (3, 600, 700, 1), (0, 800, 900, 1)],
+        rounds=1400,
+        silent=[(3, 5, 120, 1), (0, 200, 300, 1), (2, 330, 560, 1), (3, 600, 760, 1), (0, 800, 1100, 1),
+                (2, 1030, 1300, 1)],
         quiet=[25, 140, 141],
         evidence=[(30, 4, "E-NR", 0), (55, 4, "E-NR", 0), (130, 4, "E-NR", 0), (105, 5, "E1", 0)],
         late=[160, 470],

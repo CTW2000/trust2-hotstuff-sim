@@ -23,9 +23,11 @@ Effects (durations in epochs):
       not count against the AT exclusion cap);
   L2, L3  suspension (z = 0, also barred from leading) for sus[level] epochs from the epoch it takes
       effect; suspended base share <= l_max at all times, further suspensions wait in a strict FIFO
-      queue (an upgrade while queued updates the entry, an upgrade while suspended extends it); a
-      queued entity is barred from leading meanwhile (outside the cap: G1 never falls on honest
-      replicas, and leading does not touch the weight table);
+      queue (an upgrade while queued updates the entry, an upgrade while suspended extends it). With
+      bar_queued = True (the earlier experiments) a queued entity is barred from leading meanwhile, outside
+      any cap; with bar_queued = False (the adopted protocol, prototype DESIGN.md §15.31) it keeps leading
+      until its suspension starts: G1 evidence cannot be forged, so a late suspension frames nobody, and an
+      uncapped bar would hand the lead to the rest after a client bug;
   L4  decided by governance `gov_delay` epochs later: a fork or malicious evidence leads to eviction (removed from the set, CapNorm recomputed over the rest). If CapNorm rejects the rest
       (no licensed entity of positive weight, or licensed count x cap < licensed class total 1 - U), the
       base is not recomputed: the old base is kept with the evicted entities at zero, flagged "infeasible"
@@ -51,11 +53,12 @@ from . import ttru
 class GradedPunishment:
     def __init__(self, cls, stake, cap, u_max, epoch=100, l_max=0.10, sus=(0, 0, 4, 32), lead_bar=1,
                  win_chain=32, lookback=64, gov_delay=2, liveness=True, injected=(), forks=(), recompute="fork",
-                 repeat_evict=False, delay=0, sign_window=1):
+                 repeat_evict=False, delay=0, sign_window=1, bar_queued=True):
         self.cls, self.stake = np.asarray(cls), np.asarray(stake, float)
         self.cap, self.u_max, self.epoch, self.l_max = cap, u_max, epoch, l_max
         self.sus, self.lead_bar, self.win_chain, self.lookback = sus, lead_bar, win_chain, lookback
         self.gov_delay, self.liveness, self.recompute = gov_delay, liveness, recompute
+        self.bar_queued = bar_queued
         self.repeat_evict = repeat_evict
         # H1' (DESIGN.md §15.11): with delay 1 the table of epoch k is built from the ledger up to the start of epoch
         # k - 1, so evidence of chain epoch e is visible from the table of epoch e + 2 on.
@@ -233,7 +236,8 @@ class GradedPunishment:
         susp = (self.sus_until > k) | self.evicted
         self.history.append((float(self.base[self.sus_until > k].sum()), len(self.queue)))
         queued = np.zeros(len(self.cls), bool)
-        queued[[q[0] for q in self.queue]] = True
+        if self.bar_queued:
+            queued[[q[0] for q in self.queue]] = True
         self.bar_hist.append((self.bar_until > k) | susp | queued)
         return np.where(susp, 0.0, 1.0), self.base.copy()
 

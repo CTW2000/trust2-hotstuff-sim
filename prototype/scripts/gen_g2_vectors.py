@@ -1,7 +1,7 @@
 """G2 test vectors for prototype/consensus/src/reputation.rs from the simulator's reference rules.
 
-The leader rule (sim2/schedule.py `CusumExclusion`: AT evidence, CUSUM, exclusion cap on base weight, strict
-FIFO queue) and the reputation update (sim2/ttru.py `TtruWeights`: step, r_min, recovery, budget b_rep) run on
+The leader rule (sim2/schedule.py `CusumExclusion`: AT evidence, CUSUM, exclusion cap on base weight, a
+conviction without room discarded -- queue=False, prototype/DESIGN.md §15.31) and the reputation update (sim2/ttru.py `TtruWeights`: step, r_min, recovery, budget b_rep) run on
 synthetic accusation facts with the recommended parameters (信任2.0_协议级验证 §4.4). Leaders follow the
 prototype's schedule (prototype/DESIGN.md §12.2): in each epoch, round robin by member index over the members
 not excluded when the epoch starts. Epochs are E rounds long; at the terminal round kE the facts of rounds
@@ -18,7 +18,7 @@ from sim2 import ttru
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "consensus", "src", "tests", "g2_vectors.json")
 E, LAG, EPOCHS = 100, 10, 40
-RULE = dict(q=0.5, rho_bar=0.1, gamma=1e2, D=500, cap=0.5, Wq=500, evidence="at")
+RULE = dict(q=0.5, rho_bar=0.1, gamma=1e2, D=500, cap=0.5, evidence="at", queue=False)
 WEIGHTS = dict(epoch=E, r_min=0.7, b_rep=0.10, step=0.1, recover=0.02)
 CASES = [  # (name, base, silent members, probability that another leader's round is accused, seed)
     ("silent3-n31-equal", "equal31", [0, 5, 9], 0.0, 1),
@@ -79,7 +79,6 @@ def run(name, kind, silent, frame, seed):
             events=[[ev, int(node), int(view)] for ev, node, view in st.rule_log[seen:]],
             r_ppm=[int(round(x * 1e6)) for x in weights._state(st)["r"]],
             excluded=[bool(x) for x in s["excluded"]],
-            queue=[int(e[0]) for e in s["queue"]],
             table=[float(x) for x in table],
         ))
         seen = len(st.rule_log)
@@ -93,7 +92,7 @@ def main():
         json.dump(out, fh)
     for case in out:
         ev = [e for x in case["epochs"] for e in x["events"]]
-        kinds = {k: sum(1 for e in ev if e[0] == k) for k in ("exclude", "release", "queue", "drop")}
+        kinds = {k: sum(1 for e in ev if e[0] == k) for k in ("exclude", "release", "full")}
         print(case["name"], kinds, "min r", min(min(x["r_ppm"]) for x in case["epochs"]))
     print(f"{len(out)} cases -> {os.path.normpath(OUT)}")
 

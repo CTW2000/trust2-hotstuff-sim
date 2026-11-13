@@ -280,17 +280,52 @@ def xr():
                 run("xr", dict(scenario=name, build=build, nodes=31, net="base", epoch_length=50, rep=rep, **faults), 90)
 
 
-def xt():
+# Input rates of the throughput-latency curve, from a probe: up to and past the knee.
+XT_RATES = {4: (50_000, 100_000, 200_000, 300_000, 350_000, 400_000),
+            10: (25_000, 50_000, 100_000, 150_000, 175_000, 200_000),
+            31: (20_000, 30_000, 40_000, 50_000, 60_000, 70_000)}
+
+
+def xt(experiment="xt", epoch_length=100):
     """Throughput against latency: the input rate up to and past the knee, base network, both builds, three runs. The
     rates come from a probe; nodes and clients share one server, so the knee is where it runs out of CPU."""
-    rates = {4: (50_000, 100_000, 200_000, 300_000, 350_000, 400_000),
-             10: (25_000, 50_000, 100_000, 150_000, 175_000, 200_000),
-             31: (20_000, 30_000, 40_000, 50_000, 60_000, 70_000)}
     for rep in (1, 2, 3):
-        for nodes, sweep in rates.items():
+        for nodes, sweep in XT_RATES.items():
             for rate in sweep:
                 for build in ("baseline", "trust2"):
-                    run("xt", dict(build=build, nodes=nodes, net="base", rate=rate, epoch_length=100, rep=rep), 30)
+                    run(experiment, dict(build=build, nodes=nodes, net="base", rate=rate, epoch_length=epoch_length,
+                                         rep=rep), 30)
+
+
+def r7x2():
+    """R7 (DESIGN.md §15.30): the normal case of x2 under the final rules -- the next table known an epoch ahead,
+    epochs of 25 rounds, H2/H4/E2 -- so that the overhead in the paper is measured on the scheme it describes."""
+    for rep in (1, 2, 3):
+        for nodes in (4, 10, 31):
+            for net in ("none", "base", "wide"):
+                for build in ("baseline", "trust2"):
+                    run("r7_x2", dict(build=build, nodes=nodes, net=net, epoch_length=25, rep=rep), 30)
+
+
+def r7spot():
+    """R7 (DESIGN.md §15.30): after the changes of §15.31-§15.32 (paths that fault-free runs never take), the normal
+    case of r7_x2 at n = 31 once more on the final binary, to confirm it."""
+    for rep in (1, 2, 3):
+        for net in ("none", "base"):
+            run("r7_spot", dict(build="trust2", nodes=31, net=net, epoch_length=25, rep=rep), 30)
+
+
+def r7len():
+    """R7 diagnosis (DESIGN.md §15.30): the CPU-bound rounds per second of Trust 2.0 at n = 31 against the epoch
+    length -- 25 (r7_x2), 100 and a single epoch -- on the final binary."""
+    for rep in (1, 2, 3):
+        for length in (100, 0):
+            run("r7_len", dict(build="trust2", nodes=31, net="none", epoch_length=length, rep=rep), 30)
+
+
+def r7xt():
+    """R7 (DESIGN.md §15.30): the throughput-latency curve of xt under the final rules, the same rates."""
+    xt("r7_xt", 25)
 
 
 def f25():
@@ -632,7 +667,7 @@ def report():
                 else:
                     cells.append(f"{median(values):g} [{min(values):g}–{max(values):g}]")
             lines.append("| " + " | ".join(cells) + " |")
-        if os.path.basename(path) == "x2.csv":
+        if os.path.basename(path) in ("x2.csv", "r7_x2.csv"):
             lines += compare_x2(rows)
         with open(path[:-4] + ".md", "w") as fh:
             fh.write("\n".join(lines) + "\n")
@@ -662,5 +697,5 @@ def compare_x2(rows):
 
 
 if __name__ == "__main__":
-    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "f25": f25,
+    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "r7x2": r7x2, "r7spot": r7spot, "r7len": r7len, "r7xt": r7xt, "f25": f25,
      "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "r34x": r34x, "thr": thr, "thr2": thr2, "tgt": tgt, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()

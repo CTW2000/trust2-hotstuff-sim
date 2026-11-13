@@ -425,7 +425,7 @@ impl Core {
         for evidence in found {
             info!("G1: found {:?}", evidence);
             self.tx_proposer
-                .send(ProposerMessage::Evidence(evidence))
+                .send(ProposerMessage::Evidence(self.epochs.evidence_window(&evidence), evidence))
                 .await
                 .expect("Failed to send message to proposer");
         }
@@ -716,7 +716,7 @@ impl Core {
                 for evidence in &block.evidence {
                     self.detector.on_ledger(evidence);
                 }
-                let windows = block.evidence.iter().map(Detector::window).collect();
+                let windows = block.evidence.iter().map(|e| self.epochs.evidence_window(e)).collect();
                 self.tx_proposer
                     .send(ProposerMessage::Evidenced(windows))
                     .await

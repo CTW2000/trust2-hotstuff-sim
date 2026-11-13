@@ -393,12 +393,13 @@ impl Punishment {
         (0..self.classes.len()).map(|i| !self.suspended(i)).collect()
     }
 
-    /// Barred from leading in the current epoch: L1, suspended, evicted, or queued for a suspension.
+    /// Barred from leading in the current epoch: L1, suspended or evicted. An entity queued for a suspension keeps
+    /// leading until the suspension starts (DESIGN.md §15.31): G1 evidence cannot be forged, so a late suspension
+    /// frames nobody, while barring the whole queue, which L_max does not cap, would hand every lead to the rest
+    /// after a client bug.
     pub fn bars(&self) -> Vec<bool> {
         let k = self.epoch.unwrap_or(0);
-        (0..self.classes.len())
-            .map(|i| self.bar_until[i] > k || self.suspended(i) || self.queue.iter().any(|q| q.0 == i))
-            .collect()
+        (0..self.classes.len()).map(|i| self.bar_until[i] > k || self.suspended(i)).collect()
     }
 
     /// The events of the latest table (`update`).

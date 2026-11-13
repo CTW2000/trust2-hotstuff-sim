@@ -109,7 +109,7 @@ class G2Params:
     def __init__(self, length):
         self.lag = 10
         self.up, self.down, self.threshold = 1_609_438, -587_787, 4_605_170
-        self.exclusion, self.queue_wait = 500, 500
+        self.exclusion = 500
         self.cap = ONE // 2
         self.r_min, self.step = 700_000, 100_000
         self.recover = 20_000 * length // REFERENCE_LENGTH
@@ -135,7 +135,6 @@ class Reputation:
         n = len(base)
         self.p, self.base = p, base
         self.cusum, self.excluded, self.until = [0] * n, [False] * n, [0] * n
-        self.queue = []  # (entity, round of the conviction)
         self.done = 0
         self.r = [PPM] * n
         self.accused = {}  # round -> epoch of the first accusation of it
@@ -166,18 +165,6 @@ class Reputation:
             if self.excluded[k] and self.until[k] <= u:
                 self.excluded[k] = False
                 self.log.append(("release", k, u))
-        keep, blocked = [], False
-        for k, t in self.queue:
-            if u - t > self.p.queue_wait:
-                self.cusum[k] = 0
-                self.log.append(("drop", k, u))
-            elif not blocked and not self.excluded[k] and self.room(k):
-                self.exclude(k, u)
-            else:
-                if not self.excluded[k]:
-                    blocked = True
-                keep.append((k, t))
-        self.queue = keep
         accusation = self.accused.get(u)
         k = leader_of(u, accusation)
         if k is None or self.excluded[k]:
@@ -187,14 +174,12 @@ class Reputation:
             self.convict(k, u)
 
     def convict(self, k, u):
-        if any(x == k for x, _ in self.queue):
-            self.cusum[k] = self.p.threshold
-        elif not self.queue and self.room(k):
+        """Exclude if the cap leaves room, else discard the conviction: the statistic starts over."""
+        if self.room(k):
             self.exclude(k, u)
         else:
-            self.queue.append((k, u))
             self.cusum[k] = 0
-            self.log.append(("queue", k, u))
+            self.log.append(("full", k, u))
 
     def exclude(self, k, u):
         self.excluded[k] = True
@@ -343,9 +328,9 @@ class Punishment:
         return [not self.suspended(i) for i in range(len(self.base))]
 
     def bars(self):
+        """L1, suspended or evicted; an entity queued for a suspension keeps leading until it starts."""
         k = self.epoch or 0
-        queued = {q[0] for q in self.queue}
-        return [self.bar_until[i] > k or self.suspended(i) or i in queued for i in range(len(self.base))]
+        return [self.bar_until[i] > k or self.suspended(i) for i in range(len(self.base))]
 
 
 # ---------------------------------------------------------------- SPEC §3 and §7: epochs and the replay
@@ -455,7 +440,6 @@ class Replay:
             "cusum": list(rep.cusum),
             "r_ppm": list(rep.r),
             "excluded": list(rep.excluded),
-            "g2_queue": [list(x) for x in rep.queue],
             "g1_events": [list(x) for x in self.punishment.log],
             "z": self.punishment.z(),
             "bars": self.punishment.bars(),

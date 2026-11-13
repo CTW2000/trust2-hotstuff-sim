@@ -1,0 +1,634 @@
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> mempool/src/batch_maker.rs:124:45
+    |
+124 |                 Sha512::digest(&serialized).as_slice()[..32]
+    |                                             ^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> mempool/src/processor.rs:30:60
+   |
+30 |                 let digest = Digest(Sha512::digest(&batch).as_slice()[..32].try_into().unwrap());
+   |                                                            ^^^^^^^^
+
+warning: `mempool` (lib) generated 2 warnings
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:274:30
+    |
+274 |     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                              ^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:349:30
+    |
+349 |     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                              ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:359:30
+    |
+359 |     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                              ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:373:30
+    |
+373 |     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                              ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:601:34
+    |
+601 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:679:34
+    |
+679 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:721:34
+    |
+721 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:748:30
+    |
+748 |     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                              ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:867:34
+    |
+867 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+    --> consensus/src/messages.rs:1081:34
+     |
+1081 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+     |                                  ^^^^^^^^
+
+warning: struct `LeaderElector` is never constructed
+  --> consensus/src/leader.rs:50:12
+   |
+50 | pub struct LeaderElector {
+   |            ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated items `new` and `get_leader` are never used
+  --> consensus/src/leader.rs:55:12
+   |
+54 | impl LeaderElector {
+   | ------------------ associated items in this implementation
+55 |     pub fn new(committee: Committee) -> Self {
+   |            ^^^
+...
+59 |     pub fn get_leader(&self, round: Round) -> PublicKey {
+   |            ^^^^^^^^^^
+
+warning: methods `events` and `queue` are never used
+   --> consensus/src/punish.rs:405:12
+    |
+112 | impl Punishment {
+    | --------------- methods in this implementation
+...
+405 |     pub fn events(&self) -> &[G1Event] {
+    |            ^^^^^^
+...
+410 |     pub fn queue(&self) -> Vec<usize> {
+    |            ^^^^^
+
+warning: methods `queue`, `cusum`, `events`, and `stakes` are never used
+   --> consensus/src/reputation.rs:136:12
+    |
+ 89 | impl Reputation {
+    | --------------- methods in this implementation
+...
+136 |     pub fn queue(&self) -> &[(usize, Round)] {
+    |            ^^^^^
+...
+141 |     pub fn cusum(&self) -> &[i64] {
+    |            ^^^^^
+...
+146 |     pub fn events(&self) -> &[Event] {
+    |            ^^^^^^
+...
+274 |     pub fn stakes(&self, z: &[bool]) -> Vec<u64> {
+    |            ^^^^^^
+
+warning: `consensus` (lib) generated 14 warnings
+    Finished `release` profile [optimized] target(s) in 0.04s
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> /home/bcds/h2h4_dev/mempool/src/batch_maker.rs:124:45
+    |
+124 |                 Sha512::digest(&serialized).as_slice()[..32]
+    |                                             ^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> /home/bcds/h2h4_dev/mempool/src/processor.rs:30:60
+   |
+30 |                 let digest = Digest(Sha512::digest(&batch).as_slice()[..32].try_into().unwrap());
+   |                                                            ^^^^^^^^
+
+warning: `mempool` (lib) generated 2 warnings
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> consensus/src/messages.rs:88:34
+   |
+88 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+   |                                  ^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:154:34
+    |
+154 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:206:34
+    |
+206 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:273:34
+    |
+273 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:311:51
+    |
+311 |             let digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+    |                                                   ^^^^^^^^
+
+warning: `consensus` (lib) generated 5 warnings
+    Finished `release` profile [optimized] target(s) in 0.04s
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net none --epoch-length 25
+{'consensus_tps': 10010, 'consensus_latency_ms': 4, 'e2e_latency_ms': 8, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net none --epoch-length 25
+{'consensus_tps': 10011, 'consensus_latency_ms': 4, 'e2e_latency_ms': 9, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --epoch-length 25
+{'consensus_tps': 9976, 'consensus_latency_ms': 212, 'e2e_latency_ms': 327, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --epoch-length 25
+{'consensus_tps': 9959, 'consensus_latency_ms': 210, 'e2e_latency_ms': 327, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net wide --epoch-length 25
+{'consensus_tps': 9929, 'consensus_latency_ms': 397, 'e2e_latency_ms': 609, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net wide --epoch-length 25
+{'consensus_tps': 9944, 'consensus_latency_ms': 398, 'e2e_latency_ms': 615, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net none --epoch-length 25
+{'consensus_tps': 10011, 'consensus_latency_ms': 4, 'e2e_latency_ms': 9, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net none --epoch-length 25
+{'consensus_tps': 10000, 'consensus_latency_ms': 5, 'e2e_latency_ms': 9, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --epoch-length 25
+{'consensus_tps': 9973, 'consensus_latency_ms': 217, 'e2e_latency_ms': 324, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --epoch-length 25
+{'consensus_tps': 9955, 'consensus_latency_ms': 222, 'e2e_latency_ms': 333, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net wide --epoch-length 25
+{'consensus_tps': 9926, 'consensus_latency_ms': 385, 'e2e_latency_ms': 580, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net wide --epoch-length 25
+{'consensus_tps': 9930, 'consensus_latency_ms': 387, 'e2e_latency_ms': 590, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net none --epoch-length 25
+{'consensus_tps': 10009, 'consensus_latency_ms': 8, 'e2e_latency_ms': 15, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net none --epoch-length 25
+{'consensus_tps': 10000, 'consensus_latency_ms': 10, 'e2e_latency_ms': 18, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --epoch-length 25
+{'consensus_tps': 9954, 'consensus_latency_ms': 227, 'e2e_latency_ms': 333, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --epoch-length 25
+{'consensus_tps': 9961, 'consensus_latency_ms': 228, 'e2e_latency_ms': 338, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net wide --epoch-length 25
+{'consensus_tps': 9959, 'consensus_latency_ms': 404, 'e2e_latency_ms': 598, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net wide --epoch-length 25
+{'consensus_tps': 9940, 'consensus_latency_ms': 397, 'e2e_latency_ms': 597, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net none --epoch-length 25
+{'consensus_tps': 10001, 'consensus_latency_ms': 4, 'e2e_latency_ms': 9, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net none --epoch-length 25
+{'consensus_tps': 10011, 'consensus_latency_ms': 5, 'e2e_latency_ms': 9, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --epoch-length 25
+{'consensus_tps': 9974, 'consensus_latency_ms': 212, 'e2e_latency_ms': 324, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --epoch-length 25
+{'consensus_tps': 9953, 'consensus_latency_ms': 215, 'e2e_latency_ms': 334, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net wide --epoch-length 25
+{'consensus_tps': 9935, 'consensus_latency_ms': 353, 'e2e_latency_ms': 551, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net wide --epoch-length 25
+{'consensus_tps': 9924, 'consensus_latency_ms': 398, 'e2e_latency_ms': 617, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net none --epoch-length 25
+{'consensus_tps': 10002, 'consensus_latency_ms': 4, 'e2e_latency_ms': 9, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net none --epoch-length 25
+{'consensus_tps': 10011, 'consensus_latency_ms': 5, 'e2e_latency_ms': 9, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --epoch-length 25
+{'consensus_tps': 9974, 'consensus_latency_ms': 203, 'e2e_latency_ms': 305, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --epoch-length 25
+{'consensus_tps': 9970, 'consensus_latency_ms': 220, 'e2e_latency_ms': 331, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net wide --epoch-length 25
+{'consensus_tps': 9944, 'consensus_latency_ms': 404, 'e2e_latency_ms': 606, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net wide --epoch-length 25
+{'consensus_tps': 9913, 'consensus_latency_ms': 404, 'e2e_latency_ms': 613, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net none --epoch-length 25
+{'consensus_tps': 10012, 'consensus_latency_ms': 8, 'e2e_latency_ms': 16, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net none --epoch-length 25
+{'consensus_tps': 10008, 'consensus_latency_ms': 10, 'e2e_latency_ms': 18, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --epoch-length 25
+{'consensus_tps': 9966, 'consensus_latency_ms': 220, 'e2e_latency_ms': 323, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --epoch-length 25
+{'consensus_tps': 9949, 'consensus_latency_ms': 228, 'e2e_latency_ms': 338, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net wide --epoch-length 25
+{'consensus_tps': 9923, 'consensus_latency_ms': 403, 'e2e_latency_ms': 594, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net wide --epoch-length 25
+{'consensus_tps': 9939, 'consensus_latency_ms': 393, 'e2e_latency_ms': 591, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net none --epoch-length 25
+{'consensus_tps': 10010, 'consensus_latency_ms': 5, 'e2e_latency_ms': 9, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net none --epoch-length 25
+{'consensus_tps': 10010, 'consensus_latency_ms': 5, 'e2e_latency_ms': 9, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --epoch-length 25
+{'consensus_tps': 9959, 'consensus_latency_ms': 213, 'e2e_latency_ms': 326, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --epoch-length 25
+{'consensus_tps': 9963, 'consensus_latency_ms': 215, 'e2e_latency_ms': 332, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net wide --epoch-length 25
+{'consensus_tps': 9943, 'consensus_latency_ms': 394, 'e2e_latency_ms': 604, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net wide --epoch-length 25
+{'consensus_tps': 9899, 'consensus_latency_ms': 406, 'e2e_latency_ms': 629, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net none --epoch-length 25
+{'consensus_tps': 10001, 'consensus_latency_ms': 4, 'e2e_latency_ms': 9, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net none --epoch-length 25
+{'consensus_tps': 10009, 'consensus_latency_ms': 5, 'e2e_latency_ms': 9, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --epoch-length 25
+{'consensus_tps': 9964, 'consensus_latency_ms': 210, 'e2e_latency_ms': 313, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --epoch-length 25
+{'consensus_tps': 9954, 'consensus_latency_ms': 222, 'e2e_latency_ms': 335, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net wide --epoch-length 25
+{'consensus_tps': 9965, 'consensus_latency_ms': 399, 'e2e_latency_ms': 598, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net wide --epoch-length 25
+{'consensus_tps': 9945, 'consensus_latency_ms': 400, 'e2e_latency_ms': 610, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net none --epoch-length 25
+{'consensus_tps': 10009, 'consensus_latency_ms': 8, 'e2e_latency_ms': 15, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net none --epoch-length 25
+{'consensus_tps': 10003, 'consensus_latency_ms': 10, 'e2e_latency_ms': 19, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --epoch-length 25
+{'consensus_tps': 9959, 'consensus_latency_ms': 225, 'e2e_latency_ms': 329, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --epoch-length 25
+{'consensus_tps': 9965, 'consensus_latency_ms': 225, 'e2e_latency_ms': 337, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net wide --epoch-length 25
+{'consensus_tps': 9957, 'consensus_latency_ms': 390, 'e2e_latency_ms': 579, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net wide --epoch-length 25
+{'consensus_tps': 9948, 'consensus_latency_ms': 398, 'e2e_latency_ms': 599, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49855, 'consensus_latency_ms': 215, 'e2e_latency_ms': 326, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49799, 'consensus_latency_ms': 222, 'e2e_latency_ms': 339, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 100000 --epoch-length 25
+{'consensus_tps': 99492, 'consensus_latency_ms': 220, 'e2e_latency_ms': 333, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 100000 --epoch-length 25
+{'consensus_tps': 99664, 'consensus_latency_ms': 229, 'e2e_latency_ms': 346, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 200000 --epoch-length 25
+{'consensus_tps': 199292, 'consensus_latency_ms': 202, 'e2e_latency_ms': 313, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 200000 --epoch-length 25
+{'consensus_tps': 199082, 'consensus_latency_ms': 248, 'e2e_latency_ms': 376, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 300000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 16 time(s)
+{'consensus_tps': 286778, 'consensus_latency_ms': 269, 'e2e_latency_ms': 399, 'timeouts': 1}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 300000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 7 time(s)
+{'consensus_tps': 287226, 'consensus_latency_ms': 281, 'e2e_latency_ms': 418, 'timeouts': 1}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 350000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 125 time(s)
+[1m[93mWARN[0m: Nodes timed out 10 time(s)
+{'consensus_tps': 323258, 'consensus_latency_ms': 289, 'e2e_latency_ms': 421, 'timeouts': 10}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 350000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 158 time(s)
+[1m[93mWARN[0m: Nodes timed out 7 time(s)
+{'consensus_tps': 253958, 'consensus_latency_ms': 518, 'e2e_latency_ms': 690, 'timeouts': 7}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 400000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 449 time(s)
+[1m[93mWARN[0m: Nodes timed out 24 time(s)
+{'consensus_tps': 150382, 'consensus_latency_ms': 1562, 'e2e_latency_ms': 2081, 'timeouts': 24}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 400000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 586 time(s)
+[1m[93mWARN[0m: Nodes timed out 17 time(s)
+{'consensus_tps': 0, 'consensus_latency_ms': 0, 'e2e_latency_ms': 0, 'timeouts': 17}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 25000 --epoch-length 25
+{'consensus_tps': 24846, 'consensus_latency_ms': 202, 'e2e_latency_ms': 302, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 25000 --epoch-length 25
+{'consensus_tps': 24889, 'consensus_latency_ms': 226, 'e2e_latency_ms': 333, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49792, 'consensus_latency_ms': 228, 'e2e_latency_ms': 334, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49843, 'consensus_latency_ms': 228, 'e2e_latency_ms': 339, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 100000 --epoch-length 25
+{'consensus_tps': 99669, 'consensus_latency_ms': 232, 'e2e_latency_ms': 344, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 100000 --epoch-length 25
+{'consensus_tps': 99688, 'consensus_latency_ms': 242, 'e2e_latency_ms': 360, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 150000 --epoch-length 25
+{'consensus_tps': 148327, 'consensus_latency_ms': 331, 'e2e_latency_ms': 499, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 150000 --epoch-length 25
+[1m[93mWARN[0m: Nodes timed out 3 time(s)
+{'consensus_tps': 147475, 'consensus_latency_ms': 345, 'e2e_latency_ms': 522, 'timeouts': 3}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 175000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 29 time(s)
+[1m[93mWARN[0m: Nodes timed out 15 time(s)
+{'consensus_tps': 144629, 'consensus_latency_ms': 565, 'e2e_latency_ms': 846, 'timeouts': 15}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 175000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 23 time(s)
+[1m[93mWARN[0m: Nodes timed out 17 time(s)
+{'consensus_tps': 152210, 'consensus_latency_ms': 503, 'e2e_latency_ms': 739, 'timeouts': 17}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 200000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 646 time(s)
+[1m[93mWARN[0m: Nodes timed out 24 time(s)
+{'consensus_tps': 105922, 'consensus_latency_ms': 1102, 'e2e_latency_ms': 1491, 'timeouts': 24}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 200000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 731 time(s)
+[1m[93mWARN[0m: Nodes timed out 24 time(s)
+{'consensus_tps': 127092, 'consensus_latency_ms': 959, 'e2e_latency_ms': 1355, 'timeouts': 24}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 20000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 4 time(s)
+{'consensus_tps': 19936, 'consensus_latency_ms': 226, 'e2e_latency_ms': 328, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 20000 --epoch-length 25
+{'consensus_tps': 19922, 'consensus_latency_ms': 230, 'e2e_latency_ms': 336, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 30000 --epoch-length 25
+{'consensus_tps': 29850, 'consensus_latency_ms': 224, 'e2e_latency_ms': 329, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 30000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 2 time(s)
+{'consensus_tps': 29828, 'consensus_latency_ms': 239, 'e2e_latency_ms': 352, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 40000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 4 time(s)
+{'consensus_tps': 39795, 'consensus_latency_ms': 234, 'e2e_latency_ms': 343, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 40000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 6 time(s)
+{'consensus_tps': 39748, 'consensus_latency_ms': 246, 'e2e_latency_ms': 362, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 50000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 17 time(s)
+{'consensus_tps': 49821, 'consensus_latency_ms': 274, 'e2e_latency_ms': 412, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 50000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 10 time(s)
+{'consensus_tps': 49954, 'consensus_latency_ms': 279, 'e2e_latency_ms': 418, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 60000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 18 time(s)
+[1m[93mWARN[0m: Nodes timed out 3 time(s)
+{'consensus_tps': 56494, 'consensus_latency_ms': 493, 'e2e_latency_ms': 747, 'timeouts': 3}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 60000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 31 time(s)
+[1m[93mWARN[0m: Nodes timed out 4 time(s)
+{'consensus_tps': 54470, 'consensus_latency_ms': 458, 'e2e_latency_ms': 719, 'timeouts': 4}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 70000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 231 time(s)
+[1m[93mWARN[0m: Nodes timed out 19 time(s)
+{'consensus_tps': 40786, 'consensus_latency_ms': 332, 'e2e_latency_ms': 459, 'timeouts': 19}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 70000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 154 time(s)
+[1m[93mWARN[0m: Nodes timed out 13 time(s)
+{'consensus_tps': 62859, 'consensus_latency_ms': 1207, 'e2e_latency_ms': 1736, 'timeouts': 13}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49812, 'consensus_latency_ms': 216, 'e2e_latency_ms': 328, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49795, 'consensus_latency_ms': 219, 'e2e_latency_ms': 336, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 100000 --epoch-length 25
+{'consensus_tps': 99749, 'consensus_latency_ms': 187, 'e2e_latency_ms': 290, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 100000 --epoch-length 25
+{'consensus_tps': 99729, 'consensus_latency_ms': 228, 'e2e_latency_ms': 346, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 200000 --epoch-length 25
+{'consensus_tps': 199173, 'consensus_latency_ms': 202, 'e2e_latency_ms': 312, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 200000 --epoch-length 25
+{'consensus_tps': 199392, 'consensus_latency_ms': 246, 'e2e_latency_ms': 373, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 300000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 9 time(s)
+{'consensus_tps': 287883, 'consensus_latency_ms': 239, 'e2e_latency_ms': 366, 'timeouts': 1}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 300000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 8 time(s)
+{'consensus_tps': 297988, 'consensus_latency_ms': 277, 'e2e_latency_ms': 415, 'timeouts': 1}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 350000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 145 time(s)
+[1m[93mWARN[0m: Nodes timed out 10 time(s)
+{'consensus_tps': 347452, 'consensus_latency_ms': 283, 'e2e_latency_ms': 415, 'timeouts': 10}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 350000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 156 time(s)
+[1m[93mWARN[0m: Nodes timed out 8 time(s)
+{'consensus_tps': 298593, 'consensus_latency_ms': 332, 'e2e_latency_ms': 479, 'timeouts': 8}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 400000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 312 time(s)
+[1m[93mWARN[0m: Nodes timed out 16 time(s)
+{'consensus_tps': 367764, 'consensus_latency_ms': 302, 'e2e_latency_ms': 443, 'timeouts': 16}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 400000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 573 time(s)
+[1m[93mWARN[0m: Nodes timed out 28 time(s)
+{'consensus_tps': 0, 'consensus_latency_ms': 0, 'e2e_latency_ms': 0, 'timeouts': 28}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 25000 --epoch-length 25
+{'consensus_tps': 24832, 'consensus_latency_ms': 209, 'e2e_latency_ms': 309, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 25000 --epoch-length 25
+{'consensus_tps': 24838, 'consensus_latency_ms': 223, 'e2e_latency_ms': 331, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49754, 'consensus_latency_ms': 227, 'e2e_latency_ms': 335, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49778, 'consensus_latency_ms': 226, 'e2e_latency_ms': 336, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 100000 --epoch-length 25
+{'consensus_tps': 99611, 'consensus_latency_ms': 221, 'e2e_latency_ms': 328, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 100000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 4 time(s)
+{'consensus_tps': 99532, 'consensus_latency_ms': 243, 'e2e_latency_ms': 362, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 150000 --epoch-length 25
+{'consensus_tps': 148267, 'consensus_latency_ms': 329, 'e2e_latency_ms': 498, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 150000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 1 time(s)
+{'consensus_tps': 147103, 'consensus_latency_ms': 389, 'e2e_latency_ms': 587, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 175000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 40 time(s)
+[1m[93mWARN[0m: Nodes timed out 13 time(s)
+{'consensus_tps': 156876, 'consensus_latency_ms': 558, 'e2e_latency_ms': 813, 'timeouts': 13}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 175000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 60 time(s)
+[1m[93mWARN[0m: Nodes timed out 13 time(s)
+{'consensus_tps': 165505, 'consensus_latency_ms': 508, 'e2e_latency_ms': 763, 'timeouts': 13}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 200000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 789 time(s)
+[1m[93mWARN[0m: Nodes timed out 3 time(s)
+{'consensus_tps': 51626, 'consensus_latency_ms': 1450, 'e2e_latency_ms': 1781, 'timeouts': 3}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 200000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 678 time(s)
+[1m[93mWARN[0m: Nodes timed out 15 time(s)
+{'consensus_tps': 17746, 'consensus_latency_ms': 11963, 'e2e_latency_ms': 12688, 'timeouts': 15}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 20000 --epoch-length 25
+{'consensus_tps': 19940, 'consensus_latency_ms': 224, 'e2e_latency_ms': 326, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 20000 --epoch-length 25
+{'consensus_tps': 19936, 'consensus_latency_ms': 234, 'e2e_latency_ms': 343, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 30000 --epoch-length 25
+{'consensus_tps': 29921, 'consensus_latency_ms': 233, 'e2e_latency_ms': 340, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 30000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 4 time(s)
+{'consensus_tps': 29994, 'consensus_latency_ms': 234, 'e2e_latency_ms': 344, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 40000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 4 time(s)
+{'consensus_tps': 39639, 'consensus_latency_ms': 234, 'e2e_latency_ms': 344, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 40000 --epoch-length 25
+{'consensus_tps': 39759, 'consensus_latency_ms': 241, 'e2e_latency_ms': 358, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 50000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 14 time(s)
+{'consensus_tps': 49784, 'consensus_latency_ms': 292, 'e2e_latency_ms': 443, 'timeouts': 1}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 50000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 5 time(s)
+{'consensus_tps': 49859, 'consensus_latency_ms': 276, 'e2e_latency_ms': 416, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 60000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 25 time(s)
+[1m[93mWARN[0m: Nodes timed out 3 time(s)
+{'consensus_tps': 56100, 'consensus_latency_ms': 402, 'e2e_latency_ms': 625, 'timeouts': 3}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 60000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 60 time(s)
+[1m[93mWARN[0m: Nodes timed out 9 time(s)
+{'consensus_tps': 48127, 'consensus_latency_ms': 855, 'e2e_latency_ms': 1159, 'timeouts': 9}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 70000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 128 time(s)
+[1m[93mWARN[0m: Nodes timed out 10 time(s)
+{'consensus_tps': 60386, 'consensus_latency_ms': 617, 'e2e_latency_ms': 1019, 'timeouts': 10}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 70000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 253 time(s)
+[1m[93mWARN[0m: Nodes timed out 10 time(s)
+{'consensus_tps': 54853, 'consensus_latency_ms': 1404, 'e2e_latency_ms': 2094, 'timeouts': 10}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49878, 'consensus_latency_ms': 215, 'e2e_latency_ms': 326, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49841, 'consensus_latency_ms': 215, 'e2e_latency_ms': 330, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 100000 --epoch-length 25
+{'consensus_tps': 99650, 'consensus_latency_ms': 221, 'e2e_latency_ms': 334, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 100000 --epoch-length 25
+{'consensus_tps': 99836, 'consensus_latency_ms': 229, 'e2e_latency_ms': 348, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 200000 --epoch-length 25
+{'consensus_tps': 199354, 'consensus_latency_ms': 202, 'e2e_latency_ms': 312, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 200000 --epoch-length 25
+{'consensus_tps': 199635, 'consensus_latency_ms': 247, 'e2e_latency_ms': 374, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 300000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 13 time(s)
+{'consensus_tps': 298023, 'consensus_latency_ms': 262, 'e2e_latency_ms': 390, 'timeouts': 1}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 300000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 15 time(s)
+{'consensus_tps': 298243, 'consensus_latency_ms': 268, 'e2e_latency_ms': 404, 'timeouts': 1}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 350000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 148 time(s)
+[1m[93mWARN[0m: Nodes timed out 9 time(s)
+{'consensus_tps': 332109, 'consensus_latency_ms': 245, 'e2e_latency_ms': 367, 'timeouts': 9}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 350000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 142 time(s)
+[1m[93mWARN[0m: Nodes timed out 8 time(s)
+{'consensus_tps': 330924, 'consensus_latency_ms': 301, 'e2e_latency_ms': 442, 'timeouts': 8}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 4 --net base --rate 400000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 422 time(s)
+[1m[93mWARN[0m: Nodes timed out 22 time(s)
+{'consensus_tps': 188539, 'consensus_latency_ms': 1492, 'e2e_latency_ms': 1823, 'timeouts': 22}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 4 --net base --rate 400000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 562 time(s)
+[1m[93mWARN[0m: Nodes timed out 16 time(s)
+{'consensus_tps': 34437, 'consensus_latency_ms': 11508, 'e2e_latency_ms': 15890, 'timeouts': 16}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 25000 --epoch-length 25
+{'consensus_tps': 24885, 'consensus_latency_ms': 224, 'e2e_latency_ms': 330, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 25000 --epoch-length 25
+{'consensus_tps': 24880, 'consensus_latency_ms': 221, 'e2e_latency_ms': 329, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49827, 'consensus_latency_ms': 219, 'e2e_latency_ms': 323, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 50000 --epoch-length 25
+{'consensus_tps': 49756, 'consensus_latency_ms': 225, 'e2e_latency_ms': 334, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 100000 --epoch-length 25
+{'consensus_tps': 99767, 'consensus_latency_ms': 217, 'e2e_latency_ms': 324, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 100000 --epoch-length 25
+{'consensus_tps': 99711, 'consensus_latency_ms': 239, 'e2e_latency_ms': 358, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 150000 --epoch-length 25
+{'consensus_tps': 148899, 'consensus_latency_ms': 308, 'e2e_latency_ms': 467, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 150000 --epoch-length 25
+{'consensus_tps': 149154, 'consensus_latency_ms': 346, 'e2e_latency_ms': 522, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 175000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 15 time(s)
+[1m[93mWARN[0m: Nodes timed out 10 time(s)
+{'consensus_tps': 144930, 'consensus_latency_ms': 648, 'e2e_latency_ms': 884, 'timeouts': 10}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 175000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 12 time(s)
+[1m[93mWARN[0m: Nodes timed out 11 time(s)
+{'consensus_tps': 130968, 'consensus_latency_ms': 800, 'e2e_latency_ms': 1152, 'timeouts': 11}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 10 --net base --rate 200000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 787 time(s)
+[1m[93mWARN[0m: Nodes timed out 25 time(s)
+{'consensus_tps': 80355, 'consensus_latency_ms': 2249, 'e2e_latency_ms': 2789, 'timeouts': 25}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 10 --net base --rate 200000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 769 time(s)
+[1m[93mWARN[0m: Nodes timed out 19 time(s)
+{'consensus_tps': 46787, 'consensus_latency_ms': 4104, 'e2e_latency_ms': 4673, 'timeouts': 19}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 20000 --epoch-length 25
+{'consensus_tps': 19905, 'consensus_latency_ms': 224, 'e2e_latency_ms': 327, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 20000 --epoch-length 25
+{'consensus_tps': 19918, 'consensus_latency_ms': 229, 'e2e_latency_ms': 338, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 30000 --epoch-length 25
+{'consensus_tps': 29930, 'consensus_latency_ms': 229, 'e2e_latency_ms': 336, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 30000 --epoch-length 25
+{'consensus_tps': 29904, 'consensus_latency_ms': 235, 'e2e_latency_ms': 346, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 40000 --epoch-length 25
+{'consensus_tps': 39758, 'consensus_latency_ms': 238, 'e2e_latency_ms': 351, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 40000 --epoch-length 25
+{'consensus_tps': 39714, 'consensus_latency_ms': 245, 'e2e_latency_ms': 360, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 50000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 6 time(s)
+{'consensus_tps': 49767, 'consensus_latency_ms': 261, 'e2e_latency_ms': 392, 'timeouts': 0}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 50000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 17 time(s)
+{'consensus_tps': 49860, 'consensus_latency_ms': 287, 'e2e_latency_ms': 437, 'timeouts': 1}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 60000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 58 time(s)
+[1m[93mWARN[0m: Nodes timed out 12 time(s)
+{'consensus_tps': 46511, 'consensus_latency_ms': 1202, 'e2e_latency_ms': 1879, 'timeouts': 12}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 60000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 29 time(s)
+[1m[93mWARN[0m: Nodes timed out 4 time(s)
+{'consensus_tps': 56172, 'consensus_latency_ms': 409, 'e2e_latency_ms': 673, 'timeouts': 4}
+--rate 10000 --warmup 10 --duration 30 --build baseline --nodes 31 --net base --rate 70000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 144 time(s)
+[1m[93mWARN[0m: Nodes timed out 11 time(s)
+{'consensus_tps': 56539, 'consensus_latency_ms': 619, 'e2e_latency_ms': 922, 'timeouts': 11}
+--rate 10000 --warmup 10 --duration 30 --build trust2 --nodes 31 --net base --rate 70000 --epoch-length 25
+[1m[93mWARN[0m: Clients missed their target rate 214 time(s)
+[1m[93mWARN[0m: Nodes timed out 14 time(s)
+{'consensus_tps': 43550, 'consensus_latency_ms': 969, 'e2e_latency_ms': 1612, 'timeouts': 14}
+{'nodes': 4, 'rate': 200000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2832830-i2804849.scope', 'cores': 7.04, 'throttled_pct': 0.0}
+{'nodes': 4, 'rate': 350000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2833083-i2847646.scope', 'cores': 10.66, 'throttled_pct': 12.0}
+{'nodes': 4, 'rate': 400000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2833335-i2863468.scope', 'cores': 10.31, 'throttled_pct': 60.0}
+{'nodes': 10, 'rate': 100000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2833587-i2855320.scope', 'cores': 6.6, 'throttled_pct': 17.0}
+{'nodes': 10, 'rate': 150000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2834104-i2824510.scope', 'cores': 10.74, 'throttled_pct': 66.5}
+{'nodes': 10, 'rate': 175000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2834624-i2847781.scope', 'cores': 11.76, 'throttled_pct': 91.0}
+{'nodes': 31, 'rate': 40000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2835142-i2833367.scope', 'cores': 6.86, 'throttled_pct': 13.5}
+{'nodes': 31, 'rate': 50000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2836585-i2821159.scope', 'cores': 8.44, 'throttled_pct': 27.0}
+{'nodes': 31, 'rate': 60000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2838029-i2859595.scope', 'cores': 9.84, 'throttled_pct': 41.5}
+{'nodes': 31, 'rate': 70000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2839470-i2837585.scope', 'cores': 10.8, 'throttled_pct': 74.0}
+results-p5/a1.md: 5 rows
+results-p5/a1b.md: 4 rows
+results-p5/a3.md: 4 rows
+results-p5/cmp.md: 12 rows
+results-p5/cmpg.md: 13 rows
+results-p5/f25_censor.md: 1 rows
+results-p5/f25_late.md: 2 rows
+results-p5/f25_silent.md: 1 rows
+results-p5/f25_x2.md: 2 rows
+results-p5/f25_xb.md: 2 rows
+results-p5/f25_xc.md: 3 rows
+results-p5/f25_xe.md: 4 rows
+results-p5/g100_censor.md: 1 rows
+results-p5/g100_silent.md: 1 rows
+results-p5/g100_xb.md: 2 rows
+results-p5/g100_xc.md: 1 rows
+results-p5/h24_late.md: 2 rows
+results-p5/h24_silent.md: 1 rows
+results-p5/h24_x2.md: 2 rows
+results-p5/h24_xc.md: 1 rows
+Traceback (most recent call last):
+  File "/home/bcds/h2h4_dev/benchmark/p5.py", line 684, in <module>
+    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "r7x2": r7x2, "r7xt": r7xt, "f25": f25,
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "r34x": r34x, "thr": thr, "thr2": thr2, "tgt": tgt, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/bcds/h2h4_dev/benchmark/p5.py", line 646, in report
+    values = [float(r[m]) for r in group if r.get(m) not in (None, "")]
+              ~~~~~^^^^^^
+ValueError: could not convert string to float: 'table-ahead-25'

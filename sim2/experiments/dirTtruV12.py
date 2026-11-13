@@ -56,6 +56,12 @@ R_MIN = 0.7          # reputation floor (dirTtruSens varies it with CAP, UMAX an
 VIEWS = 2000
 
 
+# The G2 queue of the earlier runs (SIM_G2_QUEUE=1); the adopted protocol discards a conviction without room
+# (prototype DESIGN.md §15.31).
+G2_QUEUE = os.environ.get("SIM_G2_QUEUE", "0") == "1"
+# G1: queued suspensions barred from leading in the earlier runs (SIM_G1_BAR_QUEUED=1); not in the adopted protocol.
+G1_BAR_QUEUED = os.environ.get("SIM_G1_BAR_QUEUED", "0") == "1"
+
 def setup(seed):
     cls, s = ttru.population(NL, NU, NA, seed)
     return cls, s, ttru.base_weights(cls, s, 0.0, 0.0, CAP, UMAX)
@@ -64,11 +70,11 @@ def setup(seed):
 def build(cls, s, base, double=False, graded=True, injected=(), forks=(), old_g1=False, rho_bar=0.1, evidence="at",
           recompute="fork"):
     rule = S.CusumExclusion(q=0.5, evidence=evidence, rho_bar=rho_bar, gamma=ttru.GAMMA, D=D, cap=0.5, Wq=500,
-                            cap_weights=base, double=double, g1=old_g1)
+                            cap_weights=base, double=double, g1=old_g1, queue=G2_QUEUE)
     wk, gk = ttru.scheme_kwargs()
     # The v0.13 runs evicted non-malicious repeat offenders; the adopted scheme (SIM_SCHEME=h1p) runs the current rule.
     pun = GradedPunishment(cls, s, CAP, UMAX, l_max=L_MAX, injected=injected, forks=forks, recompute=recompute,
-                           repeat_evict=not ttru.adopted(), **gk) if graded else None
+                           repeat_evict=not ttru.adopted(), **gk, bar_queued=G1_BAR_QUEUED) if graded else None
     vw = ttru.TtruWeights(base, r_min=R_MIN, b_rep=B_REP, rule=rule, punish=pun, g1=old_g1, **wk)
     if graded:
         rule.bars = vw.bars

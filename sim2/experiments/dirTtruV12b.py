@@ -69,6 +69,12 @@ LONG = 10000
 G1NET = dict(regions=3, jitter_max_ms=2.0, eps_late=0.05)
 
 
+# The G2 queue of the earlier runs (SIM_G2_QUEUE=1); the adopted protocol discards a conviction without room
+# (prototype DESIGN.md §15.31).
+G2_QUEUE = os.environ.get("SIM_G2_QUEUE", "0") == "1"
+# G1: queued suspensions barred from leading in the earlier runs (SIM_G1_BAR_QUEUED=1); not in the adopted protocol.
+G1_BAR_QUEUED = os.environ.get("SIM_G1_BAR_QUEUED", "0") == "1"
+
 def setup(pop, seed, alpha=1.16):
     nl, nu, na, cap = POPS[pop]
     cls, s = ttru.population(nl, nu, na, seed, alpha=alpha)
@@ -92,8 +98,8 @@ def punish_kwargs(pk):
 
 def build(cls, s, base, cap, graded=True, old_g1=False, rho_bar=0.1, evidence="at", injected=(), forks=(), pk=None):
     rule = S.CusumExclusion(q=0.5, evidence=evidence, rho_bar=rho_bar, gamma=ttru.GAMMA, D=D, cap=0.5, Wq=500,
-                            cap_weights=base, g1=old_g1)
-    pun = GradedPunishment(cls, s, cap, UMAX, injected=injected, forks=forks, **punish_kwargs(pk)) if graded else None
+                            cap_weights=base, g1=old_g1, queue=G2_QUEUE)
+    pun = GradedPunishment(cls, s, cap, UMAX, injected=injected, forks=forks, **punish_kwargs(pk), bar_queued=G1_BAR_QUEUED) if graded else None
     wk = ttru.scheme_kwargs()[0]
     vw = ttru.TtruWeights(base, r_min=0.7, b_rep=B_REP, rule=rule, punish=pun, g1=old_g1, **wk)
     if graded:

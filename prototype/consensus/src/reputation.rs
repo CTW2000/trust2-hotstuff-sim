@@ -1,7 +1,7 @@
 //! G2 on the ledger (prototype/DESIGN.md §12): AT accusations feed a CUSUM per leader; a conviction excludes
-//! the leader from leading (exclusion cap on base weight, strict FIFO queue, expiry) and lowers its reputation
+//! the leader from leading (exclusion cap on base weight; a conviction without room is discarded, §15.31) and lowers its reputation
 //! r within the budget B_rep. The rules and parameters are those of the simulator (sim2/schedule.py
-//! `CusumExclusion` with AT evidence and expiry by round, sim2/ttru.py `TtruWeights`); the test vectors in
+//! `CusumExclusion` with AT evidence, expiry by round and queue=False, sim2/ttru.py `TtruWeights`); the test vectors in
 //! tests/g2_vectors.json come from them (prototype/scripts/gen_g2_vectors.py).
 //!
 //! The state only changes at an epoch change, from the accusations committed up to the terminal block, so
@@ -27,10 +27,8 @@ pub struct G2Config {
     pub threshold: i64,
     /// An exclusion lasts this many rounds.
     pub exclusion: Round,
-    /// At most this much base weight is excluded at once (fixed point); further convictions queue.
+    /// At most this much base weight is excluded at once (fixed point); a conviction without room is discarded.
     pub cap: u128,
-    /// A queued conviction is dropped after this many rounds.
-    pub queue_wait: Round,
     pub r_min_ppm: u64,
     pub step_ppm: u64,
     pub recover_ppm: u64,
@@ -40,8 +38,9 @@ pub struct G2Config {
 
 impl Default for G2Config {
     /// The recommended protocol (信任2.0_协议级验证 §4.4, γ from §4.9): q = 0.5, ρ̄ = 0.1, γ = 10², D = 500,
-    /// cap 0.5, Wq = 500, r_min = 0.7, step 0.1, recovery 0.02, B_rep = 0.10, lag 10. γ was 10⁴ until the
-    /// threshold sweep of 2026-11-04 (DESIGN.md §15.13): a run of bad facts now convicts after 3 leads, not 6.
+    /// cap 0.5, r_min = 0.7, step 0.1, recovery 0.02, B_rep = 0.10, lag 10. γ was 10⁴ until the threshold sweep
+    /// of 2026-11-04 (DESIGN.md §15.13): a run of bad facts now convicts after 3 leads, not 6. Convictions beyond
+    /// the cap queued (FIFO, dropped after 500 rounds) until §15.31.
     fn default() -> Self {
         Self {
             lag: 10,
@@ -50,7 +49,6 @@ impl Default for G2Config {
             threshold: 4_605_170,  // ln 10²
             exclusion: 500,
             cap: ONE / 2,
-            queue_wait: 500,
             r_min_ppm: 700_000,
             step_ppm: 100_000,
             recover_ppm: 20_000,
@@ -64,8 +62,8 @@ impl Default for G2Config {
 pub enum Event {
     Exclude(usize, Round),
     Release(usize, Round),
-    Queue(usize, Round),
-    Drop(usize, Round),
+    /// A conviction without room under the exclusion cap, discarded: the statistic starts over.
+    Full(usize, Round),
 }
 
 pub struct Reputation {
@@ -77,7 +75,6 @@ pub struct Reputation {
     peak: Vec<i64>,
     excluded: Vec<bool>,
     until: Vec<Round>,
-    queue: Vec<(usize, Round)>,
     /// Rounds up to here have been processed.
     done: Round,
     r_ppm: Vec<u64>,
@@ -96,7 +93,6 @@ impl Reputation {
             peak: vec![0; n],
             excluded: vec![false; n],
             until: vec![0; n],
-            queue: Vec::new(),
             done: 0,
             r_ppm: vec![PPM as u64; n],
             accused: BTreeMap::new(),
@@ -130,11 +126,6 @@ impl Reputation {
     /// Bad facts recorded and not processed yet: round -> epoch.
     pub fn facts(&self) -> &BTreeMap<Round, EpochNumber> {
         &self.accused
-    }
-
-    /// Queued convictions (member, round of the conviction), head first.
-    pub fn queue(&self) -> &[(usize, Round)] {
-        &self.queue
     }
 
     /// The CUSUM statistic of each entity, in millionths (the ledger replay vectors check it).
@@ -209,24 +200,6 @@ impl Reputation {
             }
         }
 
-        let mut keep = Vec::new();
-        let mut blocked = false;
-        for (k, t) in std::mem::take(&mut self.queue) {
-            if u - t > self.config.queue_wait {
-                // A dropped conviction starts over.
-                self.cusum[k] = 0;
-                self.log.push(Event::Drop(k, u));
-            } else if !blocked && !self.excluded[k] && self.room(k) {
-                self.exclude(k, u);
-            } else {
-                if !self.excluded[k] {
-                    blocked = true; // strict FIFO: later entries wait behind the head
-                }
-                keep.push((k, t));
-            }
-        }
-        self.queue = keep;
-
         let accusation = self.accused.get(&u).copied();
         let leader = match leader_of(u, accusation) {
             Some(k) if !self.excluded[k] => k,
@@ -251,15 +224,14 @@ impl Reputation {
         excluded + self.base[k] <= self.config.cap
     }
 
+    /// Exclude if the cap leaves room; otherwise discard the conviction (DESIGN.md §15.31). A leader that keeps
+    /// failing is convicted again once there is room, a few leads later; a framed one is not excluded late.
     fn convict(&mut self, k: usize, u: Round) {
-        match self.queue.iter().position(|(x, _)| *x == k) {
-            None if self.queue.is_empty() && self.room(k) => self.exclude(k, u),
-            None => {
-                self.queue.push((k, u));
-                self.cusum[k] = 0;
-                self.log.push(Event::Queue(k, u));
-            }
-            Some(_) => self.cusum[k] = self.config.threshold, // already queued: no pile-up
+        if self.room(k) {
+            self.exclude(k, u);
+        } else {
+            self.cusum[k] = 0;
+            self.log.push(Event::Full(k, u));
         }
     }
 

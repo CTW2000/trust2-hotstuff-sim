@@ -7,7 +7,6 @@ struct Epoch {
     events: Vec<(String, usize, Round)>,
     r_ppm: Vec<u64>,
     excluded: Vec<bool>,
-    queue: Vec<usize>,
     table: Vec<f64>,
 }
 
@@ -28,8 +27,7 @@ fn event(e: &(String, usize, Round)) -> Event {
     match e.0.as_str() {
         "exclude" => Event::Exclude(e.1, e.2),
         "release" => Event::Release(e.1, e.2),
-        "queue" => Event::Queue(e.1, e.2),
-        "drop" => Event::Drop(e.1, e.2),
+        "full" => Event::Full(e.1, e.2),
         x => panic!("unknown event {}", x),
     }
 }
@@ -43,8 +41,8 @@ fn increments_are_the_log_likelihood_ratios() {
 }
 
 /// Replays each simulator run: leaders by round robin over the members not excluded at the epoch's start,
-/// the accusations of the epoch recorded before its change; every event, reputation, exclusion, queue and
-/// table must match.
+/// the accusations of the epoch recorded before its change; every event, reputation, exclusion and table must
+/// match.
 #[test]
 fn rule_and_reputation_match_the_simulator() {
     for case in cases() {
@@ -68,12 +66,12 @@ fn rule_and_reputation_match_the_simulator() {
             assert_eq!(events, expected, "{} epoch {}: events", case.name, k);
             assert_eq!(rep.r_ppm(), &epoch.r_ppm[..], "{} epoch {}: reputations", case.name, k);
             assert_eq!(rep.excluded(), &epoch.excluded[..], "{} epoch {}: exclusions", case.name, k);
-            let queue: Vec<usize> = rep.queue().iter().map(|(x, _)| *x).collect();
-            assert_eq!(queue, epoch.queue, "{} epoch {}: queue", case.name, k);
             let stakes = rep.stakes(&vec![true; n]);
             for (x, (got, want)) in stakes.iter().zip(&epoch.table).enumerate() {
+                // The integer stake is the floor of the exact share: at most 1 below the simulator's float, which may
+                // itself sit a few ulps off an integer (156249 for 156250.00000000003).
                 assert!(
-                    (*got as f64 - want * 1e6).abs() <= 1.0,
+                    (*got as f64 - want * 1e6).abs() <= 1.0 + 1e-6,
                     "{} epoch {} member {}: stake {} vs {}",
                     case.name, k, x, got, want * 1e6
                 );

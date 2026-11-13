@@ -977,14 +977,18 @@ impl Evidence {
         }
         match (self, table) {
             (Evidence::InvalidBlock(vote, block), Some(table)) => {
-                vote.hash == block.digest()
+                // Cheap checks first: the detector asks this for every vote it sees, and only a block carrying a TC
+                // of its own epoch can be judged by its table. A TC of the previous epoch (the first block of an
+                // epoch) is judged by that epoch's table, which the block does not name: no verdict then. Hashing
+                // the block and the table before this check cost about 8% of the CPU-bound round rate at n = 31
+                // (DESIGN.md §15.30); the conditions have no side effects, so the order does not change the verdict.
+                block.tc.as_ref().map_or(false, |tc| tc.epoch == block.epoch)
                     && vote.round == block.round
                     && vote.epoch == block.epoch
                     && !TC_OUTSIDE_BLOCK.load(Ordering::Relaxed)
+                    && vote.hash == block.digest()
                     && table_digest(table) == block.table
-                    // A TC of the previous epoch (the first block of an epoch) is judged by that epoch's table,
-                    // which the block does not name: no verdict then.
-                    && block.tc.as_ref().map_or(false, |tc| tc.epoch == block.epoch && tc.verify(table).is_err())
+                    && block.tc.as_ref().map_or(false, |tc| tc.verify(table).is_err())
             }
             _ => false,
         }
@@ -1025,11 +1029,12 @@ impl Evidence {
                 a.author == b.author && a.epoch == b.epoch && a.round == b.round && a.hash != b.hash
             }
             Evidence::InvalidBlock(vote, block) => {
-                vote.hash == block.digest()
-                    && vote.round == block.round
+                // The structural rule before the hash (no side effects, same verdict; DESIGN.md §15.30).
+                vote.round == block.round
                     && vote.epoch == block.epoch
                     && (block.qc_round >= block.round
                         || !extends_validly(block.round, block.qc_round, block.tc.as_ref()))
+                    && vote.hash == block.digest()
             }
             Evidence::Regression(vote, block, timeout) => {
                 vote.hash == block.digest()

@@ -21,7 +21,7 @@
 use crate::config::{Authority, Committee, EpochNumber, LeaderRule, Stake};
 use crate::consensus::Round;
 use crate::leader::leader;
-use crate::messages::{table_digest, Block, OmitProof};
+use crate::messages::{table_digest, Block, Evidence, OmitProof};
 use crate::punish::{G1Event, Kind, PunishConfig, Punishment};
 use crate::reputation::{Event, G2Config, Reputation};
 use crate::ttru::{self, Class};
@@ -40,6 +40,11 @@ pub mod replay_tests;
 
 /// Tables kept: the next epoch's (H1'), the current epoch's and the previous ones, for verification.
 const KEEP: usize = 17;
+
+/// E2 evidence is judged by the table its block names, and a node rejects a block carrying evidence it cannot judge.
+/// Evidence about a block more than this many epochs old may name a table some node no longer keeps (one an epoch
+/// ahead keeps one fewer of the old ones), so proposers drop it (DESIGN.md §15.31). E1, E3 and E-NR need no table.
+pub const E2_MAX_AGE: EpochNumber = KEEP as EpochNumber - 3;
 
 /// In a single-epoch run, committed blocks and accusation facts of rounds more than this far behind the latest
 /// committed block are forgotten: there is no handover to process them (enter_next), so nothing else would. It
@@ -288,7 +293,7 @@ impl Epochs {
     }
 
     /// W_e = F(ledger up to G_{e-2}) (H1'): stakes from the base shares (G1), reputations within the budget (G2)
-    /// and suspensions (z, G1); leadership barred by the G2 exclusions and by G1 (L1, suspended, queued, evicted).
+    /// and suspensions (z, G1); leadership barred by the G2 exclusions and by G1 (L1, suspended, evicted).
     fn make_table(&self, epoch: EpochNumber) -> Committee {
         let z = self.punishment.z();
         let stakes = self.split(&self.reputation.stakes_on(self.punishment.base(), &z));
@@ -536,6 +541,14 @@ impl Epochs {
             && key.1 > highest
     }
 
+    /// The punishment window of a piece of evidence: (culprit, safety class, sign window), the sign window aligned
+    /// as G1 counts it (the sign epoch divided by the scaled sign window). Evidence of one window is one fault, so
+    /// one piece of it on the ledger is enough (DESIGN.md §15.32).
+    pub fn evidence_window(&self, evidence: &Evidence) -> (PublicKey, bool, EpochNumber) {
+        let window = scaled(&self.config).0.sign_window.max(1) as EpochNumber;
+        (evidence.culprit(), evidence.is_safety(), evidence.epoch() / window)
+    }
+
     /// Rounds up to here have been processed by the leader rule; accusations of them come too late.
     pub fn done(&self) -> Round {
         self.reputation.done()
@@ -642,8 +655,7 @@ impl Epochs {
             let (what, k, round) = match event {
                 Event::Exclude(k, u) => ("excluded from leading", k, u),
                 Event::Release(k, u) => ("may lead again", k, u),
-                Event::Queue(k, u) => ("convicted, queued", k, u),
-                Event::Drop(k, u) => ("dropped from the queue", k, u),
+                Event::Full(k, u) => ("convicted without room, discarded", k, u),
             };
             for name in members_of(members, entity_of, *k) {
                 info!("G2: {} {} at round {}", name, what, round);

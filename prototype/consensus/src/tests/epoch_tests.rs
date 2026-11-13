@@ -663,3 +663,23 @@ fn tables_are_found_by_digest() {
     let other = Committee { epoch: EPOCH + 7, ..table };
     assert!(epochs.table_by_digest(&crate::messages::table_digest(&other)).is_none());
 }
+
+#[test]
+fn evidence_of_one_sign_window_shares_one_key() {
+    // DESIGN.md §15.32: the proposer keeps one piece of evidence per punishment window, aligned as G1 counts it. With
+    // epochs of 25 rounds the sign window is 4 epochs: sign epochs 4-7 share a key, 8 starts the next.
+    let epochs = Epochs::new(&committee(), EpochConfig { reference_length: 100, ..config(25) });
+    let key = keys().remove(0);
+    let vote = |epoch: EpochNumber, hash: u8| Vote {
+        hash: Digest([hash; 32]),
+        round: 5,
+        epoch,
+        author: key.0,
+        signature: Signature::default(),
+    };
+    let e1 = |epoch| Evidence::DoubleVote(vote(epoch, 1), vote(epoch, 2));
+    let window = |epoch| epochs.evidence_window(&e1(epoch));
+    assert_eq!(window(4), window(7));
+    assert_ne!(window(7), window(8));
+    assert_eq!(window(4), (key.0, true, 1));
+}

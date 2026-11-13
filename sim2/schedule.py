@@ -300,9 +300,12 @@ class CusumExclusion(LeaderRule):
     expiry = "commit": an exclusion ends after D further successful views (a proxy for committed
                        blocks). If every leader candidate is silent, nothing succeeds and the
                        exclusions never end: the absorbing state of DQ扩展 Lemma D.
-    cap:   at most floor(cap * n) replicas excluded at once (equal weights); further convictions
-           wait in a strict FIFO queue (one entry per replica; while the queue is non-empty every new
-           conviction joins it, and the queue is served head first) and are dropped after Wq views.
+    cap:   at most floor(cap * n) replicas excluded at once (equal weights). With queue = True (the
+           earlier experiments) further convictions wait in a strict FIFO queue (one entry per replica;
+           while the queue is non-empty every new conviction joins it, and the queue is served head
+           first) and are dropped after Wq views. With queue = False (the adopted protocol, prototype
+           DESIGN.md §15.31) a conviction without room is discarded: both CUSUMs restart from 0 and it is
+           logged as ("full", replica, view); a replica that keeps failing is convicted again later.
     soft_evidence: a second CUSUM per replica over soft evidence (e.g. "noqc") with its own
            soft_rho / soft_q (same h); a soft conviction excludes the replica from leading like a
            CUSUM crossing (same cap, queue, expiry) but is logged as "exclude_soft", so the T_tru
@@ -339,7 +342,7 @@ class CusumExclusion(LeaderRule):
                  g1: bool = False, presence_theta: float = None, presence_window: int = 300,
                  presence_every: int = 10, cap_weights=None, soft_evidence: str = None,
                  soft_rho: float = 0.3, soft_q: float = 0.9, double: bool = False, double_max: int = 8,
-                 double_lookback: int = 6400, bars=None):
+                 double_lookback: int = 6400, bars=None, queue: bool = True):
         self.q, self.rho_bar, self.h = q, rho_bar, float(np.log(gamma))
         self.cap_weights = None if cap_weights is None else np.asarray(cap_weights, float)
         self.soft_evidence = soft_evidence
@@ -352,6 +355,7 @@ class CusumExclusion(LeaderRule):
         self.g1, self.presence_theta = g1, presence_theta
         self.presence_window, self.presence_every = presence_window, presence_every
         self.double, self.double_max, self.double_lookback, self.bars = double, double_max, double_lookback, bars
+        self.queue = queue
 
     def _state(self, st):
         c = st.__dict__.setdefault("_cusum_cache", {})
@@ -367,6 +371,14 @@ class CusumExclusion(LeaderRule):
         return self.cap_weights[s["excluded"]].sum() + self.cap_weights[k] <= self.cap + 1e-12
 
     def _convict(self, st, s, k, u, cap_n, soft=False):
+        if not self.queue:
+            if self._room(s, k, cap_n):
+                self._exclude(st, s, k, u, soft)
+            else:
+                s["W"][k] = 0.0
+                s["W2"][k] = 0.0
+                st.rule_log.append(("full", int(k), int(u)))
+            return
         q = s["queue"]
         pos = next((i for i, e in enumerate(q) if e[0] == k), None)
         if pos is None and not q and self._room(s, k, cap_n):

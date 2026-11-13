@@ -62,6 +62,12 @@ impl Detector {
     /// The block a vote is for breaks the voting rule (Evidence::InvalidBlock checks the same), its TC judged by
     /// the table the block names when we hold it.
     fn invalid(&self, vote: &Vote, block: &Block) -> bool {
+        // The common case, a block right after its QC and without a TC, breaks no voting rule (it extends validly,
+        // and only a block with a TC is judged by its table): skip cloning its header for every vote seen
+        // (DESIGN.md §15.30). Exactly what `holds_under` would answer.
+        if block.tc.is_none() && block.qc.round.checked_add(1) == Some(block.round) {
+            return false;
+        }
         Evidence::InvalidBlock(vote.clone(), block.header()).holds_under(self.tables.get(&block.table))
     }
 

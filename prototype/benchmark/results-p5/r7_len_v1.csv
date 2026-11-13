@@ -1,0 +1,7 @@
+build,nodes,net,epoch_length,rep,consensus_tps,consensus_latency_ms,e2e_tps,e2e_latency_ms,timeouts,client_misses,timeout_rounds,top_round,rounds_per_s,epochs,lag_median_ms,lag_max_ms,honest_cut
+trust2,31,none,100,1,10007,10,10006,18,0,0,0,8903,222.6,90,7,15,0
+trust2,31,none,0,1,10007,10,10006,18,0,0,0,8824,220.6,0,0,0,0
+trust2,31,none,100,2,9998,10,9995,18,0,0,0,8848,221.2,89,7,14,0
+trust2,31,none,0,2,10000,10,9997,18,0,3,0,8932,223.3,0,0,0,0
+trust2,31,none,100,3,10005,10,10005,18,0,0,1,8661,216.5,87,7,13,0
+trust2,31,none,0,3,10010,10,10007,18,0,0,0,8868,221.7,0,0,0,0

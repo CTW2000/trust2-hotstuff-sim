@@ -3,7 +3,7 @@
 //! left out; H1: the terminal block moves the ledger to the next epoch), against the reference replay of
 //! prototype/SPEC.md (prototype/scripts/replay_ref.py). Everything must match exactly: entities and base shares,
 //! the terminal blocks, at each of them the rounds processed, the G2 and G1 events, CUSUM statistics,
-//! reputations, exclusions, suspensions, bars and queues, every weight table, and the leader of every round.
+//! reputations, exclusions, suspensions, bars and the G1 queue, every weight table, and the leader of every round.
 
 use super::*;
 use crate::messages::{Accusation, Evidence, SignedTimeout, Vote};
@@ -38,7 +38,6 @@ struct Handover {
     cusum: Vec<i64>,
     r_ppm: Vec<u64>,
     excluded: Vec<bool>,
-    g2_queue: Vec<(usize, Round)>,
     g1_events: Vec<Value>,
     z: Vec<bool>,
     bars: Vec<bool>,
@@ -156,8 +155,7 @@ fn g2_event(event: &Event) -> Value {
     match *event {
         Event::Exclude(k, u) => json!(["exclude", k, u]),
         Event::Release(k, u) => json!(["release", k, u]),
-        Event::Queue(k, u) => json!(["queue", k, u]),
-        Event::Drop(k, u) => json!(["drop", k, u]),
+        Event::Full(k, u) => json!(["full", k, u]),
     }
 }
 
@@ -182,7 +180,6 @@ fn check_handover(name: &str, epochs: &Epochs, h: &Handover, terminal: Round) {
     assert_eq!(rep.cusum(), &h.cusum[..], "{}: CUSUM", at);
     assert_eq!(rep.r_ppm(), &h.r_ppm[..], "{}: reputations", at);
     assert_eq!(rep.excluded(), &h.excluded[..], "{}: exclusions", at);
-    assert_eq!(rep.queue(), &h.g2_queue[..], "{}: G2 queue", at);
     let g1: Vec<Value> = pun.events().iter().map(g1_event).collect();
     assert_eq!(g1, h.g1_events, "{}: G1 events", at);
     assert_eq!(pun.z(), h.z, "{}: z", at);

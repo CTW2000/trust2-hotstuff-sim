@@ -1,5 +1,6 @@
 use crate::config::{Committee, EpochNumber, Stake};
 use crate::consensus::{ConsensusMessage, Round};
+use crate::epoch::E2_MAX_AGE;
 use crate::messages::{table_digest, Accusation, Block, Evidence, OmitProof, Otx, MAX_ACCUSATIONS, MAX_EVIDENCE, MAX_OMISSIONS, QC, TC};
 use bytes::Bytes;
 use crypto::{Digest, PublicKey, SignatureService};
@@ -36,10 +37,10 @@ pub enum ProposerMessage {
     Omit(OmitProof),
     /// G2: omission proofs committed on the ledger, no longer to propose.
     Omitted(Vec<(EpochNumber, Round, Digest)>),
-    /// G1: evidence to put on the ledger.
-    Evidence(Evidence),
-    /// G1: punishment windows (culprit, safety class, sign epoch) with evidence on the ledger: one piece per
-    /// window is enough.
+    /// G1: evidence to put on the ledger, with its punishment window (`Epochs::evidence_window`).
+    Evidence((PublicKey, bool, EpochNumber), Evidence),
+    /// G1: punishment windows (culprit, safety class, aligned sign window) with evidence on the ledger: one piece
+    /// per window is enough.
     Evidenced(Vec<(PublicKey, bool, EpochNumber)>),
 }
 
@@ -198,6 +199,8 @@ impl Proposer {
                         self.committee = committee;
                         self.accusations.retain(|(_, r), _| *r > done);
                         self.omissions.retain(|(_, r, _), _| *r > done);
+                        let epoch = self.committee.epoch;
+                        self.evidence.retain(|_, e| !stale(e, epoch));
                         self.make_block(round, qc, tc, otxs, suffix, withhold).await
                     }
                     ProposerMessage::Cleanup(digests) => {
@@ -221,8 +224,7 @@ impl Proposer {
                             self.omissions.remove(key);
                         }
                     }
-                    ProposerMessage::Evidence(evidence) => {
-                        let window = (evidence.culprit(), evidence.is_safety(), evidence.epoch());
+                    ProposerMessage::Evidence(window, evidence) => {
                         if !self.evidenced.contains(&window) {
                             self.evidence.entry(window).or_insert(evidence);
                         }
@@ -236,5 +238,34 @@ impl Proposer {
                 }
             }
         }
+    }
+}
+
+/// E2 evidence whose block is more than E2_MAX_AGE epochs older than `epoch`: some node may no longer keep the table
+/// it is judged by and would reject a block carrying it. Evidence that needs no table never goes stale.
+fn stale(evidence: &Evidence, epoch: EpochNumber) -> bool {
+    evidence.table().is_some() && evidence.epoch() + E2_MAX_AGE < epoch
+}
+
+#[cfg(test)]
+mod stale_tests {
+    use super::*;
+    use crate::messages::Vote;
+    use crypto::Signature;
+
+    fn vote(epoch: EpochNumber, hash: u8) -> Vote {
+        Vote { hash: Digest([hash; 32]), round: 5, epoch, author: PublicKey([1; 32]), signature: Signature::default() }
+    }
+
+    #[test]
+    fn only_old_e2_evidence_goes_stale() {
+        // DESIGN.md §15.31: E2 about a block of epoch 10 is kept up to epoch 10 + E2_MAX_AGE, then dropped; a double
+        // vote of the same epoch never is.
+        let header = Block { epoch: 10, round: 5, ..Block::default() }.header();
+        let e2 = Evidence::InvalidBlock(vote(10, 1), header);
+        let e1 = Evidence::DoubleVote(vote(10, 1), vote(10, 2));
+        assert!(!stale(&e2, 10 + E2_MAX_AGE));
+        assert!(stale(&e2, 11 + E2_MAX_AGE));
+        assert!(!stale(&e1, 100 + E2_MAX_AGE));
     }
 }

@@ -123,7 +123,9 @@ def in_scope(args):
 
 
 # Binaries of the two builds: Trust 2.0 (this workspace) and the baseline, upstream plus the same fixes (baseline/).
-BUILDS = {"trust2": join("..", "target", "release"), "baseline": join("..", "baseline", "target", "release")}
+# TTRU_TRUST2_DIR points the Trust 2.0 build at other binaries (the bisection of DESIGN.md §15.30).
+BUILDS = {"trust2": os.environ.get("TTRU_TRUST2_DIR", join("..", "target", "release")),
+          "baseline": join("..", "baseline", "target", "release")}
 
 
 def binary(name, build="trust2"):

@@ -3,9 +3,14 @@
 sim2/punish.py `GradedPunishment` (方案说明 v0.12 §3.3: levels L1-L4, suspension cap L_max with a FIFO queue,
 governance stand-in, eviction with CapNorm recomputed for fork culprits) runs on scripted evidence items
 (entity, class, sign epoch, chain epoch, malicious, fork); an item is visible at the table of epoch k when its
-chain epoch is < k, as on the prototype's ledger. Parameters are the adopted defaults (repeat_evict=False).
+chain epoch is < k, as on the prototype's ledger. Parameters are the adopted defaults (repeat_evict=False;
+bar_queued=False: an entity queued for a suspension keeps leading, prototype/DESIGN.md §15.31).
 Run from the repository root:  PYTHONPATH=. python prototype/scripts/gen_g1_vectors.py
+With --from-vectors the inputs (classes, weights, cap, evidence script) are read back from g1_vectors.json and only
+the outcomes are recomputed: the populations and random scripts of the first generation do not come out the same
+under every numpy version.
 """
+import sys
 import json
 import os
 
@@ -18,7 +23,7 @@ OUT = os.path.join(os.path.dirname(__file__), "..", "consensus", "src", "tests",
 EPOCHS = 60
 CAP, U_MAX = 0.10, 0.25
 PARAMS = dict(epoch=100, l_max=0.10, sus=(0, 0, 4, 32), lead_bar=1, win_chain=32, lookback=64, gov_delay=2,
-              recompute="fork", repeat_evict=False)
+              recompute="fork", repeat_evict=False, bar_queued=False)
 
 
 class Scripted(GradedPunishment):
@@ -81,8 +86,15 @@ def script_of(name, base, rng):
     raise ValueError(name)
 
 
-def main():
-    out = []
+def inputs():
+    """(name, classes, integer weights, cap, script) of each case: generated, or read back (--from-vectors)."""
+    if "--from-vectors" in sys.argv:
+        with open(OUT) as fh:
+            for case in json.load(fh):
+                cls = np.array(["L" if c else "U" for c in case["certified"]])
+                script = [tuple(x) for x in case["script"]]
+                yield case["name"], cls, np.array(case["weights"], dtype=np.int64), case["cap_ppm"] / 1e6, script
+        return
     names = ["live-repeat", "iso", "safe-repeat", "correlated", "bug", "fork", "malicious", "small"]
     for seed, name in enumerate(names):
         cls, s = ttru.population(10, 12, 9, seed % 3, alpha=1.16)
@@ -91,7 +103,12 @@ def main():
             cls, s, cap = np.array(["L"] * 7), np.ones(7), 0.142858
         w = np.rint(s * 1e12).astype(np.int64)
         base = ttru.base_weights(cls, w.astype(float), 0.0, 0.0, cap, U_MAX)
-        script = script_of(name, base, np.random.default_rng([seed, 7]))
+        yield name, cls, w, cap, script_of(name, base, np.random.default_rng([seed, 7]))
+
+
+def main():
+    out = []
+    for name, cls, w, cap, script in list(inputs()):
         pun = Scripted(cls, w.astype(float), cap, U_MAX, script=script, **PARAMS)
         epochs, seen = [], 0
         for k in range(1, EPOCHS + 1):
