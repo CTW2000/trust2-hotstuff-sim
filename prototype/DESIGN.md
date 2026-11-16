@@ -2138,7 +2138,11 @@ S4 逐项核对了 S3 之后的现行机制：36 项值得保留，4 项登记�
 - `v3_a_block_carries_no_tc_older_than_its_qc`、`a_block_naming_another_next_table_gets_no_vote`、`r8_a_restarted_node_signs_nothing_of_an_epoch_before_the_one_it_signed_in`。
 - 证据：`e3_holds_across_a_handover`、`e4_a_vote_at_or_below_a_round_signed_in_an_earlier_epoch`、`a_handover_in_the_middle_of_a_round_gives_no_evidence`（交接发生在视图中途时，诚实节点的消息不构成任何证据）。
 
+**冒烟运行（服务器，`run_local.py --nodes 21 --rate 20000 --duration 60 --warmup 10 --silent 2`）：**跨过 72 次纪元交接，三个抽查节点的日志里没有证书因法定份额不足被拒，没有格式错误的块，没有崩溃；共识吞吐 20,757 笔每秒。只说明新规则下系统正常运转，不是性能测量。
+
 **尚未做：**
+- E2 的判据没有覆盖"内嵌的 TC 在下一张表上不足法定份额"的块：诚实节点不为它投票，但为它投票的签名者目前不会被 E2 指认。这样的块只有在拜占庭份额超过 2/3 时才会被认证。
+- 取证工具复核证书时还只按单张表计票。
 - 块格式和计票规则变了，§15.30 的全部性能数字和 18 次跨纪元分叉实验都要在最终实验时重跑。
 - 双表计票对交接期间活性的影响没有测。诚实份额在两张表上都超过 2/3 时法定集合凑得齐，但交接期间已进入新纪元的节点不再签旧纪元的消息，旧纪元的证书只能靠还没进入的节点；它们收到任何一条带提交证明的新纪元消息就会跟上。
 - 取证工具（`forensics.rs`）已能在跨纪元的情形下给出 E4，但还没有按证据包规格拆成"组包"与"核验"两部分。
