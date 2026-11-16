@@ -85,7 +85,8 @@ def fmt_block(b):
 
 
 class Model:
-    def __init__(self, w1, w2, byz, views, h5="full", tc_epoch="chain", e4="vote", late_votes=True):
+    def __init__(self, w1, w2, byz, views, h5="full", tc_epoch="chain", e4="vote", late_votes=True,
+                 symmetry=True):
         assert len(w1) == len(w2)
         self.w = {1: tuple(w1), 2: tuple(w2)}
         self.n = len(w1)
@@ -94,7 +95,7 @@ class Model:
         self.V, self.h5, self.tc_epoch, self.e4, self.late = views, h5, tc_epoch, e4, late_votes
         self.blk, self.bid = [G], {G: 0}
         a = self.hon
-        self.sym = len(a) == 2 and all(self.w[t][a[0]] == self.w[t][a[1]] for t in (1, 2))
+        self.sym = symmetry and len(a) == 2 and all(self.w[t][a[0]] == self.w[t][a[1]] for t in (1, 2))
 
     # ---- encoding ---------------------------------------------------------------------------
     def intern(self, b):
@@ -530,6 +531,8 @@ def main(argv=None):
     ap.add_argument("--tc-epoch", choices=("any", "chain"), default="chain")
     ap.add_argument("--e4", choices=("vote", "s16"), default="vote")
     ap.add_argument("--votes", choices=("late", "current"), default="late")
+    ap.add_argument("--no-symmetry", action="store_true",
+                    help="count every state, also when the two honest nodes are interchangeable (as Handover.tla)")
     ap.add_argument("--max-states", type=int, default=20_000_000)
     ap.add_argument("--stop-on", default="", help="comma list of findings that end the search early")
     ap.add_argument("--safety", action="store_true", help="report a fork of the ledger as a finding")
@@ -542,7 +545,8 @@ def main(argv=None):
     w1 = [int(x) for x in a.w1.split(",")]
     w2 = [int(x) for x in a.w2.split(",")]
     byz = [int(x) for x in a.byz.split(",")]
-    m = Model(w1, w2, byz, a.views, h5=a.h5, tc_epoch=a.tc_epoch, e4=a.e4, late_votes=a.votes == "late")
+    m = Model(w1, w2, byz, a.views, h5=a.h5, tc_epoch=a.tc_epoch, e4=a.e4, late_votes=a.votes == "late",
+              symmetry=not a.no_symmetry)
     stop = tuple(x for x in a.stop_on.split(",") if x)
     report = ("ledger_fork",) if a.safety or "ledger_fork" in stop else ()
     stats, found, order, par = explore(m, a.max_states, stop, a.mem_gb, report)

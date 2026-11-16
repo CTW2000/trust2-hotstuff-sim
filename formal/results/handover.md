@@ -53,13 +53,33 @@ N2 由 N3 提交，N4 由 N5 提交，两者冲突。每张证书都由一个诚
 
 - 只有两个纪元、一个终止块；不同终止块之间的冲突（定理证明的情形 1）不在模型内，它归结为同一张表下的冲突。
 - 3 个视图内的分叉只有同视图两张 QC 的情形（证明的 A、B 两类）；经过 TC 的情形要 4 个视图以上。等权 4 节点、4 个视图时状态数超出 Python 穷举的能力，只检查到 7 步以内。
-- 这是有界检查，不是机器证明。TLA+ 规约（`JolteonAccountability.tla`）仍是单纪元的，没有同步移植。
+- 这是有界检查，不是机器证明。
 
-## 四、重现
+## 四、TLA+ 规约与 TLC 的对照（`formal/Handover.tla`）
+
+`Handover.tla` 是 `mc_handover.py` 的 TLA+ 移植，状态和转移一一对应；权重表写在包装模块 `MCHandover.tla` 里（TLC 的配置文件不能写元组）。不变式三条：`NoHonestEvidence`、`Accountable`、`NoLedgerFork`。运行环境：服务器，TLC 2.19，Java 21，8 个工作线程。TLC 不做对称约简，等权配置与 Python 的 `--no-symmetry` 对照。
+
+| 配置文件 | 规则与配置 | TLC 的状态数 | Python 的状态数 | 结果 |
+|---|---|---|---|---|
+| `Handover_fix3.cfg` | 现行，30%，3 个视图 | 52,349 | 52,349 | 无违规 |
+| `Handover_fix4.cfg` | 现行，30%，4 个视图 | 3,715,363 | 3,715,363 | 无违规（6 分 40 秒） |
+| `Handover_mixed4.cfg` | 现行，35% 与 28%，4 个视图 | 1,035,001 | 1,035,001 | 无违规 |
+| `Handover_forks3.cfg` | 现行，等权 50%，3 个视图 | 6,248,606 | 6,248,606 | 无违规（12 分 41 秒）；有冲突提交的状态 877,590 个，全部可归责 |
+| `Handover_count3.cfg` | 修补前，30%，3 个视图，不设不变式 | 1,349,078 | 1,349,078 | 只比较状态数 |
+| `Handover_gap4.cfg` | 修补前，4 个视图 | 找到即停 | 找到即停 | `NoLedgerFork` 被违反，6 步，与 Python 相同 |
+| `Handover_gap5.cfg` | 修补前，5 个视图，只在当前视图投票 | 找到即停 | 找到即停 | `NoLedgerFork` 被违反，7 步，与 Python 相同 |
+| `Handover_draft5.cfg` | S16 草案的 H5，5 个视图 | 找到即停 | 找到即停 | `NoLedgerFork` 被违反，8 步，与 Python 相同 |
+| `Handover_draftE4.cfg` | S16 草案的 E4，3 个视图 | 找到即停 | 找到即停 | `NoHonestEvidence` 被违反，4 步，与 Python 相同 |
+
+穷举的五组，两种实现的状态数逐项相同。
+
+## 五、重现
 
 ```bash
 python formal/mc_handover.py --witness
 python formal/mc_handover.py --views 5 --h5 none --tc-epoch any --votes current --stop-on ledger_fork
 python formal/mc_handover.py --views 4 --h5 full --tc-epoch chain --safety
 python formal/mc_handover.py --w1 25,25,25,25 --w2 25,25,25,25 --byz 2,3 --views 3
+# TLC（在 formal/ 目录下；tla2tools.jar 放在 formal/tools/）
+java -XX:+UseParallelGC -cp tools/tla2tools.jar tlc2.TLC -workers auto -config Handover_fix4.cfg MCHandover.tla
 ```

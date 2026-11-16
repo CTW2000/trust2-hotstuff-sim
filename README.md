@@ -35,7 +35,7 @@ $$T_i=\mathrm{CapNorm}(w_i)\cdot r_i\cdot z_i$$
 |---|---|
 | `sim2/` | 协议级事件仿真器：HotStuff 两链提交、P1/P2 两种投票方式、加权计票、领导者规则与证据、对手模型、合成网络、交易层；测试与实验。详见 [`sim2/README.md`](sim2/README.md) |
 | `ttru/` | 静态经济学分析（按早期公式 V = s + πK 计算，现为对比记录）：凑齐 1/3 投票权的最低收买成本（精确背包）、K×π 区域图与持平点、处罚不可执行与代理问题、一次安全违背的罚没下界、跨纪元法定集合相交的穷举检验 |
-| `formal/` | 可问责安全定理（Jolteon 型两链 HotStuff，TC 进入投票规则）的有界模型检查：Python 显式状态穷举 `mc_jolteon.py` 与 TLA+ 规范 `JolteonAccountability.tla`（4 份 TLC 配置）；纪元交接的两纪元模型 `mc_handover.py`；取证开销估算 `overhead.py` |
+| `formal/` | 可问责安全定理（Jolteon 型两链 HotStuff，TC 进入投票规则）的有界模型检查：Python 显式状态穷举 `mc_jolteon.py` 与 TLA+ 规范 `JolteonAccountability.tla`（4 份 TLC 配置）；纪元交接的两纪元模型 `mc_handover.py` 及其 TLA+ 规范 `Handover.tla`（9 份 TLC 配置）；取证开销估算 `overhead.py` |
 | `prototype/` | 原型（开发中）：在 [asonnino/hotstuff](https://github.com/asonnino/hotstuff)（Rust，带 TC 的两链 HotStuff，Apache-2.0）上加入本方案。来源见 `prototype/UPSTREAM.md`，设计与分期见 `prototype/DESIGN.md`，带资源限制的本地运行脚本 `prototype/benchmark/run_local.py` |
 | `sim/` | 早期阶段的两个抽象模型（`d4_sim.py`、`d4_finite_memory.py`），供 `sim2/experiments/m1_e2_collapse.py` 引用 |
 
@@ -99,6 +99,12 @@ TLA+ 版本需要 Java 和 `tla2tools.jar`（本仓库不附带，请从 TLA+ �
 
 ```bash
 java -XX:+UseParallelGC -cp tools/tla2tools.jar tlc2.TLC -workers auto -config JolteonAccountability_base.cfg JolteonAccountability.tla
+```
+
+两纪元模型的 TLA+ 规约为 `Handover.tla`，经包装模块 `MCHandover.tla`（给出权重表）运行，配置文件为 `Handover_*.cfg`：
+
+```bash
+java -XX:+UseParallelGC -cp tools/tla2tools.jar tlc2.TLC -workers auto -config Handover_fix4.cfg MCHandover.tla
 ```
 
 纪元交接的两纪元模型（两张权重表；复现交接处的缺口并检查修补后的规则，结果见 `formal/results/handover.md`）：
