@@ -10,4 +10,9 @@ export C_INCLUDE_PATH=$SYS/include:$SYS/include/x86_64-linux-gnu
 export CPLUS_INCLUDE_PATH=$C_INCLUDE_PATH
 export LIBRARY_PATH=$SYS/lib/x86_64-linux-gnu
 [ -x $HOME/opt/protoc/bin/protoc ] && export PROTOC=$HOME/opt/protoc/bin/protoc
+# pkg-config: pkgconf unpacked under ~/opt/sysroot, behind the wrapper ~/opt/bin/pkg-config
+export PATH=$HOME/opt/bin:$PATH
+export PKG_CONFIG=$HOME/opt/bin/pkg-config
+export PKG_CONFIG_PATH=$SYS/lib/x86_64-linux-gnu/pkgconfig:$SYS/share/pkgconfig
+export PKG_CONFIG_SYSROOT_DIR=$HOME/opt/sysroot
 MIRROR=(--config 'source.crates-io.replace-with="ustc"' --config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"')
