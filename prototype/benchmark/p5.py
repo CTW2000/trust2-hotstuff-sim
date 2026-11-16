@@ -661,6 +661,19 @@ def wl():
                     extra=exec_stats)
 
 
+def scale():
+    """DESIGN.md §15.39: larger committees on the one server. Baseline and Trust 2.0 at n = 31, 64, 100, base network,
+    epochs of 25 rounds, 2,000 tx/s -- a load at which the 12-core scope is not throttled even at n = 100 (4.4 cores)
+    -- interleaved within each repetition. The node limit of run_local.py is lifted for this batch only."""
+    os.environ["TTRU_MAX_NODES"] = "100"
+    global RATE
+    RATE = 2_000
+    for rep in (1, 2, 3):
+        for nodes in (31, 64, 100):
+            for build in ("baseline", "trust2"):
+                run("scale", dict(build=build, nodes=nodes, net="base", epoch_length=25, rep=rep), 40)
+
+
 def h5live():
     """DESIGN.md §15.36: does the dual-table quorum (H5, §15.34) slow the handover down? Trust 2.0 with H5 and
     without it (--no-h5), n = 31, base network, epochs of 25 rounds, interleaved within each repetition:
@@ -737,5 +750,5 @@ def compare_x2(rows):
 
 
 if __name__ == "__main__":
-    {"sync": sync, "h5live": h5live, "wl": wl, "x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "r7x2": r7x2, "r7spot": r7spot, "r7len": r7len, "r7xt": r7xt, "f25": f25,
+    {"sync": sync, "h5live": h5live, "wl": wl, "scale": scale, "x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "r7x2": r7x2, "r7spot": r7spot, "r7len": r7len, "r7xt": r7xt, "f25": f25,
      "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "r34x": r34x, "thr": thr, "thr2": thr2, "tgt": tgt, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()

@@ -30,7 +30,7 @@ from benchmark.config import Key, LocalCommittee, NodeParameters
 from benchmark.logs import LogParser
 from benchmark.utils import PathMaker
 
-MAX_NODES = 31
+MAX_NODES = int(os.environ.get("TTRU_MAX_NODES", 31))   # 31 by default; larger committees are opt-in (DESIGN.md §15.39)
 BASE_PORT = 9000
 LOCK = f"/tmp/{os.environ.get('USER', 'user')}_ttru_bench.lock"
 

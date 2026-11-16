@@ -18,7 +18,7 @@ NETS = {  # as in sim2/experiments/dirTtruReview.py
 def main():
     os.makedirs(OUT, exist_ok=True)
     for name, kw in NETS.items():
-        for n in (4, 10, 31):
+        for n in (4, 10, 31, 64, 100):
             net = Network(NetConfig(n=n, seed=0, **kw))
             out = dict(net=name, n=n, seed=0, base_ms=[[round(float(x), 3) for x in row] for row in net.base],
                        jitter_ms=net.cfg.jitter_max_ms, bandwidth_mbps=net.cfg.bw_mbps,
