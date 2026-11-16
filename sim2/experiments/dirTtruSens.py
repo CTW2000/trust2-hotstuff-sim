@@ -34,7 +34,10 @@ from sim2.experiments import dirTtruV12 as V
 from sim2.experiments.dirTtruReview import poisson_upper
 
 DEFAULT = dict(cap=0.10, u_max=0.25, b_rep=0.10, r_min=0.7)
-GRID = (("cap", (0.08, 0.10, 0.15, 0.20)),          # 10 licensed: cap >= (1 - u_max)/10 = 0.075
+# CapNorm rejects a roster whose licensed entities cannot hold 1 - U under the cap (U is the uncertified share after its
+# own caps, at most u_max). With 10 licensed entities cap = 0.08 holds only the populations with U >= 0.2; the others
+# are recorded as rejected and left out of the statistics, and the report counts them.
+GRID = (("cap", (0.08, 0.10, 0.15, 0.20)),
         ("u_max", (0.10, 0.15, 0.20, 0.25, 0.29)),  # u_max < (1 - B_rep)/3 = 0.30
         ("b_rep", (0.05, 0.10, 0.15, 0.20)),        # u_max = 0.25 < (1 - B_rep)/3 up to B_rep = 0.25
         ("r_min", (0.5, 0.6, 0.7, 0.8, 0.9)))
@@ -99,11 +102,16 @@ def static_job(args):
     pop, key, val, seed = args
     p = set_params(key, val, pop)
     cls, s = ttru.population(*POPS[pop][0], seed)
-    base = ttru.base_weights(cls, s, 0.0, 0.0, p["cap"], p["u_max"])
+    try:
+        base = ttru.base_weights(cls, s, 0.0, 0.0, p["cap"], p["u_max"])
+    except ValueError as e:
+        if "infeasible roster" not in str(e):
+            raise
+        return tag(dict(part="static", pop=pop, seed=seed, rejected=1), key, val, p)
     lic = cls == "L"
     theta, theta2 = (1 - p["b_rep"]) / 3, (1 - p["b_rep"] - V.L_MAX) / 3
     top = np.cumsum(np.sort(base)[::-1])
-    return tag(dict(part="static", pop=pop, seed=seed, beta_tol=theta, unc_share=float(base[~lic].sum()),
+    return tag(dict(part="static", pop=pop, seed=seed, rejected=0, beta_tol=theta, unc_share=float(base[~lic].sum()),
                     max_share=float(base.max()), lic_max_share=float(base[lic].max()),
                     nakamoto=int(np.argmax(top > 1 / 3)) + 1,
                     stake_to_tol=V.min_deposit(base, s / s.sum(), theta),
@@ -116,7 +124,13 @@ def job(args):
     part, key, val, rest = args
     p = set_params(key, val)
     fn = {"silent": V.silent_job, "chaos": V.chaos_job, "budget": V.budget_job, "frame": V.frame_job}[part]
-    return tag(fn(rest), key, val, p)
+    try:
+        row = dict(fn(rest), rejected=0)
+    except ValueError as e:
+        if "infeasible roster" not in str(e):
+            raise
+        row = dict(rejected=1)
+    return tag(row, key, val, p)
 
 
 def jobs_of(part):
@@ -176,6 +190,15 @@ def q(xs, f=np.median, d=3):
     return f"{f(xs):.{d}f}"
 
 
+def ok(rows):
+    """The runs whose roster CapNorm accepted (a rejected roster has no weights and no run)."""
+    return [r for r in rows if not r.get("rejected")]
+
+
+def rejected(rows):
+    return f"{sum(1 for r in rows if r.get('rejected'))} / {len(rows)}"
+
+
 def report():
     L = ["# cap、u_max、B_rep、r_min 的敏感性\n",
          "每次只改一个参数，其余取默认值（cap 0.10、u_max 0.25、B_rep 0.10、r_min 0.7）；其余同 dirTtruV12（公式 A、"
@@ -188,12 +211,17 @@ def report():
               "括号为 5%–95% 分位）；不封顶、按质押计票时这个比例就等于可容忍 β0。“罪犯中至少几家持牌”：基础份额超过阈值的任何集合"
               "至少含几家持牌实体，公式 ⌊(θ − u_max)/cap⌋ + 1 / 500 个人群中的最少值；θ 取 (1 − B_rep)/3，计入 L_max 时取 "
               "(1 − B_rep − L_max)/3。\n",
-              "| 参数 | 取值 | 可容忍 β0 | 未认证类份额 | 单实体最大份额 | 超过 1/3 至少几个实体 | 至少要多少质押 | "
-              "罪犯中至少几家持牌：公式 / 实测 | 计入 L_max 时 |", "|---|---|---|---|---|---|---|---|---|"]
-        for key, v, g in groups(st, pop):
+              "“被拒名册”：CapNorm 拒绝的人群数 / 人群总数（上限装不下，即 n_L·cap < 1 − U）；其余各列只统计被接受的人群。\n",
+              "| 参数 | 取值 | 被拒名册 | 可容忍 β0 | 未认证类份额 | 单实体最大份额 | 超过 1/3 至少几个实体 | 至少要多少质押 | "
+              "罪犯中至少几家持牌：公式 / 实测 | 计入 L_max 时 |", "|---|---|---|---|---|---|---|---|---|---|"]
+        for key, v, allg in groups(st, pop):
             b = "**" if v == default(pop)[key] else ""
+            g = ok(allg)
+            if not g:
+                L.append(f"| {b}{NAMES[key]}{b} | {b}{v:g}{b} | {rejected(allg)} | — | — | — | — | — | — | — |")
+                continue
             stake = [r["stake_to_tol"] for r in g]
-            L.append(f"| {b}{NAMES[key]}{b} | {b}{v:g}{b} | {g[0]['beta_tol']:.3f} | {q([r['unc_share'] for r in g])} | "
+            L.append(f"| {b}{NAMES[key]}{b} | {b}{v:g}{b} | {rejected(allg)} | {g[0]['beta_tol']:.3f} | {q([r['unc_share'] for r in g])} | "
                      f"{q([r['max_share'] for r in g], np.max)} | {q([r['nakamoto'] for r in g], d=0)} | "
                      f"{np.median(stake):.3f}（{np.quantile(stake, 0.05):.3f}–{np.quantile(stake, 0.95):.3f}） | "
                      f"{int(g[0]['lic_formula'])} / {int(min(r['lic_min'] for r in g))} | "
@@ -204,20 +232,21 @@ def report():
               "沉默：同伙为沉默领导者，基础份额约 0.2 / 0.25，无迟到，2000 个视图；“末尾份额 / 基础份额”为最后三张表里同伙投票份额与其"
               "基础份额之比（中位数）。混乱期：GST 在视图 3000（共 5000），对抗调度与区域故障两种网络合并；“越界最大”= 同伙份额最大 − "
               "β0/(1 − B_rep)，≤ 0 表示没有越界。预算：可陷害证据（提案失败）下同伙份额最大与界之差（均值 / 最大），AT 下诚实被降权最大。"
-              "陷害：30% 迟到，同伙谎报 NR 并扣票。\n",
-              "| 参数 | 取值 | 沉默：同伙被定罪比例 | 沉默：末尾份额 / 基础份额 | 沉默：提交比例 | 混乱期：诚实降权最大 / B_rep | "
+              "陷害：30% 迟到，同伙谎报 NR 并扣票。“被拒名册”为各部分中被 CapNorm 拒绝的运行数 / 运行总数，其余各列只统计被接受的运行。\n",
+              "| 参数 | 取值 | 被拒名册 | 沉默：同伙被定罪比例 | 沉默：末尾份额 / 基础份额 | 沉默：提交比例 | 混乱期：诚实降权最大 / B_rep | "
               "混乱期：越界最大 | 混乱期：GST 后提交比例 | 预算：可陷害证据 份额 − 界（均值 / 最大） | 预算：AT 诚实降权最大 | "
               "陷害 30%：诚实定罪 / 千视图（95% 上界） | 陷害 30%：诚实降权最大 |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for key, vals in GRID:
             for v in vals:
                 sel = lambda rows: [r for r in rows if (r["param"], r["value"]) ==
                                     ((key, v) if v != DEFAULT[key] else ("default", 0.0))]
-                s_, c_, b_, f_ = sel(sl), sel(ch), sel(bu), sel(fr)
-                if not (s_ or c_ or b_ or f_):
+                every = sel(sl) + sel(ch) + sel(bu) + sel(fr)
+                if not every:
                     continue
+                s_, c_, b_, f_ = ok(sel(sl)), ok(sel(ch)), ok(sel(bu)), ok(sel(fr))
                 b = "**" if v == DEFAULT[key] else ""
-                cells_ = [f"{b}{NAMES[key]}{b}", f"{b}{v:g}{b}"]
+                cells_ = [f"{b}{NAMES[key]}{b}", f"{b}{v:g}{b}", rejected(every)]
                 cells_ += [q([r["byz_convicted"] for r in s_], np.mean), q([r["colluder_share_end"] / r["beta"] for r in s_]),
                            q([r["commit"] for r in s_], np.mean)] if s_ else ["—"] * 3
                 if c_:
