@@ -689,6 +689,10 @@ fn node_on(store: Store) -> Core {
 }
 
 fn node_with_proposer(store: Store) -> (Core, Receiver<ProposerMessage>) {
+    node_with(store, Faults::default())
+}
+
+fn node_with(store: Store, faults: Faults) -> (Core, Receiver<ProposerMessage>) {
     let (name, secret) = leader_keys(1);
     let (tx_loopback, rx_loopback) = channel(1);
     let (tx_mempool, _rx_mempool) = channel(1);
@@ -712,7 +716,7 @@ fn node_with_proposer(store: Store) -> (Core, Receiver<ProposerMessage>) {
             aptos_failure_percent: 0,
         },
         Inclusion::new(Duration::from_millis(500), false),
-        Faults::default(),
+        faults,
         SignatureService::new(secret),
         store.clone(),
         MempoolDriver::new(store, tx_mempool, tx_loopback),
@@ -748,6 +752,44 @@ async fn r8_a_restarted_node_does_not_vote_twice() {
     assert!(second.restore().await);
     assert_eq!((second.round, second.last_voted_round), (1, 1));
     assert!(second.make_vote(&rival).await.is_none());
+}
+
+/// One round of a leader that signs two blocks, on a store that loses what was not synced when the power goes: the
+/// node votes for the first block, the power goes (the files as they are then become the store of the next run), and
+/// the node that comes back is shown the second block. Returns the first vote and the second, if it gave one.
+async fn two_blocks_across_a_loss_of_power(tag: &str, faults: Faults) -> (Vote, Option<Vote>) {
+    let (path, image) = (format!(".db_test_{}", tag), format!(".db_test_{}_image", tag));
+    let _ = fs::remove_dir_all(&path);
+    let store = Store::new_lossy(&path).unwrap();
+    let (leader, secret) = leader_keys(1);
+    let block = Block::new_from_key(QC::genesis(), leader, 1, vec![Digest([1; 32])], &secret);
+    let rival = Block::new_from_key(QC::genesis(), leader, 1, vec![Digest([2; 32])], &secret);
+
+    let first = node_with(store, faults).0.make_vote(&block).await.unwrap();
+    store::crash_image(&path, &image).unwrap();
+
+    let mut back = node_with(Store::new(&image).unwrap(), faults).0;
+    back.restore().await;
+    (first, back.make_vote(&rival).await)
+}
+
+#[tokio::test]
+async fn r8_a_vote_survives_a_loss_of_power() {
+    // The vote left the node only after its safety state was synced, so the node that comes back refuses the rival.
+    let (_, second) = two_blocks_across_a_loss_of_power("r8_a_vote_survives_a_loss_of_power", Faults::default()).await;
+    assert!(second.is_none());
+}
+
+#[tokio::test]
+async fn r8_without_the_sync_a_loss_of_power_makes_an_honest_node_vote_twice() {
+    // The ablation (DESIGN.md §15.33): the safety state written like any other record. It was still in memory when
+    // the power went, the node that comes back has no memory of its vote and signs the rival: two votes of one
+    // round, which is E1 evidence against a node that followed the protocol.
+    let faults = Faults { no_sync: true, ..Faults::default() };
+    let (first, second) =
+        two_blocks_across_a_loss_of_power("r8_without_the_sync_a_loss_of_power", faults).await;
+    let second = second.expect("the vote was forgotten");
+    assert!(Evidence::DoubleVote(first, second).holds());
 }
 
 #[tokio::test]

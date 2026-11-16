@@ -48,6 +48,10 @@ def node_parameters(args):
         consensus["g2_no_reputation"] = True
     if args.aptos_failure_percent:                           # LeaderRule::Aptos threshold sweep (§15.20)
         consensus["aptos_failure_percent"] = args.aptos_failure_percent
+    if getattr(args, "no_sync", False):                      # ablation: safety state written without a sync (§15.33)
+        consensus["no_sync"] = True
+    if getattr(args, "lossy_store", False):                  # a killed node loses what it had not synced (§15.33)
+        consensus["lossy_store"] = True
     if getattr(args, "target_names", None):                  # targeted framing: whom the colluders frame (§15.27)
         consensus["frame_targets"] = args.target_names
     return {
@@ -333,6 +337,10 @@ def main():
                     help="leader rule of the Trust 2.0 build, for comparisons (DESIGN.md §15.12)")
     ap.add_argument("--aptos-failure-percent", type=int, default=0,
                     help="failure threshold of the Aptos-style leader rule in percent (0: aptos-core's 10)")
+    ap.add_argument("--no-sync", action="store_true",
+                    help="ablation: write the safety state without syncing it to disk (DESIGN.md §15.33)")
+    ap.add_argument("--lossy-store", action="store_true",
+                    help="a killed node loses what it had not synced, as after a loss of power (DESIGN.md §15.33)")
     ap.add_argument("--g2-no-reputation", action="store_true",
                     help="ablation: G2 convictions only exclude from leading, reputation stays 1 (B_rep = 0)")
     ap.add_argument("--g2-threshold", type=int, default=0,

@@ -64,7 +64,11 @@ impl Node {
         parameters.consensus.withhold_proof |= experiment.withhold_proof;
 
         // Make the data store.
-        let store = Store::new(store_path).expect("Failed to create store");
+        let store = match parameters.consensus.lossy_store {
+            true => Store::new_lossy(store_path),
+            false => Store::new(store_path),
+        }
+        .expect("Failed to create store");
 
         // Run the signature service.
         let signature_service = SignatureService::new(secret_key);

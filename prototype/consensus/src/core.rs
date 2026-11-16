@@ -119,6 +119,9 @@ pub struct Faults {
     pub tc_outside_block: bool,
     /// Ablation (§15.26): store and vote for blocks of a new epoch that do not extend our terminal block (H2 off).
     pub no_h2: bool,
+    /// Ablation (§15.33): write the safety state without syncing it, as before -- it then survives a crash of the
+    /// process but not a loss of power.
+    pub no_sync: bool,
 }
 
 /// Experiment switch (DESIGN.md §15.27): with `Faults::frame`, frame only in the rounds these members lead (set once
@@ -594,14 +597,20 @@ impl Core {
         Some(Vote::new(block, self.name, self.signature_service.clone()).await)
     }
 
-    /// R8: what a restart must not forget goes to the store before anything we sign leaves this node. Reading it back
-    /// waits for the write: the store handles its commands in order. This survives a crash of the process, not a loss
-    /// of power (no fsync).
+    /// R8: what a restart must not forget is on disk before anything we sign leaves this node. One synced write per
+    /// vote or timeout, so at most two per round; the sync also carries the blocks stored before it (the store writes
+    /// one log, in order). This survives a loss of power.
     async fn remember(&mut self) {
         let state = (self.last_voted_round, &self.high_qc, &self.last_timeout);
         let bytes = bincode::serialize(&state).expect("Failed to serialize the safety state");
-        self.store.write(SAFETY_STATE.to_vec(), bytes).await;
-        let _ = self.store.read(SAFETY_STATE.to_vec()).await;
+        if self.faults.no_sync {
+            // Ablation: the write is only ahead of the signature (reading it back waits for it, the store handles
+            // its commands in order), which is enough for a crash of the process.
+            self.store.write(SAFETY_STATE.to_vec(), bytes).await;
+            let _ = self.store.read(SAFETY_STATE.to_vec()).await;
+        } else {
+            self.store.write_sync(SAFETY_STATE.to_vec(), bytes).await;
+        }
     }
 
     /// R8: pick up what a previous run remembered, if there was one. We stay in the last round we signed in and sign

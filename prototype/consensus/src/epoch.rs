@@ -602,7 +602,8 @@ impl Epochs {
         } else if epoch == self.origin {
             Some(0)
         } else {
-            self.terminals.get(&(epoch - 1)).map(|(_, round)| *round)
+            // An epoch before the configuration's has no terminal block here (and no number below it if it is 0).
+            epoch.checked_sub(1).and_then(|before| self.terminals.get(&before)).map(|(_, round)| *round)
         }
     }
 

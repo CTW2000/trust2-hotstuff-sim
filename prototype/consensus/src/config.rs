@@ -112,6 +112,13 @@ pub struct Parameters {
     /// extend the terminal block we entered that epoch on (H2 off).
     #[serde(default)]
     pub no_h2: bool,
+    /// Experiment switch (DESIGN.md §15.33, ablation): the safety state is written without a sync, as before.
+    #[serde(default)]
+    pub no_sync: bool,
+    /// Experiment switch (DESIGN.md §15.33): the store loses what was not synced when the process is killed, as a
+    /// machine does when it loses power (`Store::new_lossy`).
+    #[serde(default)]
+    pub lossy_store: bool,
 }
 
 fn default_attest_guard() -> u64 {
@@ -166,6 +173,8 @@ impl Default for Parameters {
             fork_vote_until: 0,
             tc_outside_block: false,
             no_h2: false,
+            no_sync: false,
+            lossy_store: false,
         }
     }
 }
