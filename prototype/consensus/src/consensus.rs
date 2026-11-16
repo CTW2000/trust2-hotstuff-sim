@@ -118,6 +118,7 @@ impl Consensus {
                 tc_outside_block: parameters.tc_outside_block,
                 no_sync: parameters.no_sync,
                 no_h2: parameters.no_h2,
+                no_h5: parameters.no_h5,
             },
             signature_service.clone(),
             store.clone(),

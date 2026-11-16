@@ -693,9 +693,15 @@ fn node_with_proposer(store: Store) -> (Core, Receiver<ProposerMessage>) {
 }
 
 fn node_with(store: Store, faults: Faults) -> (Core, Receiver<ProposerMessage>) {
+    node_with_epochs(store, faults, 0)
+}
+
+/// The same node with epochs of `length` rounds (0: a single epoch).
+fn node_with_epochs(store: Store, faults: Faults, length: Round) -> (Core, Receiver<ProposerMessage>) {
     let (name, secret) = leader_keys(1);
     let (tx_loopback, rx_loopback) = channel(1);
-    let (tx_mempool, _rx_mempool) = channel(1);
+    let (tx_mempool, mut rx_mempool) = channel(1);
+    tokio::spawn(async move { while rx_mempool.recv().await.is_some() {} });
     let (_tx_message, rx_message) = channel(1);
     let (tx_proposer, rx_proposer) = channel(1);
     let (tx_commit, _rx_commit) = channel(1);
@@ -704,7 +710,7 @@ fn node_with(store: Store, faults: Faults) -> (Core, Receiver<ProposerMessage>) 
         name,
         committee(),
         EpochConfig {
-            length: 0,
+            length,
             reference_length: 0,
             entity_cap_ppm: 1_000_000,
             class_cap_ppm: 1_000_000,
@@ -1302,6 +1308,7 @@ fn block_in(qc: QC, tc: Option<TC>, round: Round, epoch: EpochNumber) -> Block {
     let mut block = Block::new_from_key_with_tc(qc, tc, author, round, Vec::new(), &secret);
     block.epoch = epoch;
     block.table = table_at(epoch);
+    block.next_table = table_at(epoch + 1);
     block.signature = Signature::new(&block.digest(), &secret);
     block
 }
@@ -1436,4 +1443,128 @@ async fn h2_off_votes_for_a_block_of_the_new_epoch_off_the_terminal_block() {
     };
     let voted = timeout(Duration::from_secs(2), vote_13).await.unwrap_or(None);
     assert_eq!(voted, Some(bad.digest()), "with H2 off the block off the terminal block should get the vote");
+}
+
+/// DESIGN.md §15.34. Epochs of 10 rounds: B9 <- B10 (terminal) <- B11 <- B12 <- B13, the last two of the next epoch,
+/// and the node votes for them. Then comes a block of the next epoch at round 14 that leaves B12 and B13 aside: it
+/// extends B11 through a TC of round 13 of the OLD epoch whose three signers report the QC of B11. Its QC is as high
+/// as every QC the TC reports, so it passes the voting rule; it has the terminal block as an ancestor, so it passes
+/// H2. The three signers are a quorum of the old table (3 of 4) and hold 3 of 8 in the new one, where the fourth
+/// member has the weight. Returns the round of the node's last vote and what became of the block.
+async fn a_block_on_a_tc_of_the_old_epoch(tag: &str, faults: Faults) -> (Round, ConsensusResult<()>) {
+    let (mut node, mut rx_proposer) = node_with_epochs(store_at(&format!(".db_test_{}", tag)), faults, 10);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+
+    let old = Committee { epoch: EPOCH, ..committee() };
+    let tc_signers: Vec<PublicKey> = tc_in(13, EPOCH, &QC::genesis()).votes.iter().map(|(name, ..)| *name).collect();
+    assert_eq!(tc_signers.len(), 3);
+    let mut next = Committee { epoch: EPOCH + 1, ..committee() };
+    for (name, authority) in next.authorities.iter_mut() {
+        authority.stake = if tc_signers.contains(name) { 1 } else { 5 };
+    }
+    node.epochs.set_table(next.clone());
+
+    // Blocks that name the two tables of this run, each by the leader its table gives the round (round 12, the first
+    // of the next epoch, keeps the leader of the old table).
+    let make = |qc: QC, tc: Option<TC>, round: Round, epoch: EpochNumber| {
+        let table = if epoch == EPOCH || round == 12 { &old } else { &next };
+        let author = leader(table, round);
+        let (_, secret) = keys().into_iter().find(|(key, _)| *key == author).unwrap();
+        let mut block = Block::new_from_key_with_tc(qc, tc, author, round, Vec::new(), &secret);
+        block.epoch = epoch;
+        block.table = if epoch == EPOCH { table_at(EPOCH) } else { table_digest(&next) };
+        block.next_table = if epoch == EPOCH { table_digest(&next) } else { table_at(EPOCH + 2) };
+        block.signature = Signature::new(&block.digest(), &secret);
+        block
+    };
+    let b9 = make(QC::genesis(), None, 9, EPOCH);
+    let b10 = make(qc_in(&b9), None, 10, EPOCH);
+    let b11 = make(qc_in(&b10), None, 11, EPOCH);
+    let b12 = make(qc_in(&b11), None, 12, EPOCH + 1);
+    let b13 = make(qc_in(&b12), None, 13, EPOCH + 1);
+    for block in [&b9, &b10, &b11, &b12, &b13] {
+        node.handle_proposal(block).await.unwrap();
+    }
+    assert_eq!((node.epochs.epoch(), node.last_voted_round), (EPOCH + 1, 13), "the node voted for B12 and B13");
+
+    let tc = tc_in(13, EPOCH, &qc_in(&b11));
+    assert!(tc.verify(&old).is_ok() && !tc.has_quorum_in(&next));
+    let rival = make(qc_in(&b11), Some(tc), 14, EPOCH + 1);
+    assert!(extends_validly(rival.round, rival.qc.round, rival.tc.as_ref()));
+    let outcome = node.handle_proposal(&rival).await;
+    (node.last_voted_round, outcome)
+}
+
+#[tokio::test]
+async fn h5_a_tc_of_the_old_epoch_needs_a_quorum_of_the_new_table() {
+    // H5: past the end of an epoch its certificates count only with a quorum of the next table too. The TC does not
+    // have one, so the block is refused and the node's last vote stays the one for B13.
+    let (voted, outcome) =
+        a_block_on_a_tc_of_the_old_epoch("h5_a_tc_of_the_old_epoch_needs_a_quorum", Faults::default()).await;
+    assert!(matches!(outcome, Err(ConsensusError::TCRequiresQuorum)), "{:?}", outcome);
+    assert_eq!(voted, 13);
+}
+
+#[tokio::test]
+async fn h5_off_votes_for_a_block_that_abandons_its_own_branch() {
+    // The ablation (DESIGN.md §15.34): certificates counted under the table of their own epoch alone. The node that
+    // voted for B12 and B13 now votes for the block that leaves them aside -- following every other rule. With such
+    // votes B12, which B13 and its QC commit, and the rival can both be committed by members that hold less than a
+    // third of either table between the two quorums.
+    let faults = Faults { no_h5: true, ..Faults::default() };
+    let (voted, outcome) = a_block_on_a_tc_of_the_old_epoch("h5_off_votes_for_a_block_that_abandons", faults).await;
+    assert!(outcome.is_ok(), "{:?}", outcome);
+    assert_eq!(voted, 14, "with H5 off the block on the old TC should get the vote");
+}
+
+#[tokio::test]
+async fn v3_a_block_carries_no_tc_older_than_its_qc() {
+    // V3: the TC a block embeds is of an epoch from its QC's to its own. A block of the next epoch on a QC of that
+    // epoch with a TC of the old one is malformed, whatever the TC's signers weigh.
+    let (mut node, mut rx_proposer) = node_with_epochs(store_at(".db_test_v3_a_block_carries_no_tc_older"), Faults::default(), 10);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    let blocks = handover_chain();
+    for block in &blocks[..5] {
+        node.handle_proposal(block).await.unwrap();
+    }
+    let b12 = &blocks[3];
+    let bad = block_in(qc_in(b12), Some(tc_in(14, EPOCH, &qc_in(&blocks[2]))), 15, EPOCH + 1);
+    assert!(matches!(node.handle_proposal(&bad).await, Err(ConsensusError::MalformedBlock(_))));
+}
+
+#[tokio::test]
+async fn a_block_naming_another_next_table_gets_no_vote() {
+    // The table chain: a vote is also a signature on the digest of the next epoch's table, so a node votes only for a
+    // block that names its own.
+    let (leader, secret) = leader_keys(1);
+    let mut block = Block::new_from_key(QC::genesis(), leader, 1, Vec::new(), &secret);
+    let mut node = node_on(store_at(".db_test_a_block_naming_another_next_table"));
+    assert!(node.make_vote(&block).await.is_some(), "the fixture block names the right tables");
+
+    block.next_table = Digest([7; 32]);
+    block.signature = Signature::new(&block.digest(), &secret);
+    let mut node = node_on(store_at(".db_test_a_block_naming_another_next_table_2"));
+    assert!(matches!(node.handle_proposal(&block).await, Err(ConsensusError::MalformedBlock(_))));
+    assert!(node.make_vote(&block).await.is_none());
+}
+
+#[tokio::test]
+async fn r8_a_restarted_node_signs_nothing_of_an_epoch_before_the_one_it_signed_in() {
+    // H3 across a restart (DESIGN.md §15.34): a node that entered the next epoch on a commit proof and signed there
+    // may come back with its tables still in the old epoch. A vote or timeout of the old epoch at a higher round
+    // would then be E4 evidence against it, so it signs neither until it is back in its epoch.
+    let store = store_at(".db_test_r8_signs_nothing_of_an_epoch_before");
+    let mut first = node_on(store.clone());
+    first.signed_epoch = EPOCH + 1;
+    first.last_voted_round = 3;
+    first.remember().await;
+
+    let mut second = node_on(store);
+    assert!(second.restore().await);
+    assert_eq!((second.signed_epoch, second.epochs.epoch()), (EPOCH + 1, EPOCH));
+    let (leader, secret) = leader_keys(1);
+    let block = Block::new_from_key(QC::genesis(), leader, 5, Vec::new(), &secret);
+    assert!(second.make_vote(&block).await.is_none());
+    second.local_timeout_round().await.unwrap();
+    assert!(second.last_timeout.is_none(), "a timeout of the old epoch was signed");
 }

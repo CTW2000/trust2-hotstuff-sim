@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 pub mod aggregator_tests;
 
 /// Votes and timeouts are added after verification against the table of their epoch, which is passed in.
+/// H5 (DESIGN.md §15.34): for a round at or past the end of the epoch the caller also passes the table of the next
+/// epoch, and the certificate is made only when its signers hold a quorum of both.
 /// Timeouts are kept apart by epoch as well as round: a node that enters the next epoch during a round gets
 /// timeouts of both, and a TC carries a single epoch (votes are apart already, their digest includes it).
 pub struct Aggregator {
@@ -27,6 +29,15 @@ impl Aggregator {
     }
 
     pub fn add_vote(&mut self, vote: Vote, committee: &Committee) -> ConsensusResult<Option<QC>> {
+        self.add_vote_with(vote, committee, None)
+    }
+
+    pub fn add_vote_with(
+        &mut self,
+        vote: Vote,
+        committee: &Committee,
+        also: Option<&Committee>,
+    ) -> ConsensusResult<Option<QC>> {
         // TODO [issue #7]: A bad node may make us run out of memory by sending many votes
         // with different round numbers or different digests.
 
@@ -36,13 +47,18 @@ impl Aggregator {
             .or_insert_with(HashMap::new)
             .entry(vote.digest())
             .or_insert_with(|| Box::new(QCMaker::new()))
-            .append(vote, committee)
+            .append(vote, committee, also)
     }
 
-    pub fn add_timeout(
+    pub fn add_timeout(&mut self, timeout: Timeout, committee: &Committee) -> ConsensusResult<Option<TC>> {
+        self.add_timeout_with(timeout, committee, None)
+    }
+
+    pub fn add_timeout_with(
         &mut self,
         timeout: Timeout,
         committee: &Committee,
+        also: Option<&Committee>,
     ) -> ConsensusResult<Option<TC>> {
         // TODO: A bad node may make us run out of memory by sending many timeouts
         // with different round numbers.
@@ -51,7 +67,7 @@ impl Aggregator {
         self.timeouts_aggregators
             .entry((timeout.epoch, timeout.round))
             .or_insert_with(|| Box::new(TCMaker::new()))
-            .append(timeout, committee)
+            .append(timeout, committee, also)
     }
 
     pub fn cleanup(&mut self, round: &Round) {
@@ -112,8 +128,31 @@ impl Accuser {
     }
 }
 
+/// The weight gathered under the table of the epoch and, past its end, under the next one (H5).
+#[derive(Default)]
+struct Weight {
+    own: Stake,
+    next: Stake,
+    made: bool,
+}
+
+impl Weight {
+    /// Count `author`; returns whether this completes the quorum (once).
+    fn add(&mut self, author: &PublicKey, committee: &Committee, also: Option<&Committee>) -> bool {
+        self.own += committee.stake(author);
+        self.next += also.map_or(0, |table| table.stake(author));
+        let quorum = self.own >= committee.quorum_threshold()
+            && also.map_or(true, |table| self.next >= table.quorum_threshold());
+        if quorum && !self.made {
+            self.made = true; // the certificate is made once
+            return true;
+        }
+        false
+    }
+}
+
 struct QCMaker {
-    weight: Stake,
+    weight: Weight,
     votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
 }
@@ -121,14 +160,19 @@ struct QCMaker {
 impl QCMaker {
     pub fn new() -> Self {
         Self {
-            weight: 0,
+            weight: Weight::default(),
             votes: Vec::new(),
             used: HashSet::new(),
         }
     }
 
     /// Try to append a signature to a (partial) quorum.
-    pub fn append(&mut self, vote: Vote, committee: &Committee) -> ConsensusResult<Option<QC>> {
+    pub fn append(
+        &mut self,
+        vote: Vote,
+        committee: &Committee,
+        also: Option<&Committee>,
+    ) -> ConsensusResult<Option<QC>> {
         let author = vote.author;
 
         // Ensure it is the first time this authority votes.
@@ -138,9 +182,7 @@ impl QCMaker {
         );
 
         self.votes.push((author, vote.signature));
-        self.weight += committee.stake(&author);
-        if self.weight >= committee.quorum_threshold() {
-            self.weight = 0; // Ensures QC is only made once.
+        if self.weight.add(&author, committee, also) {
             return Ok(Some(QC {
                 hash: vote.hash.clone(),
                 round: vote.round,
@@ -153,7 +195,7 @@ impl QCMaker {
 }
 
 struct TCMaker {
-    weight: Stake,
+    weight: Weight,
     votes: Vec<(PublicKey, Signature, Round, bool)>,
     used: HashSet<PublicKey>,
     high_qc: QC,
@@ -162,7 +204,7 @@ struct TCMaker {
 impl TCMaker {
     pub fn new() -> Self {
         Self {
-            weight: 0,
+            weight: Weight::default(),
             votes: Vec::new(),
             used: HashSet::new(),
             high_qc: QC::genesis(),
@@ -174,6 +216,7 @@ impl TCMaker {
         &mut self,
         timeout: Timeout,
         committee: &Committee,
+        also: Option<&Committee>,
     ) -> ConsensusResult<Option<TC>> {
         let author = timeout.author;
 
@@ -193,9 +236,7 @@ impl TCMaker {
         if timeout.high_qc.round > self.high_qc.round {
             self.high_qc = timeout.high_qc.clone();
         }
-        self.weight += committee.stake(&author);
-        if self.weight >= committee.quorum_threshold() {
-            self.weight = 0; // Ensures TC is only created once.
+        if self.weight.add(&author, committee, also) {
             return Ok(Some(TC {
                 round: timeout.round,
                 epoch: timeout.epoch,

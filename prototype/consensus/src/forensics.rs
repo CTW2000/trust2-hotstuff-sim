@@ -24,7 +24,7 @@ use crate::config::{Committee, EpochNumber, Parameters, Stake};
 use crate::epoch::EpochConfig;
 use crate::epoch::Epochs;
 use crate::consensus::Round;
-use crate::messages::{extends_validly, table_digest, Block, Evidence, SignedTimeout, Timeout, Vote, QC, TC};
+use crate::messages::{extends_validly, table_digest, Block, Earlier, Evidence, SignedTimeout, Timeout, Vote, QC, TC};
 use crypto::{Digest, Hash as _, PublicKey};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use store::Store;
@@ -365,7 +365,8 @@ fn culprit(evidence: &Evidence) -> PublicKey {
         Evidence::DoubleVote(vote, _)
         | Evidence::InvalidBlock(vote, _)
         | Evidence::Regression(vote, _, _)
-        | Evidence::NrContradiction(vote, _) => vote.author,
+        | Evidence::NrContradiction(vote, _)
+        | Evidence::CrossEpoch(vote, _) => vote.author,
     }
 }
 
@@ -373,19 +374,23 @@ fn vote(hash: &Digest, round: Round, epoch: EpochNumber, author: PublicKey, sign
     Vote { hash: hash.clone(), round, epoch, author, signature: signature.clone() }
 }
 
-/// E1 for every signer of both QCs, which certify different blocks of one view (verified).
+/// E1 for every signer of both QCs, which certify different blocks of one view (verified); E4 when the two QCs are
+/// of different epochs (a suffix block and a block of the next epoch, DESIGN.md §15.34).
 fn double_votes(a: &QC, b: &QC) -> Vec<Evidence> {
-    if a.round != b.round || a.epoch != b.epoch || a.hash == b.hash {
+    if a.round != b.round || a.hash == b.hash {
         return Vec::new();
     }
+    let (a, b) = if a.epoch <= b.epoch { (a, b) } else { (b, a) };
     a.votes
         .iter()
         .filter_map(|(name, sa)| {
             let (_, sb) = b.votes.iter().find(|(other, _)| other == name)?;
-            let evidence = Evidence::DoubleVote(
-                vote(&a.hash, a.round, a.epoch, *name, sa),
-                vote(&b.hash, b.round, b.epoch, *name, sb),
-            );
+            let (first, second) = (vote(&a.hash, a.round, a.epoch, *name, sa), vote(&b.hash, b.round, b.epoch, *name, sb));
+            let evidence = if a.epoch == b.epoch {
+                Evidence::DoubleVote(first, second)
+            } else {
+                Evidence::CrossEpoch(second, Earlier::Vote(first))
+            };
             evidence.verify().ok().map(|_| evidence)
         })
         .collect()
@@ -403,7 +408,8 @@ fn invalid_votes(block: &Block, qc: &QC) -> Vec<Evidence> {
 }
 
 /// E3 for every signer of QC(X+) that also signed `tc` (verified): its vote for X+, which certifies view(X), and its
-/// timeout of a later view reporting a lower high QC.
+/// timeout of a later view reporting a lower high QC. When the TC is of the epoch before that of X+, the timeout of
+/// the earlier epoch at a view not below the vote's is E4.
 fn regressions(cx: &CommitProof, tc: &TC) -> Vec<Evidence> {
     let block = &cx.x_plus;
     let hash = block.digest();
@@ -420,11 +426,12 @@ fn regressions(cx: &CommitProof, tc: &TC) -> Vec<Evidence> {
                 high_qc_round: *high_qc_round,
                 nr: *nr,
             };
-            let evidence = Evidence::Regression(
-                vote(&hash, block.round, block.epoch, *name, signature),
-                block.header(),
-                timeout,
-            );
+            let vote = vote(&hash, block.round, block.epoch, *name, signature);
+            let evidence = if timeout.epoch < vote.epoch {
+                Evidence::CrossEpoch(vote, Earlier::Timeout(timeout))
+            } else {
+                Evidence::Regression(vote, block.header(), timeout)
+            };
             evidence.verify().ok().map(|_| evidence)
         })
         .collect()
@@ -528,6 +535,7 @@ pub async fn report(committee: &Committee, parameters: &Parameters, a: &str, b: 
             "e1": count(true),
             "e2": finding.evidence.iter().filter(|e| matches!(e, Evidence::InvalidBlock(..))).count(),
             "e3": finding.evidence.iter().filter(|e| matches!(e, Evidence::Regression(..))).count(),
+            "e4": finding.evidence.iter().filter(|e| matches!(e, Evidence::CrossEpoch(..))).count(),
             "culprits": finding.culprits.iter().map(|k| k.encode_base64()).collect::<Vec<_>>(),
             "share": share(&finding.culprits, &table),
             "licensed": licensed,

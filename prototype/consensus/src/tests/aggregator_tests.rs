@@ -102,6 +102,36 @@ fn timeouts_of_two_epochs_do_not_mix() {
 }
 
 #[test]
+fn past_the_end_of_an_epoch_a_certificate_needs_a_quorum_of_both_tables() {
+    // H5: three of four equal members are a quorum of the old table. In the next table the fourth holds 5 of 8, so
+    // the three do not make a QC or a TC there; with the fourth they do.
+    let keys = keys();
+    let mut next = committee();
+    next.epoch = EPOCH + 1;
+    next.authorities.get_mut(&keys[3].0).unwrap().stake = 5;
+    let hash = Digest([9; 32]);
+    let vote = |i: usize| Vote::new_from_key(hash.clone(), 2, keys[i].0, &keys[i].1);
+    let timeout = |i: usize| Timeout::new_from_key(QC::genesis(), 2, false, keys[i].0, &keys[i].1);
+
+    let mut aggregator = Aggregator::new();
+    for i in 0..3 {
+        assert!(aggregator.add_vote_with(vote(i), &committee(), Some(&next)).unwrap().is_none());
+        assert!(aggregator.add_timeout_with(timeout(i), &committee(), Some(&next)).unwrap().is_none());
+    }
+    let qc = aggregator.add_vote_with(vote(3), &committee(), Some(&next)).unwrap().expect("a QC of both tables");
+    let tc = aggregator.add_timeout_with(timeout(3), &committee(), Some(&next)).unwrap().expect("a TC of both tables");
+    assert!(qc.verify(&committee()).is_ok() && qc.has_quorum_in(&next));
+    assert!(tc.verify(&committee()).is_ok() && tc.has_quorum_in(&next));
+
+    // Under the old table alone the first three are enough, and they do not hold a quorum of the next.
+    let mut aggregator = Aggregator::new();
+    assert!(aggregator.add_vote(vote(0), &committee()).unwrap().is_none());
+    assert!(aggregator.add_vote(vote(1), &committee()).unwrap().is_none());
+    let qc = aggregator.add_vote(vote(2), &committee()).unwrap().expect("a QC of the old table");
+    assert!(!qc.has_quorum_in(&next));
+}
+
+#[test]
 fn accuser_makes_one_accusation_from_nr_timeouts() {
     // G2: NR = 1 timeouts above 2/3 of the weight make one AT accusation; NR = 0 ones do not count.
     let mut accuser = Accuser::new();

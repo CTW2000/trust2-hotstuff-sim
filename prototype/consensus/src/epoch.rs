@@ -633,6 +633,23 @@ impl Epochs {
         self.config.length > 0 && round >= self.start + self.config.length
     }
 
+    /// H5 (DESIGN.md §15.34): whether a certificate of `epoch` for `round` is at or past the end of that epoch (the
+    /// terminal block or after it), and so counts only with a quorum of the next table as well. An older epoch
+    /// whose start we no longer keep has ended: every certificate of it we still meet is taken to be past its end.
+    pub fn past_end_of(&self, epoch: EpochNumber, round: Round) -> bool {
+        self.config.length > 0
+            && match self.epoch_start(epoch) {
+                Some(start) => round >= start + self.config.length,
+                None => epoch < self.current,
+            }
+    }
+
+    /// Test support: replace the weight table of `table.epoch`.
+    #[cfg(test)]
+    pub fn set_table(&mut self, table: Committee) {
+        self.tables.insert(table.epoch, table);
+    }
+
     /// Whether a QC of `round` may be the commit proof of the terminal block (its block's parent may be
     /// the terminal block), which can only be told once the certified block is at hand.
     pub fn may_end(&self, round: Round) -> bool {

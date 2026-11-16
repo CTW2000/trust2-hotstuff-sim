@@ -248,3 +248,98 @@ fn detector_finds_e2_only_with_the_named_table() {
     found.extend(with.vote(vote(&invalid, 2)));
     assert_eq!(kinds(&found), vec!["E2"]);
 }
+
+fn vote_in(block: &Block, epoch: EpochNumber, i: usize) -> Vote {
+    let (author, secret) = key(i);
+    let mut vote = Vote { hash: block.digest(), round: block.round, epoch, author, signature: Default::default() };
+    vote.signature = crypto::Signature::new(&vote.digest(), &secret);
+    vote
+}
+
+fn timeout_in(round: Round, high_qc_round: Round, epoch: EpochNumber, i: usize) -> SignedTimeout {
+    let (name, secret) = key(i);
+    let mut timeout = Timeout::new_from_key(qc_of(high_qc_round), round, false, name, &secret);
+    timeout.epoch = epoch;
+    timeout.signature = crypto::Signature::new(&timeout.digest(), &secret);
+    SignedTimeout::from(&timeout)
+}
+
+fn block_in(qc_round: Round, round: Round, epoch: EpochNumber) -> Block {
+    let (name, secret) = key(3);
+    let mut block = Block::new_from_key(qc_of(qc_round), name, round, Vec::new(), &secret);
+    block.epoch = epoch;
+    block.signature = crypto::Signature::new(&block.digest(), &secret);
+    block
+}
+
+#[test]
+fn e3_holds_across_a_handover() {
+    // DESIGN.md §15.34: a node keeps its high QC when it enters the next epoch. A vote in the old epoch for a block
+    // certifying round 6 and a timeout in the next epoch, at a higher round, reporting round 4 is E3 all the same.
+    let mut detector = Detector::new();
+    let b7 = block_in(6, 7, EPOCH);
+    let mut found = detector.block(&b7);
+    found.extend(detector.vote(vote_in(&b7, EPOCH, 0)));
+    found.extend(detector.timeout(timeout_in(9, 4, EPOCH + 1, 0)));
+    assert_eq!(kinds(&found), vec!["E3"]);
+    assert!(found[0].verify().is_ok());
+
+    // The other order of arrival, and the honest case: the timeout reports the QC the vote adopted.
+    let mut detector = Detector::new();
+    let mut found = detector.timeout(timeout_in(9, 4, EPOCH + 1, 0));
+    found.extend(detector.timeout(timeout_in(9, 6, EPOCH + 1, 1)));
+    found.extend(detector.block(&b7));
+    found.extend(detector.vote(vote_in(&b7, EPOCH, 0)));
+    found.extend(detector.vote(vote_in(&b7, EPOCH, 1)));
+    assert_eq!(kinds(&found), vec!["E3"]);
+    assert_eq!(found[0].culprit(), key(0).0);
+}
+
+#[test]
+fn e4_a_vote_at_or_below_a_round_signed_in_an_earlier_epoch() {
+    // E4: a vote of the next epoch at round 8, by a signer that voted at round 8 in the old epoch (0), timed out at
+    // round 9 there (1), or -- arriving after the vote -- voted at round 10 there (2).
+    let old = block_in(7, 8, EPOCH);
+    let old_10 = block_in(9, 10, EPOCH);
+    let new = block_in(7, 8, EPOCH + 1);
+    let mut detector = Detector::new();
+    let mut found = detector.vote(vote_in(&old, EPOCH, 0));
+    found.extend(detector.timeout(timeout_in(9, 7, EPOCH, 1)));
+    for i in 0..3 {
+        found.extend(detector.vote(vote_in(&new, EPOCH + 1, i)));
+    }
+    assert_eq!(kinds(&found), vec!["E4", "E4"]);
+    found.extend(detector.vote(vote_in(&old_10, EPOCH, 2)));
+    assert_eq!(kinds(&found), vec!["E4", "E4", "E4"]);
+    assert_eq!(found.iter().map(|e| e.culprit()).collect::<Vec<_>>(), vec![key(0).0, key(1).0, key(2).0]);
+    for evidence in &found {
+        assert!(evidence.verify().is_ok());
+        assert!(evidence.is_safety() && evidence.epoch() == EPOCH + 1);
+    }
+}
+
+#[test]
+fn a_handover_in_the_middle_of_a_round_gives_no_evidence() {
+    // What an honest node signs around a handover: a vote at round 8 and a timeout at round 9 in the old epoch; it
+    // enters the next epoch in round 9 and times out there again (the old timeout does not count for a TC of the new
+    // epoch), then votes at round 10. Neither two timeouts of one round in two epochs nor a vote above everything
+    // signed before is evidence.
+    let old = block_in(7, 8, EPOCH);
+    let new = block_in(9, 10, EPOCH + 1);
+    let mut detector = Detector::new();
+    let mut found = detector.block(&old);
+    found.extend(detector.block(&new));
+    found.extend(detector.vote(vote_in(&old, EPOCH, 0)));
+    found.extend(detector.timeout(timeout_in(9, 7, EPOCH, 0)));
+    found.extend(detector.timeout(timeout_in(9, 7, EPOCH + 1, 0)));
+    found.extend(detector.vote(vote_in(&new, EPOCH + 1, 0)));
+    found.extend(detector.timeout(timeout_in(10, 9, EPOCH + 1, 0)));
+    assert!(found.is_empty(), "{:?}", found);
+
+    // Signatures aside, E4 needs an earlier epoch and a round at least as high.
+    let vote = vote_in(&new, EPOCH + 1, 0);
+    let below = Evidence::CrossEpoch(vote.clone(), Earlier::Timeout(timeout_in(9, 7, EPOCH, 0)));
+    let same_epoch = Evidence::CrossEpoch(vote.clone(), Earlier::Timeout(timeout_in(10, 7, EPOCH + 1, 0)));
+    let other_signer = Evidence::CrossEpoch(vote, Earlier::Timeout(timeout_in(10, 7, EPOCH, 1)));
+    assert!(!below.holds() && !same_epoch.holds() && !other_signer.holds());
+}

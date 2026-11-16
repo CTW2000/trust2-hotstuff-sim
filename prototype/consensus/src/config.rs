@@ -112,6 +112,10 @@ pub struct Parameters {
     /// extend the terminal block we entered that epoch on (H2 off).
     #[serde(default)]
     pub no_h2: bool,
+    /// Experiment switch (DESIGN.md §15.34, ablation): certificates past the end of an epoch are counted under the
+    /// table of that epoch alone (H5 off).
+    #[serde(default)]
+    pub no_h5: bool,
     /// Experiment switch (DESIGN.md §15.33, ablation): the safety state is written without a sync, as before.
     #[serde(default)]
     pub no_sync: bool,
@@ -173,6 +177,7 @@ impl Default for Parameters {
             fork_vote_until: 0,
             tc_outside_block: false,
             no_h2: false,
+            no_h5: false,
             no_sync: false,
             lossy_store: false,
         }

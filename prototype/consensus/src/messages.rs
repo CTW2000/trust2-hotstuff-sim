@@ -46,6 +46,11 @@ pub struct Block {
     /// (`table_digest`). Honest nodes vote only for a block that names their table of its epoch, so a vote binds
     /// the table its block is judged by; votes on another branch name that branch's table.
     pub table: Digest,
+    /// The table chain (DESIGN.md §15.34): the digest of the weight table of the next epoch, which the block's
+    /// chain determined an epoch ahead (H1'). Honest nodes vote only for a block that names their tables of both
+    /// epochs, so a QC under the table of `epoch` certifies the next one, and a third party can follow the tables
+    /// from two it knows without replaying the ledger.
+    pub next_table: Digest,
     pub payload: Vec<Digest>,
     pub signature: Signature,
 }
@@ -63,6 +68,7 @@ impl Block {
         round: Round,
         epoch: EpochNumber,
         table: Digest,
+        next_table: Digest,
         payload: Vec<Digest>,
         mut signature_service: SignatureService,
     ) -> Self {
@@ -77,6 +83,7 @@ impl Block {
             round,
             epoch,
             table,
+            next_table,
             payload,
             signature: Signature::default(),
         };
@@ -147,6 +154,7 @@ impl Hash for Block {
         block_digest(
             self.epoch,
             &self.table,
+            &self.next_table,
             &self.author,
             self.round,
             &self.payload,
@@ -174,6 +182,7 @@ pub struct BlockHeader {
     pub round: Round,
     pub epoch: EpochNumber,
     pub table: Digest,
+    pub next_table: Digest,
     pub payload: Vec<Digest>,
     pub accusations: Vec<Digest>,
     pub otxs: Vec<Digest>,
@@ -191,6 +200,7 @@ impl Block {
             round: self.round,
             epoch: self.epoch,
             table: self.table.clone(),
+            next_table: self.next_table.clone(),
             payload: self.payload.clone(),
             accusations: self.accusations.iter().map(|a| a.digest()).collect(),
             otxs: self.otxs.iter().map(|x| x.id()).collect(),
@@ -205,6 +215,7 @@ impl Hash for BlockHeader {
         block_digest(
             self.epoch,
             &self.table,
+            &self.next_table,
             &self.author,
             self.round,
             &self.payload,
@@ -233,6 +244,7 @@ pub fn set_tc_outside_block(on: bool) {
 fn block_digest(
     epoch: EpochNumber,
     table: &Digest,
+    next_table: &Digest,
     author: &PublicKey,
     round: Round,
     payload: &[Digest],
@@ -253,6 +265,7 @@ fn block_digest(
     let mut hasher = Sha512::new();
     hasher.update(epoch.to_le_bytes());
     hasher.update(table);
+    hasher.update(next_table);
     hasher.update(author.0);
     hasher.update(round.to_le_bytes());
     for x in payload {
@@ -429,6 +442,13 @@ impl QC {
         // Check the signatures.
         Signature::verify_batch(&self.digest(), &self.votes).map_err(ConsensusError::from)
     }
+
+    /// H5: whether the signers also hold a quorum of `table`, the table of the next epoch (the members and their
+    /// keys are the same; `verify` has checked the signatures and that no signer comes twice).
+    pub fn has_quorum_in(&self, table: &Committee) -> bool {
+        let weight: Stake = self.votes.iter().map(|(name, _)| table.stake(name)).sum();
+        weight >= table.quorum_threshold()
+    }
 }
 
 impl Hash for QC {
@@ -561,6 +581,12 @@ impl TC {
             ConsensusError::MalformedTC(self.round)
         );
         Ok(())
+    }
+
+    /// H5: whether the signers also hold a quorum of `table`, the table of the next epoch (see `QC::has_quorum_in`).
+    pub fn has_quorum_in(&self, table: &Committee) -> bool {
+        let weight: Stake = self.votes.iter().map(|(name, ..)| table.stake(name)).sum();
+        weight >= table.quorum_threshold()
     }
 
     /// The signatures alone, which need no weight table.
@@ -918,10 +944,59 @@ pub enum Evidence {
     /// is given by its header, which hashes to the digest the vote signs and so binds both the TC and the table.
     InvalidBlock(Vote, BlockHeader),
     /// E3: a vote at round v1 for a block certifying round j, and a timeout of the same signer at a round
-    /// v2 >= v1 reporting a high QC below j. The block is given by its header.
+    /// v2 >= v1 reporting a high QC below j, signed in the epoch of the vote or a later one (a node keeps its high
+    /// QC across a handover). The block is given by its header.
     Regression(Vote, BlockHeader, SignedTimeout),
     /// NR self-contradiction: a vote and an NR = 1 timeout of one signer for the same (epoch, round).
     NrContradiction(Vote, SignedTimeout),
+    /// E4 (DESIGN.md §15.34): a vote, and a vote or timeout the same signer signed in an earlier epoch at the same
+    /// round or a higher one. A node signs everything of an epoch before anything of the next (H3) and never
+    /// votes at or below a round it has signed, so it cannot sign both.
+    CrossEpoch(Vote, Earlier),
+}
+
+/// The message of an earlier epoch in E4 evidence.
+#[derive(Clone, Serialize, Deserialize)]
+pub enum Earlier {
+    Vote(Vote),
+    Timeout(SignedTimeout),
+}
+
+impl Earlier {
+    pub fn author(&self) -> PublicKey {
+        match self {
+            Earlier::Vote(vote) => vote.author,
+            Earlier::Timeout(timeout) => timeout.author,
+        }
+    }
+
+    pub fn epoch(&self) -> EpochNumber {
+        match self {
+            Earlier::Vote(vote) => vote.epoch,
+            Earlier::Timeout(timeout) => timeout.epoch,
+        }
+    }
+
+    pub fn round(&self) -> Round {
+        match self {
+            Earlier::Vote(vote) => vote.round,
+            Earlier::Timeout(timeout) => timeout.round,
+        }
+    }
+
+    fn signature(&self) -> &Signature {
+        match self {
+            Earlier::Vote(vote) => &vote.signature,
+            Earlier::Timeout(timeout) => &timeout.signature,
+        }
+    }
+
+    fn signed(&self) -> Digest {
+        match self {
+            Earlier::Vote(vote) => vote.digest(),
+            Earlier::Timeout(t) => timeout_digest(t.epoch, t.round, t.high_qc_round, t.nr),
+        }
+    }
 }
 
 /// The voting rule's condition on a block's certificates: its round is the one after its QC, or the one after its
@@ -942,7 +1017,8 @@ impl Evidence {
             Evidence::DoubleVote(vote, _)
             | Evidence::InvalidBlock(vote, _)
             | Evidence::Regression(vote, _, _)
-            | Evidence::NrContradiction(vote, _) => vote,
+            | Evidence::NrContradiction(vote, _)
+            | Evidence::CrossEpoch(vote, _) => vote,
         }
     }
 
@@ -955,7 +1031,7 @@ impl Evidence {
         self.vote().epoch
     }
 
-    /// E1-E3 are safety evidence, the NR self-contradiction liveness evidence.
+    /// E1-E4 are safety evidence, the NR self-contradiction liveness evidence.
     pub fn is_safety(&self) -> bool {
         !matches!(self, Evidence::NrContradiction(..))
     }
@@ -1017,6 +1093,7 @@ impl Evidence {
         match self {
             Evidence::DoubleVote(_, other) => other.signature.verify(&other.digest(), &other.author)?,
             Evidence::Regression(_, _, timeout) | Evidence::NrContradiction(_, timeout) => timeout.verify()?,
+            Evidence::CrossEpoch(_, earlier) => earlier.signature().verify(&earlier.signed(), &earlier.author())?,
             Evidence::InvalidBlock(..) => (),
         }
         Ok(())
@@ -1040,9 +1117,12 @@ impl Evidence {
                 vote.hash == block.digest()
                     && vote.round == block.round
                     && timeout.author == vote.author
-                    && timeout.epoch == vote.epoch
+                    && timeout.epoch >= vote.epoch
                     && timeout.round >= vote.round
                     && timeout.high_qc_round < block.qc_round
+            }
+            Evidence::CrossEpoch(vote, earlier) => {
+                earlier.author() == vote.author && earlier.epoch() < vote.epoch && earlier.round() >= vote.round
             }
             Evidence::NrContradiction(vote, timeout) => {
                 timeout.author == vote.author
@@ -1082,6 +1162,11 @@ impl Hash for Evidence {
                 hasher.update(timeout.signature.flatten());
                 hasher.update(timeout_digest(timeout.epoch, timeout.round, timeout.high_qc_round, timeout.nr));
             }
+            Evidence::CrossEpoch(_, earlier) => {
+                hasher.update([5u8]);
+                hasher.update(earlier.signature().flatten());
+                hasher.update(earlier.signed());
+            }
         }
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
@@ -1094,6 +1179,7 @@ impl fmt::Debug for Evidence {
             Evidence::InvalidBlock(..) => "E2",
             Evidence::Regression(..) => "E3",
             Evidence::NrContradiction(..) => "NR",
+            Evidence::CrossEpoch(..) => "E4",
         };
         write!(f, "{}({}, {}, {})", what, self.culprit(), self.epoch(), self.vote().round)
     }

@@ -38,9 +38,11 @@ pub fn table() -> Digest {
     table_digest(Epochs::new(&committee(), test_epoch_config(0)).current())
 }
 
-// The digest of the fixture committee's weight table of `epoch` (EPOCH or EPOCH + 1: the first two epochs share it).
+// The digest of the fixture committee's weight table of `epoch`: the stakes of the first table under that epoch's
+// number (nothing on the ledgers of these tests changes the stakes).
 pub fn table_at(epoch: EpochNumber) -> Digest {
-    table_digest(Epochs::new(&committee(), test_epoch_config(0)).get(epoch).expect("a table of the first two epochs"))
+    let first = Epochs::new(&committee(), test_epoch_config(0)).current().clone();
+    table_digest(&Committee { epoch, ..first })
 }
 
 // An observed transaction of owner `owner`, signed by it; `tag` tells apart two with the same nonce.
@@ -141,6 +143,7 @@ impl Block {
             round,
             epoch: EPOCH,
             table: table(),
+            next_table: table_at(EPOCH + 1),
             payload,
             signature: Signature::default(),
         };

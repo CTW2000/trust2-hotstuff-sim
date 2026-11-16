@@ -4,15 +4,17 @@
 //!
 //! - E1: two votes of one signer for the same (epoch, round) and different blocks;
 //! - E2: a vote for a block that breaks the voting rule (its TC judged by the weight table the block names);
-//! - E3: a vote for a block certifying round j and a timeout of a round at least as high reporting hq < j;
+//! - E3: a vote for a block certifying round j and a timeout of a round at least as high reporting hq < j, of the
+//!   epoch of the vote or a later one;
+//! - E4: a vote and a vote or timeout of an earlier epoch at the same round or a higher one (DESIGN.md §15.34);
 //! - NR: a vote and an NR = 1 timeout for the same (epoch, round).
 //!
-//! Honest nodes never produce these (rules R1-R6). One piece is reported per culprit, class and epoch: the
+//! Honest nodes never produce these (rules R1-R6, H3). One piece is reported per culprit, class and epoch: the
 //! graded punishment counts one window per (entity, class, sign epoch), so further evidence adds nothing.
 
 use crate::config::{Committee, EpochNumber};
 use crate::consensus::Round;
-use crate::messages::{table_digest, Block, Evidence, SignedTimeout, Vote, QC, TC};
+use crate::messages::{table_digest, Block, Earlier, Evidence, SignedTimeout, Vote, QC, TC};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -86,9 +88,40 @@ impl Detector {
                 self.report(evidence, found);
             }
         }
+        // E4, this vote being the later one: a message of an earlier epoch at this round or above.
+        let earlier = self
+            .votes
+            .range(..(vote.epoch, 0))
+            .filter(|((_, round), _)| *round >= vote.round)
+            .find_map(|(_, m)| m.get(&vote.author))
+            .map(|v| Earlier::Vote(v.clone()))
+            .or_else(|| {
+                self.timeouts
+                    .range(..(vote.epoch, 0))
+                    .filter(|((_, round), _)| *round >= vote.round)
+                    .find_map(|(_, m)| m.get(&vote.author))
+                    .map(|t| Earlier::Timeout(t.clone()))
+            });
+        if let Some(earlier) = earlier {
+            self.report(Evidence::CrossEpoch(vote.clone(), earlier), found);
+        }
+        // E4, this vote being the earlier one.
+        if let Some(later) = self.later_vote(&vote.author, vote.epoch, vote.round) {
+            self.report(Evidence::CrossEpoch(later, Earlier::Vote(vote.clone())), found);
+        }
         if let Some(block) = self.blocks.get(&vote.hash).cloned() {
             self.check_vote_on_block(vote, &block, found);
         }
+    }
+
+    /// A vote of `author` in an epoch after `epoch` at `round` or below (E4).
+    fn later_vote(&self, author: &PublicKey, epoch: EpochNumber, round: Round) -> Option<Vote> {
+        let next = epoch.checked_add(1)?;
+        self.votes
+            .range((next, 0)..)
+            .filter(|((_, r), _)| *r <= round)
+            .find_map(|(_, m)| m.get(author))
+            .cloned()
     }
 
     /// E2 and E3 for a vote whose block we hold.
@@ -96,14 +129,15 @@ impl Detector {
         if self.invalid(vote, block) {
             self.report(Evidence::InvalidBlock(vote.clone(), block.header()), found);
         }
-        let later: Vec<SignedTimeout> = self
+        // E3: a timeout of the vote's epoch or a later one, at the vote's round or above.
+        let later = self
             .timeouts
-            .range((vote.epoch, vote.round)..=(vote.epoch, Round::MAX))
+            .range((vote.epoch, vote.round)..)
+            .filter(|((_, round), _)| *round >= vote.round)
             .filter_map(|(_, m)| m.get(&vote.author))
-            .filter(|t| t.high_qc_round < block.qc.round)
-            .cloned()
-            .collect();
-        if let Some(timeout) = later.into_iter().next() {
+            .find(|t| t.high_qc_round < block.qc.round)
+            .cloned();
+        if let Some(timeout) = later {
             self.report(Evidence::Regression(vote.clone(), block.header(), timeout), found);
         }
     }
@@ -148,10 +182,16 @@ impl Detector {
                 self.report(Evidence::NrContradiction(vote, timeout.clone()), &mut found);
             }
         }
-        // E3: an earlier-or-same-round vote of this signer for a block certifying a round above its hq.
+        // E4: a vote of a later epoch at this round or below.
+        if let Some(later) = self.later_vote(&timeout.author, timeout.epoch, timeout.round) {
+            self.report(Evidence::CrossEpoch(later, Earlier::Timeout(timeout.clone())), &mut found);
+        }
+        // E3: an earlier-or-same-round vote of this signer, in this epoch or an earlier one, for a block certifying
+        // a round above its hq.
         let earlier: Vec<Vote> = self
             .votes
-            .range((timeout.epoch, 0)..=key)
+            .range(..=(timeout.epoch, Round::MAX))
+            .filter(|((_, round), _)| *round <= timeout.round)
             .filter_map(|(_, m)| m.get(&timeout.author))
             .cloned()
             .collect();

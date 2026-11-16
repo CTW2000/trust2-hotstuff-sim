@@ -122,6 +122,8 @@ pub struct Faults {
     /// Ablation (§15.33): write the safety state without syncing it, as before -- it then survives a crash of the
     /// process but not a loss of power.
     pub no_sync: bool,
+    /// Ablation (§15.34): count certificates past the end of an epoch under the table of that epoch alone (H5 off).
+    pub no_h5: bool,
 }
 
 /// Experiment switch (DESIGN.md §15.27): with `Faults::frame`, frame only in the rounds these members lead (set once
@@ -163,6 +165,9 @@ pub struct Core {
     ready_round: Round,
     // R3: the timeout we signed for the current round, resent if the timer fires again in that round.
     last_timeout: Option<Timeout>,
+    /// R8/H3: the epoch of the last vote or timeout we signed. Kept with the safety state, so that a restart whose
+    /// tables are behind does not sign in an epoch before it (E4 would then hold against an honest node).
+    signed_epoch: EpochNumber,
     timer: Timer,
     aggregator: Aggregator,
     // G2: NR = 1 timeouts gathered into AT accusations, which go to the proposer for the ledger.
@@ -267,6 +272,7 @@ impl Core {
             prev_high_qc: QC::genesis(),
             ready_round: 0,
             last_timeout: None,
+            signed_epoch: 0,
             timer: Timer::new(timeout_delay),
             aggregator: Aggregator::new(),
             accuser: Accuser::new(),
@@ -310,17 +316,40 @@ impl Core {
         self.epochs.get(epoch).ok_or(ConsensusError::UnknownEpoch(epoch))
     }
 
-    /// Certificates are verified against the weight table of their own epoch.
+    /// H5 (DESIGN.md §15.34): the second table a certificate of `epoch` for `round` is counted under, if any: the
+    /// table of the next epoch, once the round is at or past the end of `epoch`. Without that table (a node that
+    /// entered the epoch on a commit proof before its ledger got there) such a certificate cannot be judged yet.
+    fn also(&self, epoch: EpochNumber, round: Round) -> ConsensusResult<Option<&Committee>> {
+        if self.faults.no_h5 || !self.epochs.past_end_of(epoch, round) {
+            return Ok(None);
+        }
+        self.table(epoch + 1).map(Some)
+    }
+
+    /// Certificates are verified against the weight table of their own epoch and, past its end, also against the
+    /// table of the next one (H5).
     fn verify_qc(&self, qc: &QC) -> ConsensusResult<()> {
         if *qc == QC::genesis() {
             return Ok(());
         }
-        qc.verify(self.table(qc.epoch)?)
+        qc.verify(self.table(qc.epoch)?)?;
+        if let Some(next) = self.also(qc.epoch, qc.round)? {
+            ensure!(qc.has_quorum_in(next), ConsensusError::QCRequiresQuorum);
+        }
+        Ok(())
     }
 
     fn verify_tc(&self, tc: &TC) -> ConsensusResult<()> {
         tc.verify(self.table(tc.epoch)?)?;
+        if let Some(next) = self.also(tc.epoch, tc.round)? {
+            ensure!(tc.has_quorum_in(next), ConsensusError::TCRequiresQuorum);
+        }
         self.verify_qc(&tc.high_qc)
+    }
+
+    /// The table chain: the digest of the weight table of the epoch after `epoch`, if we have that table.
+    fn next_table(&self, epoch: EpochNumber) -> Option<Digest> {
+        self.epochs.get(epoch + 1).map(table_digest)
     }
 
     /// G2: add a verified timeout to the accuser; a new accusation goes to the proposer.
@@ -575,8 +604,14 @@ impl Core {
     }
 
     async fn make_vote(&mut self, block: &Block) -> Option<Vote> {
-        // H3: we sign no message of an epoch other than the current one.
-        if block.epoch != self.epochs.epoch() {
+        // H3: we sign no message of an epoch other than the current one, nor of one before an epoch we have
+        // signed in (after a restart the tables can be behind what we signed, R8).
+        if block.epoch != self.epochs.epoch() || block.epoch < self.signed_epoch {
+            return None;
+        }
+        // The table chain: we vote only for a block that names our table of the next epoch too. A node that entered
+        // this epoch before its ledger got there does not have that table yet, and does not vote until it does.
+        if self.next_table(block.epoch).map_or(true, |digest| digest != block.next_table) {
             return None;
         }
         // Experiment switch (DESIGN.md §15.15): one half of a split-brain member votes only in its rounds.
@@ -593,6 +628,7 @@ impl Core {
 
         // Ensure we won't vote for contradicting blocks, even after a restart.
         self.increase_last_voted_round(block.round);
+        self.signed_epoch = block.epoch;
         self.remember().await;
         Some(Vote::new(block, self.name, self.signature_service.clone()).await)
     }
@@ -601,7 +637,7 @@ impl Core {
     /// vote or timeout, so at most two per round; the sync also carries the blocks stored before it (the store writes
     /// one log, in order). This survives a loss of power.
     async fn remember(&mut self) {
-        let state = (self.last_voted_round, &self.high_qc, &self.last_timeout);
+        let state = (self.last_voted_round, &self.high_qc, &self.last_timeout, self.signed_epoch);
         let bytes = bincode::serialize(&state).expect("Failed to serialize the safety state");
         if self.faults.no_sync {
             // Ablation: the write is only ahead of the signature (reading it back waits for it, the store handles
@@ -621,8 +657,9 @@ impl Core {
             Ok(Some(bytes)) => bytes,
             _ => return false,
         };
-        let (last_voted_round, high_qc, last_timeout): (Round, QC, Option<Timeout>) =
+        let (last_voted_round, high_qc, last_timeout, signed_epoch): (Round, QC, Option<Timeout>, EpochNumber) =
             bincode::deserialize(&bytes).expect("Failed to deserialize the safety state");
+        self.signed_epoch = signed_epoch;
         info!("Restored the safety state of round {}", last_voted_round);
         self.last_voted_round = last_voted_round;
         self.high_qc = high_qc;
@@ -775,6 +812,12 @@ impl Core {
         let epoch = self.epochs.epoch();
         // After a restart the table is behind until the chain is replayed: the timeout may be of a later epoch.
         let resent = matches!(&self.last_timeout, Some(t) if t.round == self.round && t.epoch >= epoch);
+        // H3 across a restart (R8): we have signed in a later epoch than the one our tables are in. Sign nothing of
+        // the older epoch; the chain or the others bring us back to ours.
+        if !resent && epoch < self.signed_epoch {
+            self.timer.reset();
+            return Ok(());
+        }
         let timeout = match &self.last_timeout {
             Some(timeout) if resent => timeout.clone(),
             _ => {
@@ -789,6 +832,7 @@ impl Core {
                 .await;
                 debug!("Created {:?}", timeout);
                 self.last_timeout = Some(timeout.clone());
+                self.signed_epoch = epoch;
                 self.remember().await;
                 timeout
             }
@@ -832,7 +876,8 @@ impl Core {
         self.propose_evidence(found).await;
 
         // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(qc) = self.aggregator.add_vote(vote.clone(), &committee)? {
+        let also = self.also(vote.epoch, vote.round)?.cloned();
+        if let Some(qc) = self.aggregator.add_vote_with(vote.clone(), &committee, also.as_ref())? {
             debug!("Assembled {:?}", qc);
 
             // Process the QC (this may commit, and move us to the next epoch, before we propose).
@@ -878,7 +923,8 @@ impl Core {
         }
 
         // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(tc) = self.aggregator.add_timeout(timeout.clone(), &committee)? {
+        let also = self.also(timeout.epoch, timeout.round)?.cloned();
+        if let Some(tc) = self.aggregator.add_timeout_with(timeout.clone(), &committee, also.as_ref())? {
             debug!("Assembled {:?}", tc);
 
             // Try to advance the round.
@@ -960,6 +1006,15 @@ impl Core {
             return;
         }
         let committee = self.committee().clone();
+        // The table chain: the block names the next table too. Without it (we entered this epoch before our ledger
+        // got there) no block of ours could be voted for.
+        let next_table = match self.next_table(committee.epoch) {
+            Some(digest) => digest,
+            None => {
+                debug!("No proposal for round {}: the table of the next epoch is not known yet", self.round);
+                return;
+            }
+        };
         // Experiment switch: extend an older QC without a TC, a block no honest node votes for (E2).
         let older = self.prev_high_qc.clone();
         let (qc, tc) = match self.faults.invalid_block && older != QC::genesis() && older.round + 1 < self.round {
@@ -979,6 +1034,7 @@ impl Core {
                 qc,
                 tc,
                 committee,
+                next_table,
                 done: self.epochs.done(),
                 otxs,
                 suffix,
@@ -1289,6 +1345,19 @@ impl Core {
         // certificates against the tables of their epochs.
         block.verify(committee)?;
         ensure!(block.table == table_digest(committee), ConsensusError::MalformedBlock(digest.clone()));
+        // The table chain: a block that names another next table than ours is of another branch. (When we do not
+        // have that table yet the block is processed but gets no vote, make_vote.)
+        ensure!(
+            self.next_table(block.epoch).map_or(true, |next| next == block.next_table),
+            ConsensusError::MalformedBlock(digest.clone())
+        );
+        // V3 (DESIGN.md §15.34): the QC is of the block's epoch or an earlier one, and the TC of an epoch from the
+        // QC's to the block's -- the first block of an epoch may carry a TC of the previous one, no block an older.
+        let tc_epoch = block.tc.as_ref().map_or(block.epoch, |tc| tc.epoch);
+        ensure!(
+            block.qc.epoch <= tc_epoch && tc_epoch <= block.epoch,
+            ConsensusError::MalformedBlock(digest.clone())
+        );
         self.verify_qc(&block.qc)?;
         if let Some(ref tc) = block.tc {
             if let Err(e) = self.verify_tc(tc) {
