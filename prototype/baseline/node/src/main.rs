@@ -1,5 +1,7 @@
 mod config;
 mod node;
+#[path = "../../../node/src/workload.rs"]
+mod workload;
 
 use crate::config::Export as _;
 use crate::config::{Committee, Secret};
@@ -46,6 +48,9 @@ enum Command {
         /// The path where to create the data store.
         #[clap(short, long, value_parser, value_name = "PATH")]
         store: String,
+        /// Execute the transactions of committed blocks on the workload's state.
+        #[clap(long)]
+        execute: bool,
     },
     /// Deploy a local testbed with the specified number of nodes.
     Deploy {
@@ -81,7 +86,8 @@ async fn main() {
             committee,
             parameters,
             store,
-        } => match Node::new(&committee, &keys, &store, parameters).await {
+            execute,
+        } => match Node::new(&committee, &keys, &store, parameters, execute).await {
             Ok(mut node) => {
                 tokio::spawn(async move {
                     node.analyze_block().await;
@@ -150,7 +156,7 @@ fn deploy_testbed(nodes: u16) -> Result<Vec<JoinHandle<()>>, Box<dyn std::error:
             let _ = fs::remove_dir_all(&store_path);
 
             Ok(tokio::spawn(async move {
-                match Node::new(committee_file, &key_file, &store_path, None).await {
+                match Node::new(committee_file, &key_file, &store_path, None, false).await {
                     Ok(mut node) => {
                         // Sink the commit channel.
                         while node.commit.recv().await.is_some() {}
