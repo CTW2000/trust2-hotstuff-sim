@@ -51,6 +51,11 @@ pub struct Block {
     /// epochs, so a QC under the table of `epoch` certifies the next one, and a third party can follow the tables
     /// from two it knows without replaying the ledger.
     pub next_table: Digest,
+    /// s_e, the round of the terminal block of the previous epoch on the block's chain (0 in the first epoch). The
+    /// end of the epoch, s_e + L, decides which certificates need a quorum of both tables (H5); with it in the
+    /// block, a judge that holds only the block's header can tell (DESIGN.md §15.35). Honest nodes vote only for a
+    /// block that states their own.
+    pub start: Round,
     pub payload: Vec<Digest>,
     pub signature: Signature,
 }
@@ -69,6 +74,7 @@ impl Block {
         epoch: EpochNumber,
         table: Digest,
         next_table: Digest,
+        start: Round,
         payload: Vec<Digest>,
         mut signature_service: SignatureService,
     ) -> Self {
@@ -84,6 +90,7 @@ impl Block {
             epoch,
             table,
             next_table,
+            start,
             payload,
             signature: Signature::default(),
         };
@@ -155,6 +162,7 @@ impl Hash for Block {
             self.epoch,
             &self.table,
             &self.next_table,
+            self.start,
             &self.author,
             self.round,
             &self.payload,
@@ -183,6 +191,7 @@ pub struct BlockHeader {
     pub epoch: EpochNumber,
     pub table: Digest,
     pub next_table: Digest,
+    pub start: Round,
     pub payload: Vec<Digest>,
     pub accusations: Vec<Digest>,
     pub otxs: Vec<Digest>,
@@ -201,6 +210,7 @@ impl Block {
             epoch: self.epoch,
             table: self.table.clone(),
             next_table: self.next_table.clone(),
+            start: self.start,
             payload: self.payload.clone(),
             accusations: self.accusations.iter().map(|a| a.digest()).collect(),
             otxs: self.otxs.iter().map(|x| x.id()).collect(),
@@ -216,6 +226,7 @@ impl Hash for BlockHeader {
             self.epoch,
             &self.table,
             &self.next_table,
+            self.start,
             &self.author,
             self.round,
             &self.payload,
@@ -245,6 +256,7 @@ fn block_digest(
     epoch: EpochNumber,
     table: &Digest,
     next_table: &Digest,
+    start: Round,
     author: &PublicKey,
     round: Round,
     payload: &[Digest],
@@ -266,6 +278,7 @@ fn block_digest(
     hasher.update(epoch.to_le_bytes());
     hasher.update(table);
     hasher.update(next_table);
+    hasher.update(start.to_le_bytes());
     hasher.update(author.0);
     hasher.update(round.to_le_bytes());
     for x in payload {
@@ -446,7 +459,8 @@ impl QC {
     /// H5: whether the signers also hold a quorum of `table`, the table of the next epoch (the members and their
     /// keys are the same; `verify` has checked the signatures and that no signer comes twice).
     pub fn has_quorum_in(&self, table: &Committee) -> bool {
-        let weight: Stake = self.votes.iter().map(|(name, _)| table.stake(name)).sum();
+        let signers: HashSet<&PublicKey> = self.votes.iter().map(|(name, _)| name).collect();
+        let weight: Stake = signers.into_iter().map(|name| table.stake(name)).sum();
         weight >= table.quorum_threshold()
     }
 }
@@ -585,7 +599,8 @@ impl TC {
 
     /// H5: whether the signers also hold a quorum of `table`, the table of the next epoch (see `QC::has_quorum_in`).
     pub fn has_quorum_in(&self, table: &Committee) -> bool {
-        let weight: Stake = self.votes.iter().map(|(name, ..)| table.stake(name)).sum();
+        let signers: HashSet<&PublicKey> = self.votes.iter().map(|(name, ..)| name).collect();
+        let weight: Stake = signers.into_iter().map(|name| table.stake(name)).sum();
         weight >= table.quorum_threshold()
     }
 
@@ -939,9 +954,12 @@ pub enum Evidence {
     /// E1: two votes of one signer for the same (epoch, round) and different blocks.
     DoubleVote(Vote, Vote),
     /// E2: a vote for a block that breaks the voting rule. Either its round is neither the one after its QC nor
-    /// justified by its TC (structural, no weight table needed), or its TC is not a valid TC under the weight
-    /// table the block itself names (`Block::table`, theory §2.3: the table of the block's own chain). The block
-    /// is given by its header, which hashes to the digest the vote signs and so binds both the TC and the table.
+    /// justified by its TC, or its TC is of an epoch other than the block's or the one before (structural, no
+    /// weight table needed), or its TC does not count under the weight tables the block itself names
+    /// (`Block::table`, `Block::next_table`; theory §2.3: the tables of the block's own chain): a TC of the block's
+    /// epoch must be a TC of its table and, past the end of the epoch (`Block::start`), hold a quorum of the next
+    /// table too; a TC of the epoch before must hold a quorum of the block's table (H5). The block is given by
+    /// its header, which hashes to the digest the vote signs and so binds the TC, the tables and the start.
     InvalidBlock(Vote, BlockHeader),
     /// E3: a vote at round v1 for a block certifying round j, and a timeout of the same signer at a round
     /// v2 >= v1 reporting a high QC below j, signed in the epoch of the vote or a later one (a node keeps its high
@@ -953,6 +971,22 @@ pub enum Evidence {
     /// round or a higher one. A node signs everything of an epoch before anything of the next (H3) and never
     /// votes at or below a round it has signed, so it cannot sign both.
     CrossEpoch(Vote, Earlier),
+}
+
+/// What an E2 judge holds of the weight tables a block names (`Block::table`, `Block::next_table`), and the epoch
+/// length L (0: a single epoch).
+#[derive(Clone, Copy, Default)]
+pub struct Judge<'a> {
+    pub table: Option<&'a Committee>,
+    pub next: Option<&'a Committee>,
+    pub length: Round,
+}
+
+impl<'a> Judge<'a> {
+    /// A judge with the block's own table only.
+    pub fn table(table: Option<&'a Committee>) -> Self {
+        Judge { table, next: None, length: 0 }
+    }
 }
 
 /// The message of an earlier epoch in E4 evidence.
@@ -1044,40 +1078,62 @@ impl Evidence {
         }
     }
 
-    /// `holds`, with the E2 check of the block's TC against `table`: the weight table whose digest the block
-    /// names, when the judge has it. A judge without that table (another branch's) cannot tell, and does not
+    /// `holds`, with the E2 check of the block's TC against the weight tables whose digests the block names,
+    /// when the judge has them. A judge without the block's table (another branch's) cannot tell, and does not
     /// count the TC check: it never judges a block by a table the block did not name.
-    pub fn holds_under(&self, table: Option<&Committee>) -> bool {
+    pub fn holds_under(&self, judge: Judge) -> bool {
         if self.holds() {
             return true;
         }
-        match (self, table) {
-            (Evidence::InvalidBlock(vote, block), Some(table)) => {
-                // Cheap checks first: the detector asks this for every vote it sees, and only a block carrying a TC
-                // of its own epoch can be judged by its table. A TC of the previous epoch (the first block of an
-                // epoch) is judged by that epoch's table, which the block does not name: no verdict then. Hashing
-                // the block and the table before this check cost about 8% of the CPU-bound round rate at n = 31
-                // (DESIGN.md §15.30); the conditions have no side effects, so the order does not change the verdict.
-                block.tc.as_ref().map_or(false, |tc| tc.epoch == block.epoch)
-                    && vote.round == block.round
-                    && vote.epoch == block.epoch
-                    && !TC_OUTSIDE_BLOCK.load(Ordering::Relaxed)
-                    && vote.hash == block.digest()
-                    && table_digest(table) == block.table
-                    && block.tc.as_ref().map_or(false, |tc| tc.verify(table).is_err())
-            }
-            _ => false,
+        let (vote, block) = match self {
+            Evidence::InvalidBlock(vote, block) => (vote, block),
+            _ => return false,
+        };
+        // Cheap checks first: the detector asks this for every vote it sees, and only a block carrying a TC can be
+        // judged by its tables. Hashing the block and the table before these checks cost about 8% of the CPU-bound
+        // round rate at n = 31 (DESIGN.md §15.30); the conditions have no side effects, so the order does not change
+        // the verdict.
+        let (tc, table) = match (&block.tc, judge.table) {
+            (Some(tc), Some(table)) => (tc, table),
+            _ => return false,
+        };
+        if vote.round != block.round
+            || vote.epoch != block.epoch
+            || TC_OUTSIDE_BLOCK.load(Ordering::Relaxed)
+            || vote.hash != block.digest()
+            || table_digest(table) != block.table
+        {
+            return false;
+        }
+        if tc.epoch == block.epoch {
+            // A TC of the block's epoch: a TC of the block's table, and past the end of the epoch one with a quorum
+            // of the next table the block names as well (H5; no verdict on that without the next table).
+            let past_end = judge.length > 0 && tc.round >= block.start.saturating_add(judge.length);
+            tc.verify(table).is_err()
+                || (past_end
+                    && judge
+                        .next
+                        .map_or(false, |next| table_digest(next) == block.next_table && !tc.has_quorum_in(next)))
+        } else {
+            // A TC of the epoch before (`holds` has ruled out any other): it is past the end of that epoch, so it
+            // counts only with a quorum of the block's own table (H5).
+            !tc.has_quorum_in(table)
         }
     }
 
-    /// `verify` with the weight tables the judge holds, looked up by digest (E2).
-    pub fn verify_with<'a, F>(&self, tables: F) -> ConsensusResult<()>
+    /// `verify` with the weight tables the judge holds, looked up by digest (E2), and the epoch length.
+    pub fn verify_with<'a, F>(&self, tables: F, length: Round) -> ConsensusResult<()>
     where
         F: Fn(&Digest) -> Option<&'a Committee>,
     {
         let vote = self.vote();
-        let table = self.table().and_then(|digest| tables(digest));
-        ensure!(self.holds_under(table), ConsensusError::MalformedEvidence(vote.author));
+        let judge = match self {
+            Evidence::InvalidBlock(_, block) => {
+                Judge { table: tables(&block.table), next: tables(&block.next_table), length }
+            }
+            _ => Judge::default(),
+        };
+        ensure!(self.holds_under(judge), ConsensusError::MalformedEvidence(vote.author));
         self.check_signatures()
     }
 
@@ -1110,7 +1166,8 @@ impl Evidence {
                 vote.round == block.round
                     && vote.epoch == block.epoch
                     && (block.qc_round >= block.round
-                        || !extends_validly(block.round, block.qc_round, block.tc.as_ref()))
+                        || !extends_validly(block.round, block.qc_round, block.tc.as_ref())
+                        || block.tc.as_ref().map_or(false, |tc| tc.epoch > block.epoch || tc.epoch + 1 < block.epoch))
                     && vote.hash == block.digest()
             }
             Evidence::Regression(vote, block, timeout) => {

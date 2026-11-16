@@ -644,6 +644,16 @@ impl Epochs {
             }
     }
 
+    /// s_e of a kept epoch (`Block::start`): the round of the terminal block before it, 0 for the first epoch.
+    pub fn start_of(&self, epoch: EpochNumber) -> Option<Round> {
+        self.epoch_start(epoch)
+    }
+
+    /// L, the rounds per epoch (0: a single epoch).
+    pub fn length(&self) -> Round {
+        self.config.length
+    }
+
     /// Test support: replace the weight table of `table.epoch`.
     #[cfg(test)]
     pub fn set_table(&mut self, table: Committee) {

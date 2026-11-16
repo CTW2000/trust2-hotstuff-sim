@@ -636,6 +636,32 @@ def r2():
             run("r2_handover", dict(scenario=name, rep=rep, **base, **case), 120, extra=local_stats)
 
 
+def sync():
+    """DESIGN.md §15.36: what the synced safety state costs (§15.33). Trust 2.0 with the sync and without it
+    (--no-sync), n = 4, 10, 31, without delays and on the base network, the two interleaved within each repetition.
+    All nodes share one disk here, so this is an upper bound on the cost per node."""
+    for rep in (1, 2, 3):
+        for nodes in (4, 10, 31):
+            for net in ("none", "base"):
+                for no_sync in (False, True):
+                    run("sync", dict(build="trust2", nodes=nodes, net=net, epoch_length=25, no_sync=no_sync, rep=rep), 30)
+
+
+def h5live():
+    """DESIGN.md §15.36: does the dual-table quorum (H5, §15.34) slow the handover down? Trust 2.0 with H5 and
+    without it (--no-h5), n = 31, base network, epochs of 25 rounds, interleaved within each repetition:
+    - none: no faults (the tables do not change);
+    - silent: 3 Byzantine silent leaders (their weight is cut, so successive tables differ);
+    - framers+late: 6 colluders withhold votes and claim NR = 1 on top of 10% late messages (honest weight is cut).
+    The logs are kept: stalls and how many of them are near a handover come from stallstat."""
+    scenarios = (("none", dict(), 60), ("silent", dict(silent=3), 90), ("framers+late", dict(frame=6, late_p=0.1), 120))
+    for rep in (1, 2, 3):
+        for name, faults, duration in scenarios:
+            for no_h5 in (False, True):
+                run("h5live", dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                                   no_h5=no_h5, **faults), duration, keep_logs=f"{name}_{'off' if no_h5 else 'on'}_{rep}")
+
+
 def report():
     for path in sorted(glob(f"{OUT}/*.csv")):
         with open(path) as fh:
@@ -697,5 +723,5 @@ def compare_x2(rows):
 
 
 if __name__ == "__main__":
-    {"x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "r7x2": r7x2, "r7spot": r7spot, "r7len": r7len, "r7xt": r7xt, "f25": f25,
+    {"sync": sync, "h5live": h5live, "x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "r7x2": r7x2, "r7spot": r7spot, "r7len": r7len, "r7xt": r7xt, "f25": f25,
      "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "r34x": r34x, "thr": thr, "thr2": thr2, "tgt": tgt, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()

@@ -12,6 +12,7 @@ mod inclusion;
 mod leader;
 mod mempool;
 mod messages;
+pub mod package;
 mod proposer;
 mod punish;
 mod reputation;

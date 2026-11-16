@@ -3,7 +3,7 @@ use crate::common::{committee, keys, test_epoch_config, EPOCH};
 use crate::aggregator::Aggregator;
 use crate::epoch::Epochs;
 use crate::messages::table_digest;
-use crate::messages::Timeout;
+use crate::messages::{Judge, Timeout};
 use crypto::SecretKey;
 
 fn qc_of(round: Round) -> QC {
@@ -201,32 +201,82 @@ fn e2_judges_the_tc_by_the_table_the_block_names() {
     let valid = block_naming(tc.clone(), &a);
     let e2 = |block: &Block| Evidence::InvalidBlock(vote(block, 2), block.header());
     for table in [None, Some(&a), Some(&b)] {
-        assert!(!e2(&valid).holds_under(table));
+        assert!(!e2(&valid).holds_under(Judge::table(table)));
     }
 
     let invalid = block_naming(tc, &b);
-    assert!(e2(&invalid).holds_under(Some(&b)));
-    assert!(!e2(&invalid).holds_under(None));
-    assert!(!e2(&invalid).holds_under(Some(&a)));
-    assert!(e2(&invalid).verify_with(|d| [&a, &b].iter().copied().find(|t| table_digest(t) == *d)).is_ok());
-    assert!(e2(&invalid).verify_with(|d| [&a].iter().copied().find(|t| table_digest(t) == *d)).is_err());
+    assert!(e2(&invalid).holds_under(Judge::table(Some(&b))));
+    assert!(!e2(&invalid).holds_under(Judge::table(None)));
+    assert!(!e2(&invalid).holds_under(Judge::table(Some(&a))));
+    assert!(e2(&invalid).verify_with(|d| [&a, &b].iter().copied().find(|t| table_digest(t) == *d), 0).is_ok());
+    assert!(e2(&invalid).verify_with(|d| [&a].iter().copied().find(|t| table_digest(t) == *d), 0).is_err());
 }
 
 #[test]
-fn e2_gives_no_verdict_on_a_tc_of_the_previous_epoch() {
-    // The first block of an epoch may carry a TC of the previous one, judged by that epoch's table, which the block
-    // does not name: no verdict from the table check, whatever the table says.
-    let b = table_with([7, 1, 1, 1]);
+fn e2_judges_a_tc_of_the_previous_epoch_by_the_blocks_own_table() {
+    // H5 (DESIGN.md §15.34, §15.35): the first block of an epoch may carry a TC of the previous one. That TC is past
+    // the end of its epoch, so it counts only with a quorum of the block's own table as well. Members 1-3 hold 3/10
+    // of the table this block names: a vote for the block is E2 to a judge holding that table, and no verdict
+    // without it. With equal weights in the block's table the same TC holds 3/4 of it and the vote is no evidence.
+    let tc = tc_of_three(&table_with([1, 1, 1, 1]));
+    let (name, secret) = key(0);
+    let (voter, voter_secret) = key(2);
+    let e2_naming = |table: &Committee| {
+        let mut block = Block::new_from_key_with_tc(qc_of(2), Some(tc.clone()), name, 5, Vec::new(), &secret);
+        block.epoch = EPOCH + 1;
+        block.table = table_digest(table);
+        block.signature = crypto::Signature::new(&block.digest(), &secret);
+        let vote = Vote { epoch: EPOCH + 1, ..Vote::new_from_key(block.digest(), 5, voter, &voter_secret) };
+        Evidence::InvalidBlock(vote, block.header())
+    };
+    let heavy = Committee { epoch: EPOCH + 1, ..table_with([7, 1, 1, 1]) };
+    let equal = Committee { epoch: EPOCH + 1, ..table_with([1, 1, 1, 1]) };
+    assert!(e2_naming(&heavy).holds_under(Judge::table(Some(&heavy))));
+    assert!(!e2_naming(&heavy).holds_under(Judge::table(None)));
+    assert!(!e2_naming(&heavy).holds_under(Judge::table(Some(&equal))), "not the table the block names");
+    assert!(!e2_naming(&equal).holds_under(Judge::table(Some(&equal))));
+}
+
+#[test]
+fn e2_judges_a_tc_past_the_end_of_the_epoch_by_the_next_table_too() {
+    // H5: block 5 of the first epoch (start 0) carries a TC of round 4 by members 1-3, a TC of its table. It names a
+    // next table in which they hold 3/10. With epochs of 4 rounds the TC is past the end, so it needs a quorum of the
+    // next table: a vote for the block is E2 to a judge that holds both tables. With epochs of 10 rounds it is not
+    // past the end, and a judge without the next table gives no verdict.
+    let table = table_with([1, 1, 1, 1]);
+    let next = Committee { epoch: EPOCH + 1, ..table_with([7, 1, 1, 1]) };
+    let (name, secret) = key(0);
+    let mut block = Block::new_from_key_with_tc(qc_of(2), Some(tc_of_three(&table)), name, 5, Vec::new(), &secret);
+    block.table = table_digest(&table);
+    block.next_table = table_digest(&next);
+    block.signature = crypto::Signature::new(&block.digest(), &secret);
+    let e2 = Evidence::InvalidBlock(vote(&block, 2), block.header());
+    fn judge<'a>(table: &'a Committee, next: Option<&'a Committee>, length: Round) -> Judge<'a> {
+        Judge { table: Some(table), next, length }
+    }
+    assert!(e2.holds_under(judge(&table, Some(&next), 4)));
+    assert!(!e2.holds_under(judge(&table, Some(&next), 10)));
+    assert!(!e2.holds_under(judge(&table, None, 4)));
+    assert!(!e2.holds_under(judge(&table, Some(&table), 4)), "not the next table the block names");
+    let tables = [&table, &next];
+    assert!(e2.verify_with(|d| tables.iter().copied().find(|t| table_digest(t) == *d), 4).is_ok());
+    assert!(e2.verify_with(|d| tables.iter().copied().find(|t| table_digest(t) == *d), 10).is_err());
+}
+
+#[test]
+fn e2_a_tc_of_an_epoch_too_old_for_the_block() {
+    // V3: a block carries a TC of its own epoch or of the one before. A vote for a block of the third epoch with a TC
+    // of the first is E2 without any table.
     let tc = tc_of_three(&table_with([1, 1, 1, 1]));
     let (name, secret) = key(0);
     let mut block = Block::new_from_key_with_tc(qc_of(2), Some(tc), name, 5, Vec::new(), &secret);
-    block.epoch = EPOCH + 1;
-    block.table = table_digest(&Committee { epoch: EPOCH + 1, ..b.clone() });
+    block.epoch = EPOCH + 2;
     block.signature = crypto::Signature::new(&block.digest(), &secret);
     let (voter, voter_secret) = key(2);
-    let vote = Vote { epoch: EPOCH + 1, ..Vote::new_from_key(block.digest(), 5, voter, &voter_secret) };
-    let next = Committee { epoch: EPOCH + 1, ..b };
-    assert!(!Evidence::InvalidBlock(vote, block.header()).holds_under(Some(&next)));
+    let vote = Vote { epoch: EPOCH + 2, ..Vote::new_from_key(block.digest(), 5, voter, &voter_secret) };
+    let vote = Vote { signature: crypto::Signature::new(&vote.digest(), &voter_secret), ..vote };
+    let e2 = Evidence::InvalidBlock(vote, block.header());
+    assert!(e2.holds() && e2.verify().is_ok());
 }
 
 #[test]

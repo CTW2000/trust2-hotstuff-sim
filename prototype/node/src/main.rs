@@ -89,6 +89,36 @@ enum Command {
         #[clap(long, value_parser, value_name = "PATH")]
         store_b: String,
     },
+    /// Build the evidence package of a fork from the stores of two stopped nodes (DESIGN.md §15.35).
+    Package {
+        /// The file containing committee information.
+        #[clap(short, long, value_parser, value_name = "FILE")]
+        committee: String,
+        /// Optional file containing the node parameters.
+        #[clap(short, long, value_parser, value_name = "FILE")]
+        parameters: Option<String>,
+        /// The store of a node on one side.
+        #[clap(long, value_parser, value_name = "PATH")]
+        store_a: String,
+        /// The store of a node on the other side.
+        #[clap(long, value_parser, value_name = "PATH")]
+        store_b: String,
+        /// The file to write the package to.
+        #[clap(short, long, value_parser, value_name = "FILE")]
+        out: String,
+    },
+    /// Verify an evidence package from the configuration alone: no store, no ledger (DESIGN.md §15.35).
+    Verify {
+        /// The file containing committee information.
+        #[clap(short, long, value_parser, value_name = "FILE")]
+        committee: String,
+        /// Optional file containing the node parameters.
+        #[clap(short, long, value_parser, value_name = "FILE")]
+        parameters: Option<String>,
+        /// The package file.
+        #[clap(long, value_parser, value_name = "FILE")]
+        package: String,
+    },
     /// Deploy a local testbed with the specified number of nodes.
     Deploy {
         #[clap(short, long, value_parser = clap::value_parser!(u16).range(4..))]
@@ -154,6 +184,30 @@ async fn main() {
             match forensics(&committee, parameters, &store_a, &store_b).await {
                 Ok(report) => println!("{}", report),
                 Err(e) => error!("{}", e),
+            }
+        }
+        Command::Package { committee, parameters, store_a, store_b, out } => {
+            let result = match configuration(&committee, parameters) {
+                Ok((committee, parameters)) => {
+                    consensus::package::write(&committee.consensus, &parameters.consensus, &store_a, &store_b, &out).await
+                }
+                Err(e) => Err(e),
+            };
+            match result {
+                Ok(report) => println!("{}", report),
+                Err(e) => error!("{}", e),
+            }
+        }
+        Command::Verify { committee, parameters, package } => {
+            let result = configuration(&committee, parameters).and_then(|(committee, parameters)| {
+                consensus::package::check(&committee.consensus, &parameters.consensus, &package)
+            });
+            match result {
+                Ok(verdict) => println!("{}", verdict),
+                Err(e) => {
+                    error!("{}", e);
+                    std::process::exit(1);
+                }
             }
         }
         Command::Deploy { nodes } => match deploy_testbed(nodes) {
@@ -227,12 +281,18 @@ fn deploy_testbed(nodes: u16) -> Result<Vec<JoinHandle<()>>, Box<dyn std::error:
         .collect::<Result<_, Box<dyn std::error::Error>>>()
 }
 
-/// DESIGN.md §15.15: the committee and parameters files are those of the run.
-async fn forensics(committee: &str, parameters: Option<String>, a: &str, b: &str) -> Result<String, String> {
+/// The committee and parameters files of the run.
+fn configuration(committee: &str, parameters: Option<String>) -> Result<(Committee, Parameters), String> {
     let committee = Committee::read(committee).map_err(|e| e.to_string())?;
     let parameters = match parameters {
         Some(filename) => Parameters::read(&filename).map_err(|e| e.to_string())?,
         None => Parameters::default(),
     };
+    Ok((committee, parameters))
+}
+
+/// DESIGN.md §15.15: the committee and parameters files are those of the run.
+async fn forensics(committee: &str, parameters: Option<String>, a: &str, b: &str) -> Result<String, String> {
+    let (committee, parameters) = configuration(committee, parameters)?;
     consensus::forensics::report(&committee.consensus, &parameters.consensus, a, b).await
 }

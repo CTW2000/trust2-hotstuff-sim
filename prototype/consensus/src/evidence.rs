@@ -14,7 +14,7 @@
 
 use crate::config::{Committee, EpochNumber};
 use crate::consensus::Round;
-use crate::messages::{table_digest, Block, Earlier, Evidence, SignedTimeout, Vote, QC, TC};
+use crate::messages::{table_digest, Block, Earlier, Evidence, Judge, SignedTimeout, Vote, QC, TC};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -34,8 +34,10 @@ pub struct Detector {
     certificates: HashSet<(EpochNumber, Round, Digest)>,
     /// (culprit, safety class, epoch) already reported.
     reported: HashSet<(PublicKey, bool, EpochNumber)>,
-    /// The weight tables we hold, by digest: E2 judges a block's TC by the table the block names, if we hold it.
+    /// The weight tables we hold, by digest: E2 judges a block's TC by the tables the block names, if we hold them.
     tables: HashMap<Digest, Committee>,
+    /// L, the rounds per epoch (E2: which TCs are past the end of their epoch).
+    length: Round,
 }
 
 impl Detector {
@@ -47,7 +49,13 @@ impl Detector {
             certificates: HashSet::new(),
             reported: HashSet::new(),
             tables: HashMap::new(),
+            length: 0,
         }
+    }
+
+    /// The epoch length L (0: a single epoch).
+    pub fn set_length(&mut self, length: Round) {
+        self.length = length;
     }
 
     /// The weight tables we hold now (E2).
@@ -70,7 +78,9 @@ impl Detector {
         if block.tc.is_none() && block.qc.round.checked_add(1) == Some(block.round) {
             return false;
         }
-        Evidence::InvalidBlock(vote.clone(), block.header()).holds_under(self.tables.get(&block.table))
+        let judge =
+            Judge { table: self.tables.get(&block.table), next: self.tables.get(&block.next_table), length: self.length };
+        Evidence::InvalidBlock(vote.clone(), block.header()).holds_under(judge)
     }
 
     /// Contradictions of a vote with what we hold.

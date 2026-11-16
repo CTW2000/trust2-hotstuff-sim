@@ -144,6 +144,7 @@ impl Block {
             epoch: EPOCH,
             table: table(),
             next_table: table_at(EPOCH + 1),
+            start: 0,
             payload,
             signature: Signature::default(),
         };

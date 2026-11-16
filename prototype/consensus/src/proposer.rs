@@ -22,6 +22,8 @@ pub enum ProposerMessage {
         committee: Committee,
         /// The digest of the weight table of the next epoch (the table chain, `Block::next_table`).
         next_table: Digest,
+        /// The round of the terminal block of the previous epoch (`Block::start`).
+        start: Round,
         done: Round,
         otxs: Vec<Otx>,
         /// H4: the block comes after the terminal block of its epoch and only certifies it: propose it empty
@@ -50,6 +52,7 @@ pub struct Proposer {
     name: PublicKey,
     committee: Committee,
     next_table: Digest,
+    start: Round,
     signature_service: SignatureService,
     rx_mempool: Receiver<Digest>,
     rx_message: Receiver<ProposerMessage>,
@@ -76,6 +79,7 @@ impl Proposer {
                 name,
                 committee,
                 next_table: Digest::default(),
+                start: 0,
                 signature_service,
                 rx_mempool,
                 rx_message,
@@ -132,6 +136,7 @@ impl Proposer {
             self.committee.epoch,
             table_digest(&self.committee),
             self.next_table.clone(),
+            self.start,
             payload,
             self.signature_service.clone(),
         )
@@ -200,9 +205,10 @@ impl Proposer {
                     //}
                 },
                 Some(message) = self.rx_message.recv() => match message {
-                    ProposerMessage::Make { round, qc, tc, committee, next_table, done, otxs, suffix, withhold } => {
+                    ProposerMessage::Make { round, qc, tc, committee, next_table, start, done, otxs, suffix, withhold } => {
                         self.committee = committee;
                         self.next_table = next_table;
+                        self.start = start;
                         self.accusations.retain(|(_, r), _| *r > done);
                         self.omissions.retain(|(_, r, _), _| *r > done);
                         let epoch = self.committee.epoch;

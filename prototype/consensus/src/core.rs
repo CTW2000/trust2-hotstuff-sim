@@ -254,6 +254,7 @@ impl Core {
         let epochs = Epochs::new(&committee, epoch_config);
         let mut detector = Detector::new();
         detector.set_tables(epochs.tables());
+        detector.set_length(epochs.length());
         Self {
             name,
             epochs,
@@ -611,7 +612,9 @@ impl Core {
         }
         // The table chain: we vote only for a block that names our table of the next epoch too. A node that entered
         // this epoch before its ledger got there does not have that table yet, and does not vote until it does.
-        if self.next_table(block.epoch).map_or(true, |digest| digest != block.next_table) {
+        if self.next_table(block.epoch).map_or(true, |digest| digest != block.next_table)
+            || self.epochs.start_of(block.epoch) != Some(block.start)
+        {
             return None;
         }
         // Experiment switch (DESIGN.md §15.15): one half of a split-brain member votes only in its rounds.
@@ -1033,6 +1036,7 @@ impl Core {
                 round: self.round,
                 qc,
                 tc,
+                start: self.epochs.start_of(committee.epoch).unwrap_or(0),
                 committee,
                 next_table,
                 done: self.epochs.done(),
@@ -1351,6 +1355,11 @@ impl Core {
             self.next_table(block.epoch).map_or(true, |next| next == block.next_table),
             ConsensusError::MalformedBlock(digest.clone())
         );
+        // The start of its epoch on our chain (which certificates are past the end of the epoch, H5).
+        ensure!(
+            self.epochs.start_of(block.epoch).map_or(true, |start| start == block.start),
+            ConsensusError::MalformedBlock(digest.clone())
+        );
         // V3 (DESIGN.md §15.34): the QC is of the block's epoch or an earlier one, and the TC of an epoch from the
         // QC's to the block's -- the first block of an epoch may carry a TC of the previous one, no block an older.
         let tc_epoch = block.tc.as_ref().map_or(block.epoch, |tc| tc.epoch);
@@ -1375,7 +1384,7 @@ impl Core {
         }
         for evidence in &block.evidence {
             let epochs = &self.epochs;
-            evidence.verify_with(|digest| epochs.table_by_digest(digest))?;
+            evidence.verify_with(|digest| epochs.table_by_digest(digest), epochs.length())?;
         }
         let mut found = self.detector.block(block);
         if let Some(ref tc) = block.tc {

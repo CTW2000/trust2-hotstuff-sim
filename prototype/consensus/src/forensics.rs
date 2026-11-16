@@ -24,7 +24,9 @@ use crate::config::{Committee, EpochNumber, Parameters, Stake};
 use crate::epoch::EpochConfig;
 use crate::epoch::Epochs;
 use crate::consensus::Round;
-use crate::messages::{extends_validly, table_digest, Block, Earlier, Evidence, SignedTimeout, Timeout, Vote, QC, TC};
+use crate::messages::{
+    extends_validly, table_digest, Block, Earlier, Evidence, Judge, SignedTimeout, Timeout, Vote, QC, TC,
+};
 use crypto::{Digest, Hash as _, PublicKey};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use store::Store;
@@ -74,7 +76,7 @@ pub struct Finding {
 
 impl Records {
     /// The QC certifying chain[i]: the next block's QC, or the highest QC for the last block.
-    fn qc_of(&self, i: usize) -> Option<&QC> {
+    pub fn qc_of(&self, i: usize) -> Option<&QC> {
         let digest = self.chain[i].digest();
         let qc = self.chain.get(i + 1).map_or(&self.high_qc, |child| &child.qc);
         (qc.hash == digest).then_some(qc)
@@ -94,7 +96,7 @@ impl Records {
             .collect()
     }
 
-    fn digests(&self) -> HashSet<Digest> {
+    pub fn digests(&self) -> HashSet<Digest> {
         self.chain.iter().map(|b| b.digest()).collect()
     }
 }
@@ -111,11 +113,21 @@ pub fn first_conflict(a: &Records, b: &Records) -> Option<(CommitProof, CommitPr
 /// Theorem 5: the first epoch in which each side committed a block off the other's chain, with those first direct
 /// commits (the one of the smaller view first). Within it both sides judge by the same table.
 pub fn conflict_by_epoch(a: &Records, b: &Records) -> Option<(EpochNumber, CommitProof, CommitProof)> {
+    conflict_in_epoch(a, b, false)
+}
+
+/// As `conflict_by_epoch`, with commit proofs whose two blocks are of the same epoch: the witnesses of the theorem
+/// (fact F3 of its proof), every certificate of which is counted under the table of that epoch.
+pub fn witnesses(a: &Records, b: &Records) -> Option<(EpochNumber, CommitProof, CommitProof)> {
+    conflict_in_epoch(a, b, true)
+}
+
+fn conflict_in_epoch(a: &Records, b: &Records, one_epoch: bool) -> Option<(EpochNumber, CommitProof, CommitProof)> {
     let (da, db) = (a.digests(), b.digests());
     let off = |records: &Records, other: &HashSet<Digest>| {
         let mut first = BTreeMap::new();
         for proof in records.commit_proofs() {
-            if !other.contains(&proof.x.digest()) {
+            if !other.contains(&proof.x.digest()) && (!one_epoch || proof.x.epoch == proof.x_plus.epoch) {
                 first.entry(proof.x.epoch).or_insert(proof);
             }
         }
@@ -220,7 +232,7 @@ pub fn e2_sweep(judge: &Records, tables: &BTreeMap<EpochNumber, Committee>, othe
             Some(table) => {
                 let (name, signature) = &qc.votes[0];
                 let first = vote(&qc.hash, qc.round, qc.epoch, *name, signature);
-                if Evidence::InvalidBlock(first, block.header()).holds_under(Some(table)) {
+                if Evidence::InvalidBlock(first, block.header()).holds_under(Judge::table(Some(table))) {
                     sweep.named_blocks += 1;
                     sweep.named_voters.extend(signers);
                 }
@@ -453,7 +465,8 @@ pub async fn read_records(path: &str) -> Result<Records, String> {
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("{}: no safety state", path))?;
-    let (_, high_qc, _): (Round, QC, Option<Timeout>) = bincode::deserialize(&bytes).map_err(|e| e.to_string())?;
+    let (_, high_qc, _, _): (Round, QC, Option<Timeout>, EpochNumber) =
+        bincode::deserialize(&bytes).map_err(|e| e.to_string())?;
     let mut chain = Vec::new();
     let mut digest = high_qc.hash.clone();
     let genesis = QC::genesis().hash;

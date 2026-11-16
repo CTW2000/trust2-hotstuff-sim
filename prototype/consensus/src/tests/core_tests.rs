@@ -1309,6 +1309,7 @@ fn block_in(qc: QC, tc: Option<TC>, round: Round, epoch: EpochNumber) -> Block {
     block.epoch = epoch;
     block.table = table_at(epoch);
     block.next_table = table_at(epoch + 1);
+    block.start = if epoch == EPOCH { 0 } else { 10 }; // the handover fixtures: B10 is the terminal block
     block.signature = Signature::new(&block.digest(), &secret);
     block
 }
@@ -1474,6 +1475,7 @@ async fn a_block_on_a_tc_of_the_old_epoch(tag: &str, faults: Faults) -> (Round, 
         block.epoch = epoch;
         block.table = if epoch == EPOCH { table_at(EPOCH) } else { table_digest(&next) };
         block.next_table = if epoch == EPOCH { table_digest(&next) } else { table_at(EPOCH + 2) };
+        block.start = if epoch == EPOCH { 0 } else { 10 };
         block.signature = Signature::new(&block.digest(), &secret);
         block
     };

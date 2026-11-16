@@ -52,6 +52,8 @@ def node_parameters(args):
         consensus["no_sync"] = True
     if getattr(args, "lossy_store", False):                  # a killed node loses what it had not synced (§15.33)
         consensus["lossy_store"] = True
+    if getattr(args, "no_h5", False):                        # ablation: certificates under one table only (§15.34)
+        consensus["no_h5"] = True
     if getattr(args, "target_names", None):                  # targeted framing: whom the colluders frame (§15.27)
         consensus["frame_targets"] = args.target_names
     return {
@@ -339,6 +341,9 @@ def main():
                     help="failure threshold of the Aptos-style leader rule in percent (0: aptos-core's 10)")
     ap.add_argument("--no-sync", action="store_true",
                     help="ablation: write the safety state without syncing it to disk (DESIGN.md §15.33)")
+    ap.add_argument("--no-h5", action="store_true",
+                    help="ablation (DESIGN.md §15.34): certificates past the end of an epoch need no quorum of the "
+                         "next table")
     ap.add_argument("--lossy-store", action="store_true",
                     help="a killed node loses what it had not synced, as after a loss of power (DESIGN.md §15.33)")
     ap.add_argument("--g2-no-reputation", action="store_true",
