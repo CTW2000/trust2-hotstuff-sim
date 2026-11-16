@@ -168,6 +168,7 @@ impl Hash for Block {
             &self.payload,
             &self.qc.hash,
             self.qc.round,
+            self.qc.epoch,
             self.tc.as_ref(),
             self.accusations.iter().map(|a| a.digest()),
             self.otxs.iter().map(|x| x.id()),
@@ -185,6 +186,9 @@ impl Hash for Block {
 pub struct BlockHeader {
     pub qc_hash: Digest,
     pub qc_round: Round,
+    /// The epoch of the block's QC, that is of its parent: with it the header alone tells whether the TC is of an
+    /// epoch from the parent's to the block's (V3).
+    pub qc_epoch: EpochNumber,
     pub tc: Option<TC>,
     pub author: PublicKey,
     pub round: Round,
@@ -204,6 +208,7 @@ impl Block {
         BlockHeader {
             qc_hash: self.qc.hash.clone(),
             qc_round: self.qc.round,
+            qc_epoch: self.qc.epoch,
             tc: self.tc.clone(),
             author: self.author,
             round: self.round,
@@ -232,6 +237,7 @@ impl Hash for BlockHeader {
             &self.payload,
             &self.qc_hash,
             self.qc_round,
+            self.qc_epoch,
             self.tc.as_ref(),
             self.accusations.iter().cloned(),
             self.otxs.iter().cloned(),
@@ -262,6 +268,7 @@ fn block_digest(
     payload: &[Digest],
     qc_hash: &Digest,
     qc_round: Round,
+    qc_epoch: EpochNumber,
     tc: Option<&TC>,
     accusations: impl ExactSizeIterator<Item = Digest>,
     otxs: impl ExactSizeIterator<Item = Digest>,
@@ -286,6 +293,7 @@ fn block_digest(
     }
     hasher.update(qc_hash);
     hasher.update(qc_round.to_le_bytes());
+    hasher.update(qc_epoch.to_le_bytes());
     match tc.filter(|_| !TC_OUTSIDE_BLOCK.load(Ordering::Relaxed)) {
         None => hasher.update([0u8]),
         Some(tc) => {
@@ -954,8 +962,8 @@ pub enum Evidence {
     /// E1: two votes of one signer for the same (epoch, round) and different blocks.
     DoubleVote(Vote, Vote),
     /// E2: a vote for a block that breaks the voting rule. Either its round is neither the one after its QC nor
-    /// justified by its TC, or its TC is of an epoch other than the block's or the one before (structural, no
-    /// weight table needed), or its TC does not count under the weight tables the block itself names
+    /// justified by its TC, or its TC is of an epoch before its QC's or after its own (structural, no weight table
+    /// needed), or its TC does not count under the weight tables the block itself names
     /// (`Block::table`, `Block::next_table`; theory §2.3: the tables of the block's own chain): a TC of the block's
     /// epoch must be a TC of its table and, past the end of the epoch (`Block::start`), hold a quorum of the next
     /// table too; a TC of the epoch before must hold a quorum of the block's table (H5). The block is given by
@@ -1167,7 +1175,11 @@ impl Evidence {
                     && vote.epoch == block.epoch
                     && (block.qc_round >= block.round
                         || !extends_validly(block.round, block.qc_round, block.tc.as_ref())
-                        || block.tc.as_ref().map_or(false, |tc| tc.epoch > block.epoch || tc.epoch + 1 < block.epoch))
+                        || block.tc.as_ref().map_or(false, |tc| {
+                            // V3, as Core::handle_proposal checks it: an epoch from the parent's to the block's,
+                            // and never more than one before the block's.
+                            tc.epoch > block.epoch || tc.epoch < block.qc_epoch || tc.epoch + 1 < block.epoch
+                        }))
                     && vote.hash == block.digest()
             }
             Evidence::Regression(vote, block, timeout) => {

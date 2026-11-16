@@ -218,6 +218,26 @@ def run(args):
         culprits = set(report.get("culprits", []))
         report.update(culprits=len(culprits), culprits_byzantine=len(culprits & byz),
                       honest_blamed=len(culprits - byz), a=procs[a][0], b=procs[b][0])
+        # DESIGN.md §15.35: the same fork as an evidence package, verified from the configuration alone.
+        package = os.path.abspath(f".fork-package-{a}-{b}.bin")
+        common = ["--committee", committees[1], "--parameters", params["honest"]]
+        packed = subprocess.run([NODE, "package", *common, "--store-a", store[procs[a]], "--store-b", store[procs[b]],
+                                 "--out", package], capture_output=True, text=True)
+        verified = subprocess.run([NODE, "verify", *common, "--package", package], capture_output=True, text=True)
+
+        def last_json(done):
+            try:
+                return json.loads(done.stdout.strip().splitlines()[-1])
+            except (IndexError, json.JSONDecodeError):
+                return {"error": (done.stderr or done.stdout)[-300:]}
+        verdict = last_json(verified)
+        named = set(verdict.pop("culprits", []))
+        verdict.update(accepted=verified.returncode == 0 and "error" not in verdict, culprits=len(named),
+                       culprits_byzantine=len(named & byz), honest_blamed=len(named - byz),
+                       same_as_forensics=named == culprits)
+        report.update(package=last_json(packed), verify=verdict)
+        if os.path.exists(package):
+            os.remove(package)
         epochs = report.get("epochs") or {}
         ta, tb = epochs.pop("terminals_a", []), epochs.pop("terminals_b", [])
         shared = next((k for k, (x, y) in enumerate(zip(ta, tb)) if x != y), min(len(ta), len(tb)))

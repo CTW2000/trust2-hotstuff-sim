@@ -277,6 +277,21 @@ fn e2_a_tc_of_an_epoch_too_old_for_the_block() {
     let vote = Vote { signature: crypto::Signature::new(&vote.digest(), &voter_secret), ..vote };
     let e2 = Evidence::InvalidBlock(vote, block.header());
     assert!(e2.holds() && e2.verify().is_ok());
+
+    // Nor a TC of an epoch before its QC's: a block of the second epoch on a block of that epoch (the header states
+    // the QC's epoch) with a TC of the first. On a QC of the first epoch the same TC breaks no rule by itself.
+    let tc = tc_of_three(&table_with([1, 1, 1, 1]));
+    let e2_on = |qc_epoch: EpochNumber| {
+        let mut block = Block::new_from_key_with_tc(qc_of(2), Some(tc.clone()), name, 5, Vec::new(), &secret);
+        block.epoch = EPOCH + 1;
+        block.qc.epoch = qc_epoch;
+        block.signature = crypto::Signature::new(&block.digest(), &secret);
+        let vote = Vote { epoch: EPOCH + 1, ..Vote::new_from_key(block.digest(), 5, voter, &voter_secret) };
+        let vote = Vote { signature: crypto::Signature::new(&vote.digest(), &voter_secret), ..vote };
+        Evidence::InvalidBlock(vote, block.header())
+    };
+    assert!(e2_on(EPOCH + 1).holds() && e2_on(EPOCH + 1).verify().is_ok());
+    assert!(!e2_on(EPOCH).holds());
 }
 
 #[test]
