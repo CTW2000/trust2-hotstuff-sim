@@ -234,6 +234,8 @@ def run(args):
     rate_share = ceil(args.rate / clients)
     for i, addr in enumerate(committee.front[:clients]):
         cmd = f"{client} {addr} --size {args.tx_size} --rate {rate_share} --timeout {args.timeout_delay}"
+        if args.workload != "none":                          # database workloads (DESIGN.md §15.38)
+            cmd += f" --workload {args.workload} --records {args.records}"
         procs.append(launch(cmd, PathMaker.client_log_file(i)))
     # Experiment switches, from the last booted node backwards: censors, equivocators, NR liars, invalid-block
     # leaders, then high-QC regressors.
@@ -249,6 +251,8 @@ def run(args):
         tail = tail[count:]
     for i in range(up):
         censor = "".join(" " + f for f in switches.get(i, []))
+        if args.workload != "none":                          # every node executes its ledger
+            censor += " --execute"
         cmd = (f"{node} {'-vvv' if args.debug else '-vv'} run --keys {key_files[i]} "
                f"--committee {PathMaker.committee_file()} --store {PathMaker.db_path(i)} "
                f"--parameters {PathMaker.parameters_file()}{censor}")
@@ -341,6 +345,9 @@ def main():
                     help="failure threshold of the Aptos-style leader rule in percent (0: aptos-core's 10)")
     ap.add_argument("--no-sync", action="store_true",
                     help="ablation: write the safety state without syncing it to disk (DESIGN.md §15.33)")
+    ap.add_argument("--workload", choices=["none", "ycsb-a", "ycsb-b", "ycsb-c", "smallbank"], default="none",
+                    help="operations in the transactions; the nodes then execute their ledgers (DESIGN.md §15.38)")
+    ap.add_argument("--records", type=int, default=100_000, help="records (YCSB) or customers (SmallBank)")
     ap.add_argument("--no-h5", action="store_true",
                     help="ablation (DESIGN.md §15.34): certificates past the end of an epoch need no quorum of the "
                          "next table")

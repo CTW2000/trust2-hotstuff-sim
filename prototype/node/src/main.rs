@@ -1,5 +1,6 @@
 mod config;
 mod node;
+mod workload;
 
 use crate::config::Export as _;
 use crate::config::{Committee, Parameters, Secret};
@@ -64,6 +65,9 @@ enum Command {
         /// Experiment switch: withhold votes and report NR = 1 (framing colluder, DESIGN.md §14.3).
         #[clap(long)]
         frame: bool,
+        /// Execute the transactions of committed blocks on the workload's state (DESIGN.md §15.38).
+        #[clap(long)]
+        execute: bool,
         /// Experiment switch: as leader, never propose (Byzantine silent leader, DESIGN.md §15.12).
         #[clap(long)]
         silent: bool,
@@ -159,6 +163,7 @@ async fn main() {
             invalid_block,
             regress,
             frame,
+            execute,
             silent,
             fill_suffix,
             withhold_proof,
@@ -167,7 +172,18 @@ async fn main() {
             &keys,
             &store,
             parameters,
-            Experiment { censor, equivocate, lie_nr, invalid_block, regress, frame, silent, fill_suffix, withhold_proof },
+            Experiment {
+                censor,
+                equivocate,
+                lie_nr,
+                invalid_block,
+                regress,
+                frame,
+                silent,
+                fill_suffix,
+                withhold_proof,
+                execute,
+            },
         )
         .await
         {

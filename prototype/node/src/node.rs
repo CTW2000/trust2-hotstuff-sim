@@ -1,9 +1,11 @@
 use crate::config::Export as _;
 use crate::config::{Committee, ConfigError, Parameters, Secret};
+use crate::workload::State;
 use consensus::{Block, Consensus};
 use crypto::SignatureService;
-use log::info;
-use mempool::Mempool;
+use log::{info, warn};
+use mempool::{Mempool, MempoolMessage};
+use std::time::Instant;
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver};
 
@@ -12,6 +14,10 @@ pub const CHANNEL_CAPACITY: usize = 1_000;
 
 pub struct Node {
     pub commit: Receiver<Block>,
+    /// The store, where the mempool keeps the batches the blocks name.
+    store: Store,
+    /// Whether to execute the transactions of committed blocks (DESIGN.md §15.38).
+    execute: bool,
 }
 
 /// Experiment switches, not part of the protocol (prototype/DESIGN.md §12.4, §13.3).
@@ -26,6 +32,8 @@ pub struct Experiment {
     pub silent: bool,
     pub fill_suffix: bool,
     pub withhold_proof: bool,
+    /// Not a fault: execute the transactions of the ledger (DESIGN.md §15.38).
+    pub execute: bool,
 }
 
 impl Node {
@@ -73,6 +81,8 @@ impl Node {
         // Run the signature service.
         let signature_service = SignatureService::new(secret_key);
 
+        let ledger_store = store.clone();
+
         // Make a new mempool.
         Mempool::spawn(
             name,
@@ -96,16 +106,45 @@ impl Node {
         );
 
         info!("Node {} successfully booted", name);
-        Ok(Self { commit: rx_commit })
+        Ok(Self { commit: rx_commit, store: ledger_store, execute: experiment.execute })
     }
 
     pub fn print_key_file(filename: &str) -> Result<(), ConfigError> {
         Secret::new().write(filename)
     }
 
+    /// The application: with `execute`, apply the transactions of every block of the ledger, in order, to the
+    /// workload's state (DESIGN.md §15.38). Blocks after a terminal block never get here (H4).
     pub async fn analyze_block(&mut self) {
-        while let Some(_block) = self.commit.recv().await {
-            // This is where we can further process committed block.
+        let mut state = State::default();
+        while let Some(block) = self.commit.recv().await {
+            if !self.execute || block.payload.is_empty() {
+                continue;
+            }
+            let started = Instant::now();
+            let before = state.executed;
+            for digest in &block.payload {
+                // The node voted for the block or synchronized it, so the batch is in the store or on its way.
+                let batch = match self.store.notify_read(digest.to_vec()).await {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        warn!("Failed to read batch {}: {}", digest, e);
+                        continue;
+                    }
+                };
+                match bincode::deserialize(&batch) {
+                    Ok(MempoolMessage::Batch(transactions)) => transactions.iter().for_each(|tx| state.apply(tx)),
+                    _ => warn!("Batch {} is not a batch of transactions", digest),
+                }
+            }
+            // NOTE: this log entry is used to compare the states of the nodes (benchmark/execstat.py).
+            info!(
+                "Executed {} -> {} txs in {} us, state {:016x}",
+                block,
+                state.executed - before,
+                started.elapsed().as_micros(),
+                state.digest()
+            );
         }
     }
 }

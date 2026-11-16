@@ -647,6 +647,20 @@ def sync():
                     run("sync", dict(build="trust2", nodes=nodes, net=net, epoch_length=25, no_sync=no_sync, rep=rep), 30)
 
 
+def wl():
+    """DESIGN.md §15.38: the database workloads. Trust 2.0 with every node executing its ledger, n = 4, 10, 31, base
+    network, epochs of 25 rounds: transactions without an operation (executed as no-ops), YCSB A and B (50% and 95%
+    reads, Zipfian 0.99 over 100,000 records) and SmallBank (100,000 customers), interleaved within each repetition.
+    Besides the usual columns: transactions executed, execution time per transaction, and the number of blocks at
+    which two nodes logged different states (must be 0)."""
+    from execstat import stats as exec_stats
+    for rep in (1, 2):
+        for nodes in (4, 10, 31):
+            for workload in ("ycsb-a", "ycsb-b", "smallbank"):
+                run("wl", dict(build="trust2", nodes=nodes, net="base", epoch_length=25, workload=workload, rep=rep), 30,
+                    extra=exec_stats)
+
+
 def h5live():
     """DESIGN.md §15.36: does the dual-table quorum (H5, §15.34) slow the handover down? Trust 2.0 with H5 and
     without it (--no-h5), n = 31, base network, epochs of 25 rounds, interleaved within each repetition:
@@ -723,5 +737,5 @@ def compare_x2(rows):
 
 
 if __name__ == "__main__":
-    {"sync": sync, "h5live": h5live, "x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "r7x2": r7x2, "r7spot": r7spot, "r7len": r7len, "r7xt": r7xt, "f25": f25,
+    {"sync": sync, "h5live": h5live, "wl": wl, "x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "r7x2": r7x2, "r7spot": r7spot, "r7len": r7len, "r7xt": r7xt, "f25": f25,
      "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "r34x": r34x, "thr": thr, "thr2": thr2, "tgt": tgt, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()

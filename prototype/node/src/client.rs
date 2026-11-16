@@ -8,9 +8,13 @@ use futures::sink::SinkExt as _;
 use log::{info, warn};
 use rand::Rng;
 use std::net::SocketAddr;
+use workload::{Generator, Workload};
 use tokio::net::TcpStream;
 use tokio::time::{interval, sleep, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+#[allow(dead_code)]
+mod workload;
 
 #[derive(Parser)]
 #[clap(
@@ -35,6 +39,15 @@ struct Cli {
     /// Network addresses that must be reachable before starting the benchmark.
     #[clap(short, long, value_parser, value_name = "[Addr]", multiple = true)]
     nodes: Vec<SocketAddr>,
+    /// The operations in the transactions: none, ycsb-a, ycsb-b, ycsb-c or smallbank (DESIGN.md §15.38).
+    #[clap(long, value_parser, default_value = "none")]
+    workload: Workload,
+    /// The number of records (YCSB) or customers (SmallBank).
+    #[clap(long, value_parser, default_value_t = 100_000)]
+    records: u64,
+    /// The skew of the YCSB keys (Zipfian constant).
+    #[clap(long, value_parser, default_value_t = 0.99)]
+    theta: f64,
 }
 
 #[tokio::main]
@@ -48,12 +61,14 @@ async fn main() -> Result<()> {
     info!("Node address: {}", cli.target);
     info!("Transactions size: {} B", cli.size);
     info!("Transactions rate: {} tx/s", cli.rate);
+    info!("Workload: {:?} over {} records", cli.workload, cli.records);
     let client = Client {
         target: cli.target,
         size: cli.size,
         rate: cli.rate,
         timeout: cli.timeout,
         nodes: cli.nodes,
+        generator: Generator::new(cli.workload, cli.records, cli.theta),
     };
 
     // Wait for all nodes to be online and synchronized.
@@ -69,6 +84,7 @@ struct Client {
     rate: u64,
     timeout: u64,
     nodes: Vec<SocketAddr>,
+    generator: Generator,
 }
 
 impl Client {
@@ -76,11 +92,9 @@ impl Client {
         const PRECISION: u64 = 20; // Sample precision.
         const BURST_DURATION: u64 = 1000 / PRECISION;
 
-        // The transaction size must be at least 16 bytes to ensure all txs are different.
-        if self.size < 16 {
-            return Err(anyhow::Error::msg(
-                "Transaction size must be at least 9 bytes",
-            ));
+        // The sample flag, the counter and the largest operation take 34 bytes.
+        if self.size < 34 {
+            return Err(anyhow::Error::msg("Transaction size must be at least 34 bytes"));
         }
 
         // Connect to the mempool.
@@ -92,7 +106,8 @@ impl Client {
         let burst = self.rate / PRECISION;
         let mut tx = BytesMut::with_capacity(self.size);
         let mut counter = 0;
-        let mut r = rand::thread_rng().gen();
+        let mut rng = rand::thread_rng();
+        let mut r: u64 = rng.gen();
         let mut transport = Framed::new(stream, LengthDelimitedCodec::new());
         let interval = interval(Duration::from_millis(BURST_DURATION));
         tokio::pin!(interval);
@@ -117,7 +132,9 @@ impl Client {
                     tx.put_u8(1u8); // Standard txs start with 1.
                     tx.put_u64(r); // Ensures all clients send different txs.
                 };
-                tx.resize(self.size, 0u8);
+                // The workload's operation; the padding is the value an update writes.
+                self.generator.next(&mut rng).encode(&mut tx);
+                tx.resize(self.size, r as u8);
                 let bytes = tx.split().freeze();
 
                 if let Err(e) = transport.send(bytes).await {
