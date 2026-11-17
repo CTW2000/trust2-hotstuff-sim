@@ -460,11 +460,15 @@ pub fn share(culprits: &BTreeSet<PublicKey>, table: &Committee) -> f64 {
 /// remembered (R8) back to the genesis.
 pub async fn read_records(path: &str) -> Result<Records, String> {
     let mut store = Store::new(path).map_err(|e| format!("{}: {}", path, e))?;
-    let bytes = store
-        .read(crate::core::SAFETY_STATE.to_vec())
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("{}: no safety state", path))?;
+    // The synced record (R8), or the one a node run without the sync left in the database.
+    let bytes = match store.read_safe().await {
+        Some(bytes) => bytes,
+        None => store
+            .read(crate::core::SAFETY_STATE.to_vec())
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("{}: no safety state", path))?,
+    };
     let (_, high_qc, _, _): (Round, QC, Option<Timeout>, EpochNumber) =
         bincode::deserialize(&bytes).map_err(|e| e.to_string())?;
     let mut chain = Vec::new();

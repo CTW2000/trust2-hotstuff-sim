@@ -637,18 +637,18 @@ impl Core {
     }
 
     /// R8: what a restart must not forget is on disk before anything we sign leaves this node. One synced write per
-    /// vote or timeout, so at most two per round; the sync also carries the blocks stored before it (the store writes
-    /// one log, in order). This survives a loss of power.
+    /// vote or timeout, so at most two per round. The record has a small file of its own (DESIGN.md §15.41): the sync
+    /// writes out nothing else, in particular not the transaction batches the database holds. Blocks are therefore
+    /// not synced; a node that lost some after a loss of power fetches them again, like any node that fell behind.
     async fn remember(&mut self) {
         let state = (self.last_voted_round, &self.high_qc, &self.last_timeout, self.signed_epoch);
         let bytes = bincode::serialize(&state).expect("Failed to serialize the safety state");
         if self.faults.no_sync {
-            // Ablation: the write is only ahead of the signature (reading it back waits for it, the store handles
-            // its commands in order), which is enough for a crash of the process.
+            // Ablation: the state written like any other record, to the database and without waiting for it. It
+            // survives a crash of the process once the store has taken it, and is lost with the power.
             self.store.write(SAFETY_STATE.to_vec(), bytes).await;
-            let _ = self.store.read(SAFETY_STATE.to_vec()).await;
         } else {
-            self.store.write_sync(SAFETY_STATE.to_vec(), bytes).await;
+            self.store.write_safe(bytes).await;
         }
     }
 
@@ -656,9 +656,13 @@ impl Core {
     /// nothing that contradicts it: its timeout is resent as it was, and a first timeout after a vote reports NR = 0.
     /// The table stays behind until the chain has been replayed, as for any node that fell far behind.
     async fn restore(&mut self) -> bool {
-        let bytes = match self.store.read(SAFETY_STATE.to_vec()).await {
-            Ok(Some(bytes)) => bytes,
-            _ => return false,
+        // The synced record, or the one the ablation without the sync left in the database.
+        let bytes = match self.store.read_safe().await {
+            Some(bytes) => bytes,
+            None => match self.store.read(SAFETY_STATE.to_vec()).await {
+                Ok(Some(bytes)) => bytes,
+                _ => return false,
+            },
         };
         let (last_voted_round, high_qc, last_timeout, signed_epoch): (Round, QC, Option<Timeout>, EpochNumber) =
             bincode::deserialize(&bytes).expect("Failed to deserialize the safety state");

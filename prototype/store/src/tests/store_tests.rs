@@ -128,3 +128,46 @@ async fn an_ordinary_store_keeps_its_log_across_a_crash_of_the_process() {
     let mut after = Store::new(image).unwrap();
     assert_eq!(after.read(b"plain".to_vec()).await.unwrap(), Some(vec![1]));
 }
+
+#[tokio::test]
+async fn the_safe_record_survives_a_loss_of_power_and_takes_nothing_with_it() {
+    // The safe record is synced on its own: after a loss of power it is there, and a plain write of a lossy store
+    // made before it is not -- syncing the record did not write the database out.
+    let (path, image) = (".db_test_the_safe_record_survives", ".db_test_the_safe_record_survives_image");
+    let _ = fs::remove_dir_all(path);
+    let mut store = Store::new_lossy(path).unwrap();
+    assert_eq!(store.read_safe().await, None);
+    store.write(b"plain".to_vec(), vec![1]).await;
+    store.write_safe(vec![7; 3000]).await;
+    store.write_safe(vec![8; 5000]).await;
+    store.write_safe(vec![9; 10]).await;
+    assert_eq!(store.read_safe().await, Some(vec![9; 10]));
+    crash_image(path, image).unwrap();
+
+    let mut after = Store::new(image).unwrap();
+    assert_eq!(after.read_safe().await, Some(vec![9; 10]));
+    assert_eq!(after.read(b"plain".to_vec()).await.unwrap(), None);
+    after.write_safe(vec![4]).await;
+    assert_eq!(after.read_safe().await, Some(vec![4]), "the sequence goes on after a restart");
+}
+
+#[tokio::test]
+async fn a_torn_write_of_the_safe_record_leaves_the_one_before() {
+    // The slot being written when the power goes holds garbage: its checksum fails and the other slot is read.
+    let (path, image) = (".db_test_a_torn_write_of_the_safe_record", ".db_test_a_torn_write_of_the_safe_record_image");
+    let _ = fs::remove_dir_all(path);
+    let mut store = Store::new(path).unwrap();
+    store.write_safe(vec![1; 100]).await; // sequence 1, the second slot
+    store.write_safe(vec![2; 100]).await; // sequence 2, the first slot
+    crash_image(path, image).unwrap();
+    // Tear the newest record in the image: overwrite a byte in the middle of the first slot's record.
+    {
+        use std::os::unix::fs::FileExt;
+        let file = fs::OpenOptions::new().write(true).open(format!("{}/SAFE", image)).unwrap();
+        file.write_all_at(&[0xff], 60).unwrap();
+    }
+    let mut after = Store::new(image).unwrap();
+    assert_eq!(after.read_safe().await, Some(vec![1; 100]));
+    after.write_safe(vec![3; 100]).await;
+    assert_eq!(after.read_safe().await, Some(vec![3; 100]));
+}
