@@ -46,7 +46,7 @@ MAX_PROCESSES = 31
 BASE_PORT = 9000
 CLOSED_PORT = 29000                                           # nobody listens here: the other side's honest nodes
 LOCK = f"/tmp/{os.environ.get('USER', 'user')}_ttru_bench.lock"
-LOGS, OUT = "logs", "results-p5"
+LOGS, OUT = "logs", os.environ.get("TTRU_OUT", "results-p5")
 NODE, CLIENT = (os.path.abspath(join("..", "target", "release", x)) for x in ("node", "client"))
 
 # Roles of the n = 19 identities: (group, licensed). Groups: "H1", "H2" honest, "B" split brain.

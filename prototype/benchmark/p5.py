@@ -17,8 +17,14 @@ from lagstat import stats as lag_stats
 from localstat import stats as local_stats
 from stallstat import stats as stall_stats
 
-OUT = "results-p5"
+OUT = os.environ.get("TTRU_OUT", "results-p5")       # the final reruns write to results-final/ (DESIGN.md §15.40)
 RATE, WARMUP = 10_000, 10
+
+
+def reps(default):
+    """Repetitions of a batch; TTRU_REPS overrides the default (the final reruns use 5, DESIGN.md §15.40)."""
+    return range(1, int(os.environ.get("TTRU_REPS", default)) + 1)
+
 ROLES = (("Voting twice", "equivocator"), ("Lying about NR", "liar"), ("Censoring", "censor"),
          ("Proposing and voting for invalid blocks", "invalid"), ("Regressing the high QC", "regressor"),
          ("Framing:", "framer"), ("Silent leader:", "silent"), ("Filling suffix blocks", "filler"),
@@ -119,9 +125,10 @@ def otx_stats(logs):
 
 def run(experiment, config, duration, keep_logs=None, extra=None):
     """One run_local.py run; keep_logs names a tarball of the run's logs under results-p5/<experiment>_logs/."""
-    args = ["python3", "run_local.py", "--rate", str(RATE), "--warmup", str(WARMUP), "--duration", str(duration)]
+    args = ["python3", "run_local.py", "--rate", str(config.get("rate", RATE)), "--warmup", str(WARMUP),
+            "--duration", str(duration)]
     for key, value in config.items():
-        if key in ("scenario", "rep"):
+        if key in ("scenario", "rep", "rate"):
             continue
         flag = "--" + key.replace("_", "-")
         if value is True:
@@ -640,7 +647,7 @@ def sync():
     """DESIGN.md §15.36: what the synced safety state costs (§15.33). Trust 2.0 with the sync and without it
     (--no-sync), n = 4, 10, 31, without delays and on the base network, the two interleaved within each repetition.
     All nodes share one disk here, so this is an upper bound on the cost per node."""
-    for rep in (1, 2, 3):
+    for rep in reps(3):
         for nodes in (4, 10, 31):
             for net in ("none", "base"):
                 for no_sync in (False, True):
@@ -654,11 +661,35 @@ def wl():
     Besides the usual columns: transactions executed, execution time per transaction, and the number of blocks at
     which two nodes logged different states (must be 0)."""
     from execstat import stats as exec_stats
-    for rep in (1, 2):
+    builds = ("baseline", "trust2") if os.environ.get("TTRU_WL_BASELINE") else ("trust2",)
+    for rep in reps(2):
         for nodes in (4, 10, 31):
             for workload in ("ycsb-a", "ycsb-b", "smallbank"):
-                run("wl", dict(build="trust2", nodes=nodes, net="base", epoch_length=25, workload=workload, rep=rep), 30,
-                    extra=exec_stats)
+                for build in builds:
+                    run("wl", dict(build=build, nodes=nodes, net="base", epoch_length=25, workload=workload,
+                                   rep=rep), 30, extra=exec_stats)
+
+
+def wlsat():
+    """DESIGN.md §15.40: where execution or consensus saturates under the database workloads. Baseline and Trust 2.0
+    at n = 31, base network, epochs of 25 rounds, YCSB A and SmallBank, the input rate up to and past the knee of
+    the throughput-latency curve (XT_RATES), interleaved within each repetition."""
+    from execstat import stats as exec_stats
+    for rep in reps(2):
+        for workload in ("ycsb-a", "smallbank"):
+            for rate in XT_RATES[31]:
+                for build in ("baseline", "trust2"):
+                    run("wlsat", dict(build=build, nodes=31, net="base", rate=rate, epoch_length=25,
+                                      workload=workload, rep=rep), 30, extra=exec_stats)
+
+
+def silent2():
+    """DESIGN.md §15.40: three silent leaders (nodes that are not started), both builds on the final code, five
+    runs each, interleaved: the baseline arm of f25_silent, which so far came from an earlier batch (xr)."""
+    for rep in reps(5):
+        for build in ("baseline", "trust2"):
+            run("fin_silent", dict(scenario="silent", build=build, nodes=31, net="base", epoch_length=25, rep=rep,
+                                   faults=3), 90)
 
 
 def scale():
@@ -668,7 +699,7 @@ def scale():
     os.environ["TTRU_MAX_NODES"] = "100"
     global RATE
     RATE = 2_000
-    for rep in (1, 2, 3):
+    for rep in reps(3):
         for nodes in (31, 64, 100):
             for build in ("baseline", "trust2"):
                 run("scale", dict(build=build, nodes=nodes, net="base", epoch_length=25, rep=rep), 40)
@@ -682,7 +713,7 @@ def h5live():
     - framers+late: 6 colluders withhold votes and claim NR = 1 on top of 10% late messages (honest weight is cut).
     The logs are kept: stalls and how many of them are near a handover come from stallstat."""
     scenarios = (("none", dict(), 60), ("silent", dict(silent=3), 90), ("framers+late", dict(frame=6, late_p=0.1), 120))
-    for rep in (1, 2, 3):
+    for rep in reps(3):
         for name, faults, duration in scenarios:
             for no_h5 in (False, True):
                 run("h5live", dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
@@ -750,5 +781,5 @@ def compare_x2(rows):
 
 
 if __name__ == "__main__":
-    {"sync": sync, "h5live": h5live, "wl": wl, "scale": scale, "x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "r7x2": r7x2, "r7spot": r7spot, "r7len": r7len, "r7xt": r7xt, "f25": f25,
+    {"sync": sync, "h5live": h5live, "wl": wl, "wlsat": wlsat, "silent2": silent2, "scale": scale, "x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "r7x2": r7x2, "r7spot": r7spot, "r7len": r7len, "r7xt": r7xt, "f25": f25,
      "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "r34x": r34x, "thr": thr, "thr2": thr2, "tgt": tgt, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()
