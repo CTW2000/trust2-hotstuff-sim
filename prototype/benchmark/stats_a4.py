@@ -6,10 +6,11 @@ interval (resampling within each group of each batch; batches weigh equally), a 
 (equivalence at that margin). Standard library only.
 Run from prototype/benchmark/:  python3 stats_a4.py"""
 import csv
+import os
 import random
 import statistics as st
 
-R = "results-p5"
+R = os.environ.get("TTRU_OUT", "results-p5")       # the final reruns: results-final/ (DESIGN.md §15.40)
 B, P = 20_000, 20_000
 
 
