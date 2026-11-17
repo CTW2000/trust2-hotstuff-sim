@@ -119,6 +119,7 @@ impl Consensus {
                 no_sync: parameters.no_sync,
                 no_h2: parameters.no_h2,
                 no_h5: parameters.no_h5,
+                broadcast_votes: parameters.broadcast_votes,
             },
             signature_service.clone(),
             store.clone(),

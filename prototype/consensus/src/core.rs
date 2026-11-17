@@ -124,6 +124,9 @@ pub struct Faults {
     pub no_sync: bool,
     /// Ablation (§15.34): count certificates past the end of an epoch under the table of that epoch alone (H5 off).
     pub no_h5: bool,
+    /// Comparison (§15.42): send every vote to all members, not only to the next leader. Every member then counts
+    /// the votes and can assemble the QC, so a block stays certified when the next leader is slow or silent.
+    pub broadcast_votes: bool,
 }
 
 /// Experiment switch (DESIGN.md §15.27): with `Faults::frame`, frame only in the rounds these members lead (set once
@@ -1300,7 +1303,19 @@ impl Core {
                 self.regress(block).await;
             }
             let next_leader = leader(self.committee(), self.round + 1);
-            if next_leader == self.name {
+            if self.faults.broadcast_votes {
+                debug!("Broadcasting {:?}", vote);
+                let addresses = self
+                    .committee()
+                    .broadcast_addresses(&self.name)
+                    .into_iter()
+                    .map(|(_, x)| x)
+                    .collect();
+                let message = bincode::serialize(&ConsensusMessage::Vote(vote.clone()))
+                    .expect("Failed to serialize vote");
+                self.network.broadcast(addresses, Bytes::from(message)).await;
+                self.handle_vote(&vote).await?;
+            } else if next_leader == self.name {
                 self.handle_vote(&vote).await?;
             } else {
                 debug!("Sending {:?} to {}", vote, next_leader);

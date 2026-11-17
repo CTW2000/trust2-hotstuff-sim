@@ -29,3 +29,21 @@ cargo test --locked -p aptos-safety-rules twins_timeout_fork -- --nocapture
 - 纪元管理器要向执行客户端要一个执行管线构造器，而测试用的模拟执行客户端没有实现这个接口。
 
 上游把这个目录下的测试都标成了忽略。要修好它得给模拟组件补上整条执行管线，所以改为直接驱动安全规则模块：投票和超时都由未修改的 `SafetyRules` 实例经公开接口签出，孪生就是同一把密钥的第二个实例，带一份独立的安全状态。
+
+# 核对：原型的 Aptos 式领导者规则与 aptos-core 的原代码（DESIGN.md §15.42）
+
+领导者规则对比里的 Aptos 式规则是原型上的重写。这个测试把原型一次运行的账本记录交给 aptos-core 自己的信誉模块，逐个成员比较两边给出的权重。
+
+- 文件：`aptos_leader_reputation_check.rs`。放到 aptos-core 的 `consensus/src/liveness/trust2_trace_check.rs`，并在同目录的 `mod.rs` 里加 `#[cfg(test)] mod trust2_trace_check;`。
+- 输入：原型以 `--leader-rule aptos` 运行时任一节点的日志（其中的 `AptosEvent` 与 `AptosWeights` 行）。
+- 运行：
+
+```bash
+source aptos_env.sh
+cd aptos-core
+TRUST2_TRACE=/path/to/node-0.log cargo test --locked -p aptos-consensus trust2_trace_check -- --nocapture
+```
+
+- 输出：日志里的块数和权重表数，两边权重完全相同的表数，以及不一致的成员权重个数；有不一致时测试失败。
+- 范围：只核对"由一段历史得出各成员的权重"这一步；权重多久重算一次不在核对范围内。
+

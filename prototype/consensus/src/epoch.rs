@@ -125,6 +125,9 @@ pub struct Epochs {
     watermark: HashMap<PublicKey, u64>,
     /// LeaderRule::Aptos: the latest committed blocks, newest last, at most the proposer window.
     history: VecDeque<AptosEvent>,
+    /// LeaderRule::Aptos: how many committed blocks were recorded in all (names the history a table was made from in
+    /// the trace that casestudy/aptos_leader_reputation_check.rs replays against aptos-core, DESIGN.md §15.42).
+    aptos_recorded: u64,
 }
 
 /// What Aptos keeps of a committed block (NewBlockEvent): its proposer, the failed proposers it records (the leaders
@@ -282,6 +285,7 @@ impl Epochs {
             committed: BTreeMap::new(),
             watermark: HashMap::new(),
             history: VecDeque::new(),
+            aptos_recorded: 0,
         };
         // H1': the second epoch has no ledger two terminal blocks back either, so it starts from the same state.
         for epoch in roster.epoch..=roster.epoch + 1 {
@@ -304,6 +308,14 @@ impl Epochs {
             _ => None,
         };
         if let Some(weights) = &reputation {
+            // NOTE: this log entry is replayed against aptos-core (casestudy/aptos_leader_reputation_check.rs).
+            info!(
+                "AptosWeights {{\"epoch\":{},\"events\":{},\"members\":{},\"weights\":{:?}}}",
+                epoch,
+                self.aptos_recorded,
+                self.members.len(),
+                weights
+            );
             // NOTE: this log entry is used to count the members Aptos demotes (benchmark/p5.py).
             for ((name, _), w) in self.members.iter().zip(weights) {
                 let kind = match *w {
@@ -446,6 +458,15 @@ impl Epochs {
             failed,
             voters: block.qc.votes.iter().filter_map(|(name, _)| index(name)).collect(),
         };
+        // NOTE: this log entry is replayed against aptos-core (casestudy/aptos_leader_reputation_check.rs).
+        info!(
+            "AptosEvent {{\"round\":{},\"proposer\":{},\"failed\":{:?},\"voters\":{:?}}}",
+            block.round,
+            event.proposer.map_or(-1, |i| i as i64),
+            event.failed,
+            event.voters
+        );
+        self.aptos_recorded += 1;
         self.history.push_back(event);
         while self.history.len() > aptos::PROPOSER_WINDOW_MULTIPLIER * self.members.len() {
             self.history.pop_front();

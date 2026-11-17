@@ -399,6 +399,21 @@ def cmpg():
                                  leader_rule=rule, g2_threshold=threshold, **faults), duration)
 
 
+def cmpb():
+    """DESIGN.md §15.42: the comparison of leader rules with every vote sent to all members, as aptos-core does by
+    default. With votes to the next leader only (cmpg) a block whose votes the next leader misses is lost, and the
+    Aptos-style rule counts its proposer as failed although the proposal was fine; with votes to all, any member
+    assembles the QC and the block stays certified. Same rules, scenarios and durations as cmpg, whose runs are the
+    arm with votes to the next leader; the logs are kept (cmpb_logs/) for the check against the code of aptos-core."""
+    scenarios = (("silent", dict(silent=3), 90), ("late", dict(late_p=0.1), 90),
+                 ("framers+late", dict(frame=6, late_p=0.1), 180))
+    for rep in reps(5):
+        for name, faults, duration in scenarios:
+            for rule in ("none", "aptos", "failed", "trust2"):
+                run("cmpb", dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
+                                 leader_rule=rule, g2_threshold=0, broadcast_votes=True, **faults), duration,
+                    keep_logs=f"{name}-{rule}-{rep}")
+
 
 def a6():
     """Trade-off of detection speed against honest demotion for the leader rules (DESIGN.md §15.20; mock review A6):
@@ -782,4 +797,4 @@ def compare_x2(rows):
 
 if __name__ == "__main__":
     {"sync": sync, "h5live": h5live, "wl": wl, "wlsat": wlsat, "silent2": silent2, "scale": scale, "x2": x2, "x3": x3, "p3": p3, "x4": x4, "xa": xa, "xb": xb, "xc": xc, "xe": xe, "xr": xr, "xt": xt, "r7x2": r7x2, "r7spot": r7spot, "r7len": r7len, "r7xt": r7xt, "f25": f25,
-     "cmp": cmp, "cmpg": cmpg, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "r34x": r34x, "thr": thr, "thr2": thr2, "tgt": tgt, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()
+     "cmp": cmp, "cmpg": cmpg, "cmpb": cmpb, "h24": h24, "r2": r2, "r3": r3, "r4": r4, "r4k": r4k, "r34x": r34x, "thr": thr, "thr2": thr2, "tgt": tgt, "g100": g100, "lc": lc, "a1": a1, "a3": a3, "a6": a6, "a7": a7, "a5": a5, "a1b": a1b, "report": report}[sys.argv[1]]()
