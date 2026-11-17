@@ -2,7 +2,7 @@
 sensitivity of the graded G1 punishment, and n = 100. Same recommended protocol and graded punishment as
 dirTtruV12 (P2, AT share > 2/3, CUSUM q = 0.5, rho_bar = 0.1, gamma = ttru.GAMMA, D = 500, weight cap 0.5; r_min 0.7, step 0.1,
 recovery 0.02 per epoch of 100 views, B_rep = 0.10; NR with data; R3; AT doubling off; evictions recompute
-CapNorm only for fork culprits; queued suspensions barred from leading). Colluders = cheapest nodes per base
+CapNorm only for fork culprits; queued suspensions keep leading unless SIM_G1_BAR_QUEUED=1). Colluders = cheapest nodes per base
 weight up to a base share of 0.2; the framing adversary runs on top of every injected scenario.
 
 Parts:
@@ -471,7 +471,8 @@ def bounds_cell(g):
 
 def report():
     L = ["# 新方案（v0.12）补充仿真：长时程、参数敏感性、n=100\n",
-         "推荐协议与分级处罚同 `dirTtru_v12.md`（AT 排除期加倍关闭；只在分叉逐出时重算 CapNorm；排队实体先取消出块资格）。"
+         "推荐协议与分级处罚同 `dirTtru_v12.md`（AT 排除期加倍关闭；只在分叉逐出时重算 CapNorm；"
+         + (u"排队实体先取消出块资格" if G1_BAR_QUEUED else u"排队实体在暂停开始前照常出块") + u"）。"
          "同伙为单位基础权重质押最低的节点，基础份额 0.2；注入场景上叠加同伙陷害。区间为对人群的自助法 95% 区间。"
          "默认参数：L_max 0.10、暂停 4 / 32 个纪元、上链窗口 32、回看期 64、治理延迟 2 个纪元。\n"]
     lo = load("long")
