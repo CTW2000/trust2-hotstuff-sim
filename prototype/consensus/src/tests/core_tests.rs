@@ -168,6 +168,14 @@ fn all_frames(address: SocketAddr) -> Receiver<Bytes> {
 }
 
 /// A QC for `block` signed by every member.
+/// `block` naming the fixture table of the next epoch, as a block at or past the end of its epoch does (the table
+/// chain, DESIGN.md §15.43), signed again by its author.
+fn naming_next(mut block: Block, secret: &SecretKey) -> Block {
+    block.next_table = table_at(block.epoch + 1);
+    block.signature = Signature::new(&block.digest(), secret);
+    block
+}
+
 fn qc_for(block: &Block) -> QC {
     QC {
         hash: block.digest(),
@@ -605,7 +613,13 @@ async fn h3_no_vote_for_a_block_of_the_old_epoch() {
     // epoch, which starts at round 4, while being a block of the old epoch itself: it gets no vote, and the first
     // thing the next leader hears from the node is its timeout of round 4 in the new epoch.
     let committee = committee_with_base_port(17_000);
-    let blocks = chain(vec![leader_keys(1), leader_keys(2), leader_keys(3), leader_keys(4)]);
+    // Blocks 2 to 4 are at or past the end of the first epoch and name the next table.
+    let mut blocks: Vec<Block> = Vec::new();
+    for round in 1..=4 {
+        let (author, secret) = leader_keys(round);
+        let block = Block::new_from_key(blocks.last().map_or(QC::genesis(), qc_for), author, round, Vec::new(), &secret);
+        blocks.push(if round >= 2 { naming_next(block, &secret) } else { block });
+    }
 
     // A vote for block 4 would go to the leader of round 5 in the new table. That leader may also get our votes for
     // the earlier blocks, so listen for what comes before the timeout.
@@ -1139,7 +1153,9 @@ async fn a_node_missing_an_older_block_enters_on_the_commit_proof() {
     let committee = committee_with_base_port(17_900);
     let at = |qc: QC, round: Round| {
         let (author, secret) = leader_keys(round);
-        Block::new_from_key(qc, author, round, Vec::new(), &secret)
+        let block = Block::new_from_key(qc, author, round, Vec::new(), &secret);
+        // B10 and B11 are at and past the end of the first epoch: they name the next table.
+        if round == 10 || round == 11 { naming_next(block, &secret) } else { block }
     };
     let b9 = at(QC::genesis(), 9);
     let b10 = at(qc_for(&b9), 10);
@@ -1181,7 +1197,9 @@ async fn the_commit_proof_before_the_terminal_block_still_enters() {
     let committee = committee_with_base_port(18_000);
     let at = |qc: QC, round: Round| {
         let (author, secret) = leader_keys(round);
-        Block::new_from_key(qc, author, round, Vec::new(), &secret)
+        let block = Block::new_from_key(qc, author, round, Vec::new(), &secret);
+        // B10 and B11 are at and past the end of the first epoch: they name the next table.
+        if round == 10 || round == 11 { naming_next(block, &secret) } else { block }
     };
     let b9 = at(QC::genesis(), 9);
     let b10 = at(qc_for(&b9), 10);
@@ -1213,6 +1231,45 @@ async fn the_commit_proof_before_the_terminal_block_still_enters() {
         false
     };
     assert!(timeout(Duration::from_secs(2), new_epoch).await.unwrap_or(false), "no timeout of the new epoch");
+}
+
+#[tokio::test]
+async fn a_leader_that_entered_on_the_commit_proof_proposes_at_once() {
+    // DESIGN.md §15.43. The leader of round 12 holds B10 (the terminal block, epochs of 10 rounds) and B11 but not
+    // B9: its ledger cannot reach B10, so the table of the epoch after the next is not computed. The votes for B11
+    // give it the commit proof. It enters the next epoch and proposes B12 at once, naming no next table, as a block
+    // before the end of its epoch does. (When every block had to name the next table, this leader proposed nothing
+    // until its ledger caught up, and the first round of the epoch timed out.)
+    let committee = committee_with_base_port(18_800);
+    let at = |qc: QC, round: Round| {
+        let (author, secret) = leader_keys(round);
+        let block = Block::new_from_key(qc, author, round, Vec::new(), &secret);
+        if round == 10 || round == 11 { naming_next(block, &secret) } else { block }
+    };
+    let b9 = at(QC::genesis(), 9);
+    let b10 = at(qc_for(&b9), 10);
+    let b11 = at(qc_for(&b10), 11);
+
+    let (name, secret) = leader_keys(12);
+    let store_path = ".db_test_a_leader_that_entered_on_the_commit_proof_proposes_at_once";
+    let (tx_core, mut rx_proposer, _rx_commit) = core_with_epochs(name, secret, committee.clone(), store_path, 10);
+    for block in [b10, b11.clone()] {
+        tx_core.send(ConsensusMessage::Propose(block)).await.unwrap();
+    }
+    for (author, secret) in keys().into_iter().filter(|(key, _)| *key != name).take(3) {
+        let vote = Vote::new_from_key(b11.digest(), b11.round, author, &secret);
+        tx_core.send(ConsensusMessage::Vote(vote)).await.unwrap();
+    }
+    let proposal = async {
+        while let Some(message) = rx_proposer.recv().await {
+            if let ProposerMessage::Make { round: 12, committee, next_table, .. } = message {
+                return Some((committee.epoch, next_table));
+            }
+        }
+        None
+    };
+    let made = timeout(Duration::from_secs(2), proposal).await.expect("no proposal for round 12");
+    assert_eq!(made, Some((EPOCH + 1, Digest::default())));
 }
 
 #[tokio::test]
@@ -1308,8 +1365,9 @@ fn block_in(qc: QC, tc: Option<TC>, round: Round, epoch: EpochNumber) -> Block {
     let mut block = Block::new_from_key_with_tc(qc, tc, author, round, Vec::new(), &secret);
     block.epoch = epoch;
     block.table = table_at(epoch);
-    block.next_table = table_at(epoch + 1);
     block.start = if epoch == EPOCH { 0 } else { 10 }; // the handover fixtures: B10 is the terminal block
+    // The table chain: the next table is named from the end of the epoch on (epochs of 10 rounds).
+    block.next_table = if round >= block.start + 10 { table_at(epoch + 1) } else { Digest::default() };
     block.signature = Signature::new(&block.digest(), &secret);
     block
 }
@@ -1474,8 +1532,12 @@ async fn a_block_on_a_tc_of_the_old_epoch(tag: &str, faults: Faults) -> (Round, 
         let mut block = Block::new_from_key_with_tc(qc, tc, author, round, Vec::new(), &secret);
         block.epoch = epoch;
         block.table = if epoch == EPOCH { table_at(EPOCH) } else { table_digest(&next) };
-        block.next_table = if epoch == EPOCH { table_digest(&next) } else { table_at(EPOCH + 2) };
         block.start = if epoch == EPOCH { 0 } else { 10 };
+        block.next_table = match (round >= block.start + 10, epoch == EPOCH) {
+            (false, _) => Digest::default(), // before the end of the epoch
+            (true, true) => table_digest(&next),
+            (true, false) => table_at(EPOCH + 2),
+        };
         block.signature = Signature::new(&block.digest(), &secret);
         block
     };
@@ -1536,8 +1598,7 @@ async fn v3_a_block_carries_no_tc_older_than_its_qc() {
 
 #[tokio::test]
 async fn a_block_naming_another_next_table_gets_no_vote() {
-    // The table chain: a vote is also a signature on the digest of the next epoch's table, so a node votes only for a
-    // block that names its own.
+    // The table chain: before the end of its epoch a block names no next table, and one that names any gets no vote.
     let (leader, secret) = leader_keys(1);
     let mut block = Block::new_from_key(QC::genesis(), leader, 1, Vec::new(), &secret);
     let mut node = node_on(store_at(".db_test_a_block_naming_another_next_table"));
@@ -1548,6 +1609,37 @@ async fn a_block_naming_another_next_table_gets_no_vote() {
     let mut node = node_on(store_at(".db_test_a_block_naming_another_next_table_2"));
     assert!(matches!(node.handle_proposal(&block).await, Err(ConsensusError::MalformedBlock(_))));
     assert!(node.make_vote(&block).await.is_none());
+}
+
+#[tokio::test]
+async fn the_next_table_is_named_from_the_end_of_the_epoch_on() {
+    // The table chain (DESIGN.md §15.43), epochs of 10 rounds: B9 is before the end of the first epoch and names no
+    // next table; B10, its terminal block, names the table of the next epoch, and a vote for it is also a signature
+    // on that table's digest. A node votes for neither a B9 that names a table nor a B10 that names none or another.
+    // The outcome for the block of `round` naming `next_table`, on the chain B1.. of well-formed blocks before it:
+    // whether the node refuses it as malformed, and whether it votes for it.
+    let vote_for = |tag: &'static str, round: Round, next_table: Digest| async move {
+        let (mut node, mut rx_proposer) = node_with_epochs(store_at(&format!(".db_test_next_table_{}", tag)), Faults::default(), 10);
+        tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+        let mut qc = QC::genesis();
+        for earlier in 1..round {
+            let block = block_in(qc, None, earlier, EPOCH);
+            node.handle_proposal(&block).await.unwrap();
+            qc = qc_in(&block);
+        }
+        assert_eq!(node.last_voted_round, round - 1);
+        let mut block = block_in(qc, None, round, EPOCH);
+        block.next_table = next_table;
+        let (_, secret) = leader_in(EPOCH, round);
+        block.signature = Signature::new(&block.digest(), &secret);
+        let refused = matches!(node.handle_proposal(&block).await, Err(ConsensusError::MalformedBlock(_)));
+        (refused, node.last_voted_round == round)
+    };
+    assert_eq!(vote_for("9_none", 9, Digest::default()).await, (false, true));
+    assert_eq!(vote_for("9_named", 9, table_at(EPOCH + 1)).await, (true, false));
+    assert_eq!(vote_for("10_named", 10, table_at(EPOCH + 1)).await, (false, true));
+    assert_eq!(vote_for("10_none", 10, Digest::default()).await, (true, false));
+    assert_eq!(vote_for("10_other", 10, Digest([7; 32])).await, (true, false));
 }
 
 #[tokio::test]

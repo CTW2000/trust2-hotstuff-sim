@@ -143,7 +143,8 @@ impl Block {
             round,
             epoch: EPOCH,
             table: table(),
-            next_table: table_at(EPOCH + 1),
+            // Before the end of its epoch a block names no next table (the table chain, DESIGN.md §15.43).
+            next_table: Digest::default(),
             start: 0,
             payload,
             signature: Signature::default(),

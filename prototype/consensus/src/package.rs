@@ -6,9 +6,11 @@
 //! length alone -- no ledger, no replay, no state of any node.
 //!
 //! A package for a fork located in epoch e* holds
-//! * the table chain: for every epoch from the first to e*, a certified block of that epoch and the weight table of
-//!   the next one. A block names the tables of its own and of the next epoch (`Block::table`, `Block::next_table`),
-//!   so a QC under W_e certifies W_{e+1};
+//! * the table chain: for every epoch before e*, a certified block at or past the end of that epoch (its terminal
+//!   block, or one after it) and the weight table of the next one. Such a block names the tables of its own and of
+//!   the next epoch (`Block::table`, `Block::next_table`), so a QC under W_e certifies W_{e+1}; a block before the
+//!   end of its epoch names no next table (DESIGN.md §15.43). The same for e* itself if the fork is at the end of
+//!   it, where the commit proofs need W_{e*+1} too (H5);
 //! * two commit proofs, each made of blocks of epoch e*: X, its child X+ at the next view, and the QCs of both;
 //! * the headers of the ancestors of Y above the view of X, which show that X is not one of them;
 //! * the evidence: for each culprit a piece of E1-E4, made of the culprit's own signatures.
@@ -22,7 +24,7 @@ use crate::config::{Committee, EpochNumber, Parameters, Stake};
 use crate::consensus::Round;
 use crate::epoch::{EpochConfig, Epochs};
 use crate::forensics::{judge, read_records, replay_tables, witnesses, CommitProof, Finding, Records};
-use crate::messages::{table_digest, BlockHeader, Evidence, QC};
+use crate::messages::{table_digest, Block, BlockHeader, Evidence, QC};
 use crypto::{Digest, Hash as _, PublicKey};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -74,7 +76,7 @@ pub struct Commit {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Package {
-    /// The table chain, from the first epoch to the epoch of the fork.
+    /// The table chain, from the first epoch to the epoch of the fork (and one more link if the fork is at its end).
     pub links: Vec<Link>,
     /// The two commit proofs, the one of the lower view first.
     pub x: Commit,
@@ -199,6 +201,9 @@ pub fn verify(package: &Package, first: &Table, length: Round) -> Result<Verdict
         if link.header.epoch != current.epoch || next.epoch != current.epoch + 1 {
             return Err(format!("the table chain does not go from epoch {} to the next", current.epoch));
         }
+        if length == 0 || link.header.round < link.header.start.saturating_add(length) {
+            return Err(format!("table chain, epoch {}: the block is before the end of its epoch and names no next table", current.epoch));
+        }
         if link.header.next_table != table_digest(&next) {
             return Err(format!("the table given for epoch {} is not the one the certified block names", next.epoch));
         }
@@ -252,18 +257,36 @@ pub fn pack(
     let y_side = if a.digests().contains(&cx.x.digest()) { b } else { a };
     let finding = judge(&cx, &cy, y_side, tc_in_block);
 
+    let length = config.length;
     let tables = replay_tables(y_side, roster, config);
+    // W_{e+1} is named by the blocks of epoch e at or past its end: the terminal block and the ones after it.
+    let past_end = |block: &Block| length > 0 && block.round >= block.start.saturating_add(length);
     let mut links = Vec::new();
     for e in roster.epoch..=epoch {
-        let next = tables.get(&(e + 1)).ok_or_else(|| format!("the ledger does not give the table of epoch {}", e + 1))?;
-        // The first block of the epoch on the chain: it is before the end of the epoch.
-        let i = y_side
+        // The first certified block of the epoch on the chain that is past its end: the terminal block, as a rule.
+        let mut link = y_side
             .chain
             .iter()
-            .position(|block| block.epoch == e)
-            .ok_or_else(|| format!("no block of epoch {} in the records", e))?;
-        let qc = y_side.qc_of(i).ok_or_else(|| format!("the first block of epoch {} is not certified", e))?;
-        links.push(Link { header: y_side.chain[i].header(), qc: qc.clone(), next: Table::of(next) });
+            .enumerate()
+            .filter(|(_, block)| block.epoch == e && past_end(block))
+            .find_map(|(i, block)| y_side.qc_of(i).map(|qc| (block.header(), qc.clone())));
+        if link.is_none() && e == epoch {
+            // In the epoch of the fork, a block of one of the commit proofs may be the only one past the end.
+            link = [(&cx.x, &cx.x_plus.qc), (&cx.x_plus, &cx.qc_x_plus), (&cy.x, &cy.x_plus.qc), (&cy.x_plus, &cy.qc_x_plus)]
+                .iter()
+                .find(|(block, _)| past_end(block))
+                .map(|(block, qc)| (block.header(), (*qc).clone()));
+        }
+        match link {
+            Some((header, qc)) => {
+                let next =
+                    tables.get(&(e + 1)).ok_or_else(|| format!("the ledger does not give the table of epoch {}", e + 1))?;
+                links.push(Link { header, qc, next: Table::of(next) });
+            }
+            // The fork is before the end of its epoch: nothing in the package needs the table after it.
+            None if e == epoch => {}
+            None => return Err(format!("no certified block at or past the end of epoch {} in the records", e)),
+        }
     }
 
     let y = cy.x.digest();

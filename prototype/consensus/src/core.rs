@@ -353,6 +353,21 @@ impl Core {
         self.epochs.get(epoch + 1).map(table_digest)
     }
 
+    /// The table chain (DESIGN.md §15.43): what a block of `epoch` at `round` names as the next table, where
+    /// `start` is the start of that epoch the block states (`Block::start`, checked against ours where we know
+    /// ours). At or past the end of its epoch, s_e + L (the terminal block and the blocks after it), it names the
+    /// table of the next epoch, which every node has had since its ledger passed the terminal block of the epoch
+    /// before; `None` if we do not have it. Before the end it names none (the empty digest): the table of the next
+    /// epoch is computed only when the ledger reaches the terminal block of the epoch before, and a node that
+    /// entered the epoch on the commit proof alone (enter_on_proof) must be able to propose and vote without it.
+    fn names_next_table(&self, epoch: EpochNumber, start: Round, round: Round) -> Option<Digest> {
+        let length = self.epochs.length();
+        match length > 0 && round >= start.saturating_add(length) {
+            true => self.next_table(epoch),
+            false => Some(Digest::default()),
+        }
+    }
+
     /// G2: add a verified timeout to the accuser; a new accusation goes to the proposer.
     async fn accuse(&mut self, timeout: &Timeout, committee: &Committee) {
         if let Some(accusation) = self.accuser.add(timeout, committee) {
@@ -610,10 +625,10 @@ impl Core {
         if block.epoch != self.epochs.epoch() || block.epoch < self.signed_epoch {
             return None;
         }
-        // The table chain: we vote only for a block that names our table of the next epoch too. A node that entered
-        // this epoch before its ledger got there does not have that table yet, and does not vote until it does.
-        if self.next_table(block.epoch).map_or(true, |digest| digest != block.next_table)
-            || self.epochs.start_of(block.epoch) != Some(block.start)
+        // The table chain: at or past the end of the epoch we vote only for a block that names our table of the
+        // next epoch too; before the end, only for one that names none (names_next_table).
+        if self.epochs.start_of(block.epoch) != Some(block.start)
+            || self.names_next_table(block.epoch, block.start, block.round).map_or(true, |digest| digest != block.next_table)
         {
             return None;
         }
@@ -1013,9 +1028,10 @@ impl Core {
             return;
         }
         let committee = self.committee().clone();
-        // The table chain: the block names the next table too. Without it (we entered this epoch before our ledger
-        // got there) no block of ours could be voted for.
-        let next_table = match self.next_table(committee.epoch) {
+        // The table chain: at or past the end of the epoch the block names the next table too; before the end it
+        // names none, so we propose even if we entered this epoch before our ledger got there (names_next_table).
+        let start = self.epochs.start_of(committee.epoch).unwrap_or(0);
+        let next_table = match self.names_next_table(committee.epoch, start, self.round) {
             Some(digest) => digest,
             None => {
                 debug!("No proposal for round {}: the table of the next epoch is not known yet", self.round);
@@ -1040,7 +1056,7 @@ impl Core {
                 round: self.round,
                 qc,
                 tc,
-                start: self.epochs.start_of(committee.epoch).unwrap_or(0),
+                start,
                 committee,
                 next_table,
                 done: self.epochs.done(),
@@ -1353,10 +1369,11 @@ impl Core {
         // certificates against the tables of their epochs.
         block.verify(committee)?;
         ensure!(block.table == table_digest(committee), ConsensusError::MalformedBlock(digest.clone()));
-        // The table chain: a block that names another next table than ours is of another branch. (When we do not
-        // have that table yet the block is processed but gets no vote, make_vote.)
+        // The table chain: past the end of its epoch, a block that names another next table than ours is of another
+        // branch (when we do not have that table the block is processed but gets no vote, make_vote); before the
+        // end it names none.
         ensure!(
-            self.next_table(block.epoch).map_or(true, |next| next == block.next_table),
+            self.names_next_table(block.epoch, block.start, block.round).map_or(true, |next| next == block.next_table),
             ConsensusError::MalformedBlock(digest.clone())
         );
         // The start of its epoch on our chain (which certificates are past the end of the epoch, H5).

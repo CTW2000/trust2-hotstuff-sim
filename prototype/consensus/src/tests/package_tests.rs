@@ -27,8 +27,9 @@ fn block(qc: QC, tc: Option<TC>, round: Round, tag: u8) -> Block {
     let mut block = Block::new_from_key_with_tc(qc, tc, *author, round, vec![Digest([tag; 32])], secret);
     block.epoch = epoch_of(round);
     block.table = table_at(block.epoch);
-    block.next_table = table_at(block.epoch + 1);
     block.start = if block.epoch == EPOCH { 0 } else { LENGTH };
+    // The table chain: the next table is named from the end of the epoch on.
+    block.next_table = if round >= block.start + LENGTH { table_at(block.epoch + 1) } else { Digest::default() };
     block.signature = Signature::new(&block.digest(), secret);
     block
 }
@@ -90,11 +91,13 @@ fn same_view_fork() -> (Records, Records) {
 
 #[test]
 fn a_package_is_verified_from_the_first_table_alone() {
-    // The fork is in the second epoch. The package carries one link per epoch up to it, the two commit proofs and the
-    // double votes of members 0 and 1; the verifier is given the first table and the epoch length, and nothing else.
+    // The fork is in the second epoch, before its end. The package carries one link per epoch before it (the
+    // terminal block B10 of the first epoch, which names the second table), the two commit proofs and the double
+    // votes of members 0 and 1; the verifier is given the first table and the epoch length, and nothing else.
     let (a, b) = same_view_fork();
     let package = packed(&a, &b);
-    assert_eq!((package.links.len(), package.branch.len(), package.evidence.len()), (2, 0, 2));
+    assert_eq!((package.links.len(), package.branch.len(), package.evidence.len()), (1, 0, 2));
+    assert_eq!(package.links[0].header.round, 10);
 
     let bytes = bincode::serialize(&package).unwrap();
     let received: Package = bincode::deserialize(&bytes).unwrap();
@@ -159,8 +162,13 @@ fn a_tampered_package_is_refused() {
     // A link of the table chain is missing: the table of the fork's epoch is not certified.
     let mut short = package.clone();
     short.links.pop();
-    short.links.pop();
     assert!(refused(&short).contains("does not reach"));
+
+    // A link made of a block before the end of its epoch: such a block names no next table (DESIGN.md §15.43).
+    let mut early = package.clone();
+    early.links[0].header = a.chain[0].header();
+    early.links[0].qc = a.chain[1].qc.clone();
+    assert!(refused(&early).contains("before the end of its epoch"));
 
     // Another table than the one the certified block names.
     let mut other_table = package.clone();
@@ -278,8 +286,8 @@ fn fork_among(n: usize, epochs: u64) -> (Committee, EpochConfig, Records, Record
             let mut block = Block::new_from_key(qc, *author, round, vec![Digest([tag; 32])], secret);
             block.epoch = EPOCH + e as EpochNumber;
             block.table = table(block.epoch);
-            block.next_table = table(block.epoch + 1);
             block.start = e * L;
+            block.next_table = if round >= block.start + L { table(block.epoch + 1) } else { Digest::default() };
             block.signature = Signature::new(&block.digest(), secret);
             let digest = vote_digest(block.epoch, &block.digest(), block.round);
             let votes = signers.iter().map(|&i| (keys[i].0, Signature::new(&digest, &keys[i].1))).collect();
