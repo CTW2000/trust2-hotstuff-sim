@@ -235,6 +235,33 @@ async fn handle_proposal() {
 }
 
 #[tokio::test]
+async fn with_broadcast_votes_every_member_gets_the_vote() {
+    // The comparison switch of DESIGN.md §15.42: the vote goes to all members, not only to the next leader.
+    let committee = committee_with_base_port(18_700);
+    let block = chain(vec![leader_keys(1)]).pop().unwrap();
+    let (public_key, secret_key) = keys().pop().unwrap();
+    let vote = Vote::new_from_key(block.digest(), block.round, public_key, &secret_key);
+    let expected = Bytes::from(bincode::serialize(&ConsensusMessage::Vote(vote)).unwrap());
+
+    let store_path = ".db_test_with_broadcast_votes";
+    let _ = fs::remove_dir_all(store_path);
+    let faults = Faults { broadcast_votes: true, ..Faults::default() };
+    let (tx_core, _rx_proposer, _rx_commit) =
+        core_on_with(public_key, secret_key, committee.clone(), Store::new(store_path).unwrap(), 100, faults);
+
+    let handles: Vec<_> = committee
+        .broadcast_addresses(&public_key)
+        .into_iter()
+        .map(|(_, address)| listener(address, Some(expected.clone())))
+        .collect();
+    assert_eq!(handles.len(), 3);
+    tx_core.send(ConsensusMessage::Propose(block.clone())).await.unwrap();
+    for handle in handles {
+        assert!(handle.await.is_ok());
+    }
+}
+
+#[tokio::test]
 async fn generate_proposal() {
     // Get the keys of the leaders of this round and the next.
     let (leader, leader_key) = leader_keys(1);

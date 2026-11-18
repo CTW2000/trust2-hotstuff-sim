@@ -119,6 +119,10 @@ pub struct Parameters {
     /// Experiment switch (DESIGN.md §15.33, ablation): the safety state is written without a sync, as before.
     #[serde(default)]
     pub no_sync: bool,
+    /// Experiment switch (DESIGN.md §15.42): every vote goes to all members, not only to the next leader, as in
+    /// aptos-core by default; any member that collects a quorum of votes assembles the QC.
+    #[serde(default)]
+    pub broadcast_votes: bool,
     /// Experiment switch (DESIGN.md §15.33): the store loses what was not synced when the process is killed, as a
     /// machine does when it loses power (`Store::new_lossy`).
     #[serde(default)]
@@ -179,6 +183,7 @@ impl Default for Parameters {
             no_h2: false,
             no_h5: false,
             no_sync: false,
+            broadcast_votes: false,
             lossy_store: false,
         }
     }
