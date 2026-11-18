@@ -1,5 +1,7 @@
-"""The two ways of sending votes, side by side (DESIGN.md 15.42): the runs of probe47.py, where votes go to the next
-leader only (as cmpg) or to every member (as cmpb, the default of aptos-core), alternating inside each repetition.
+"""Two arms of a comparison of leader rules, side by side. By default the two ways of sending votes (DESIGN.md
+15.42): the runs of probe47.py, where votes go to the next leader only (as cmpg) or to every member (as cmpb, the
+default of aptos-core), alternating inside each repetition. With a column and two names, any other switch: for
+probe48.py (DESIGN.md 15.44), votes to all members without and with the QC forwarded to the next leader.
 
 Prints the table and the comparisons of cmpgstat.py for each arm, then, cell by cell, what the broadcast changes:
 performance (timeouts, rounds per second, end-to-end latency) and what each rule did to honest leaders. For each:
@@ -7,6 +9,7 @@ the medians of both arms, the exact two-sided rank-sum test and the relative dif
 bootstrap 95% interval; the performance is also pooled over the rules of a scenario (the rules weigh equally and the
 permutation test shuffles within a rule). Standard library only.
 Run from prototype/benchmark/:  python3 votestat.py [results-probe47/cmp_votes.csv]
+                                python3 votestat.py results-probe48/cmp_forward.csv forward_qc broadcast forward
 """
 import csv
 import os
@@ -18,7 +21,6 @@ from statistics import median
 import cmpgstat as C
 import stats_a4 as A
 
-ARMS = (("False", "next leader"), ("True", "broadcast"))
 RULES = ("none", "aptos", "failed", "trust2")
 
 
@@ -38,24 +40,26 @@ def harm(scenario, rule, rows):
     return []
 
 
-def versus(label, a, b, rnd, d=1):
+def versus(label, a, b, rnd, names, d=1):
     """One line: medians of both arms, rank-sum p, relative difference (when the reference median is not 0)."""
     if not a or not b:
         return f"  - {label}: -"
+    off, on = names
     p = C.ranksum_p(a, b) if len(a) + len(b) <= 20 else float("nan")
-    line = f"  - {label}: next {C.mr(a, d)} / broadcast {C.mr(b, d)}, p={p:.3f}"
+    line = f"  - {label}: {off} {C.mr(a, d)} / {on} {C.mr(b, d)}, p={p:.3f}"
     if median(a) > 0:
         try:
             lo, hi = A.boot([(b, a)], rnd)
-            line += f", broadcast {100 * A.rel(b, a):+.1f}% [{100 * lo:+.1f}%, {100 * hi:+.1f}%]"
+            line += f", {on} {100 * A.rel(b, a):+.1f}% [{100 * lo:+.1f}%, {100 * hi:+.1f}%]"
         except ZeroDivisionError:
-            line += f", broadcast {100 * A.rel(b, a):+.1f}%"
+            line += f", {on} {100 * A.rel(b, a):+.1f}%"
     return line
 
 
-def main(path):
+def main(path, column="broadcast_votes", names=("next leader", "broadcast")):
     rows = list(csv.DictReader(open(path)))
-    arm = {flag: [r for r in rows if r["broadcast_votes"] == flag] for flag, _ in ARMS}
+    ARMS = (("False", names[0]), ("True", names[1]))
+    arm = {flag: [r for r in rows if r[column] == flag] for flag, _ in ARMS}
     for flag, name in ARMS:
         with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, newline="") as fh:
             w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
@@ -65,9 +69,11 @@ def main(path):
         C.main(fh.name)
         os.unlink(fh.name)
         print()
-    print("# Broadcast against next leader, cell by cell\n")
+    print(f"# {names[1]} against {names[0]}, cell by cell\n")
     rnd = random.Random(7)
     for sc in C.FAULTY:
+        if not any(r["scenario"] == sc for r in rows):
+            continue
         print(f"## {sc}\n")
         for rule in RULES:
             a = [r for r in arm["False"] if r["scenario"] == sc and r["leader_rule"] == rule]
@@ -76,10 +82,10 @@ def main(path):
                 continue
             print(f"- {rule} ({len(a)} v {len(b)} runs)")
             for key, d in (("timeouts", 0), ("rounds_per_s", 1), ("e2e_latency_ms", 0)):
-                print(versus(key, C.col(a, key), C.col(b, key), rnd, d))
+                print(versus(key, C.col(a, key), C.col(b, key), rnd, names, d))
             for (label, x), (_, y) in zip(harm(sc, rule, a), harm(sc, rule, b)):
-                print(versus(label, x, y, rnd, 2))
-        print(f"\n- pooled over the rules of {sc} (broadcast against next leader; bootstrap 95%, permutation test "
+                print(versus(label, x, y, rnd, names, 2))
+        print(f"\n- pooled over the rules of {sc} ({names[1]} against {names[0]}; bootstrap 95%, permutation test "
               "within a rule):")
         for key in ("timeouts", "rounds_per_s", "e2e_latency_ms"):
             batches = []
@@ -94,4 +100,7 @@ def main(path):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "results-probe47/cmp_votes.csv")
+    if len(sys.argv) > 4:
+        main(sys.argv[1], sys.argv[2], (sys.argv[3], sys.argv[4]))
+    else:
+        main(sys.argv[1] if len(sys.argv) > 1 else "results-probe47/cmp_votes.csv")

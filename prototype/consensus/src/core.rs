@@ -127,6 +127,11 @@ pub struct Faults {
     /// Comparison (§15.42): send every vote to all members, not only to the next leader. Every member then counts
     /// the votes and can assemble the QC, so a block stays certified when the next leader is slow or silent.
     pub broadcast_votes: bool,
+    /// With `broadcast_votes` (§15.44): a member that assembles the QC of a round sends it to the leader of the next
+    /// round, and that leader proposes on the first one it gets. Without it, a leader that the votes reach late
+    /// stays in the round before while the members that did assemble the QC wait for its block, time out with
+    /// NR = 1, and so accuse it.
+    pub forward_qc: bool,
 }
 
 /// Experiment switch (DESIGN.md §15.27): with `Faults::frame`, frame only in the rounds these members lead (set once
@@ -909,9 +914,35 @@ impl Core {
             self.process_qc(&qc).await;
 
             // Make a new block if we are the next leader.
-            if self.name == leader(self.committee(), self.round) {
+            let next_leader = leader(self.committee(), self.round);
+            if self.name == next_leader {
                 self.propose(None).await;
+            } else if self.faults.forward_qc && !self.faults.frame {
+                // §15.44: the next leader may not have gathered these votes in time. (A framer does not help it.)
+                debug!("Forwarding {:?} to {}", qc, next_leader);
+                let address = self.committee().address(&next_leader);
+                if let Some(address) = address {
+                    let message = bincode::serialize(&ConsensusMessage::QC(qc)).expect("Failed to serialize QC");
+                    self.network.send(address, Bytes::from(message)).await;
+                }
             }
+        }
+        Ok(())
+    }
+
+    /// Experiment switch `Faults::forward_qc` (DESIGN.md §15.44): the QC of a round, assembled by another member from
+    /// the votes sent to all. It moves us to the next round as our own would, and we propose if we lead that round.
+    /// A QC of a round we have left is dropped unverified, so we propose at most once on forwarded QCs of a round;
+    /// the message is not signed by its sender, and a forged one costs us what a forged TC does.
+    async fn handle_qc(&mut self, qc: &QC) -> ConsensusResult<()> {
+        if !self.faults.forward_qc || qc.round < self.round {
+            return Ok(());
+        }
+        self.verify_qc(qc)?;
+        debug!("Processing forwarded {:?}", qc);
+        self.process_qc(qc).await;
+        if self.name == leader(self.committee(), self.round) {
+            self.propose(None).await;
         }
         Ok(())
     }
@@ -1551,6 +1582,7 @@ impl Core {
             ConsensusMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
             ConsensusMessage::TC(tc) => self.handle_tc(tc).await,
             ConsensusMessage::Attest(attestation) => self.handle_attestation(attestation).await,
+            ConsensusMessage::QC(qc) => self.handle_qc(&qc).await,
             _ => panic!("Unexpected protocol message"),
         }
     }
@@ -1602,6 +1634,7 @@ fn epoch_of(message: &ConsensusMessage) -> u128 {
         ConsensusMessage::Timeout(timeout) => timeout.epoch,
         ConsensusMessage::TC(tc) => tc.epoch,
         ConsensusMessage::Attest(attestation) => attestation.epoch,
+        ConsensusMessage::QC(qc) => qc.epoch,
         ConsensusMessage::SyncRequest(..) | ConsensusMessage::Otx(..) => 0,
     }
 }
@@ -1652,6 +1685,7 @@ fn round_of(message: &ConsensusMessage) -> Option<Round> {
         ConsensusMessage::Timeout(timeout) => Some(timeout.round),
         ConsensusMessage::TC(tc) => Some(tc.round),
         ConsensusMessage::Attest(attestation) => Some(attestation.round),
+        ConsensusMessage::QC(qc) => Some(qc.round),
         ConsensusMessage::SyncRequest(..) | ConsensusMessage::Otx(..) => None,
     }
 }

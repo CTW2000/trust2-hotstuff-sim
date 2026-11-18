@@ -56,6 +56,8 @@ def node_parameters(args):
         consensus["no_h5"] = True
     if getattr(args, "broadcast_votes", False):              # votes to all members (§15.42)
         consensus["broadcast_votes"] = True
+    if getattr(args, "forward_qc", False):                   # with them, the QC goes to the next leader (§15.44)
+        consensus["forward_qc"] = True
     if getattr(args, "target_names", None):                  # targeted framing: whom the colluders frame (§15.27)
         consensus["frame_targets"] = args.target_names
     return {
@@ -355,6 +357,9 @@ def main():
                          "next table")
     ap.add_argument("--broadcast-votes", action="store_true",
                     help="send every vote to all members, as aptos-core does by default (DESIGN.md §15.42)")
+    ap.add_argument("--forward-qc", action="store_true",
+                    help="with --broadcast-votes: a member that assembles a QC sends it to the next leader "
+                         "(DESIGN.md §15.44)")
     ap.add_argument("--lossy-store", action="store_true",
                     help="a killed node loses what it had not synced, as after a loss of power (DESIGN.md §15.33)")
     ap.add_argument("--g2-no-reputation", action="store_true",

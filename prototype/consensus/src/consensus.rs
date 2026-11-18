@@ -5,7 +5,7 @@ use crate::error::ConsensusError;
 use crate::helper::Helper;
 use crate::mempool::MempoolDriver;
 use crate::inclusion::Inclusion;
-use crate::messages::{Attestation, Block, Otx, Timeout, Vote, TC};
+use crate::messages::{Attestation, Block, Otx, Timeout, Vote, QC, TC};
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
@@ -41,6 +41,9 @@ pub enum ConsensusMessage {
     /// G2 inclusion attestations (DESIGN.md §12.4).
     Otx(Otx),
     Attest(Attestation),
+    /// Experiment switch (DESIGN.md §15.44): with votes to all members, the QC a member assembled, sent to the
+    /// leader of the next round.
+    QC(QC),
 }
 
 pub struct Consensus;
@@ -120,6 +123,7 @@ impl Consensus {
                 no_h2: parameters.no_h2,
                 no_h5: parameters.no_h5,
                 broadcast_votes: parameters.broadcast_votes,
+                forward_qc: parameters.forward_qc,
             },
             signature_service.clone(),
             store.clone(),

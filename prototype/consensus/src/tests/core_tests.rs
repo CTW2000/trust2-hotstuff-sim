@@ -261,6 +261,101 @@ async fn with_broadcast_votes_every_member_gets_the_vote() {
     }
 }
 
+/// A QC of `block` by the first `signers` members of the fixture committee other than `but` (three make a quorum).
+/// The node under test does not sign: it times out while a test waits, and its vote for a round next to its NR = 1
+/// timeout of that round would be evidence against it.
+fn certificate(block: &Block, but: &PublicKey, signers: usize) -> QC {
+    let votes = keys()
+        .iter()
+        .filter(|(name, _)| name != but)
+        .take(signers)
+        .map(|(name, secret)| (*name, Vote::new_from_key(block.digest(), block.round, *name, secret).signature))
+        .collect();
+    QC { hash: block.digest(), round: block.round, epoch: EPOCH, votes }
+}
+
+#[tokio::test]
+async fn with_forward_qc_a_member_sends_the_qc_it_assembled_to_the_next_leader() {
+    // DESIGN.md §15.44: with votes to all members, one that assembles the QC of round 1 and does not lead round 2
+    // sends the QC to the leader of round 2, which may not have gathered the votes itself.
+    let committee = committee_with_base_port(18_900);
+    let block = chain(vec![leader_keys(1)]).pop().unwrap();
+    let (leader, _) = leader_keys(1);
+    let (next_leader, _) = leader_keys(2);
+    let (name, secret) = keys().into_iter().find(|(name, _)| *name != leader && *name != next_leader).unwrap();
+
+    let mut forwarded = frames(committee.address(&next_leader).unwrap(), 1);
+    sleep(Duration::from_millis(50)).await;
+
+    let store_path = ".db_test_with_forward_qc_a_member_sends_the_qc";
+    let _ = fs::remove_dir_all(store_path);
+    let faults = Faults { broadcast_votes: true, forward_qc: true, ..Faults::default() };
+    let (tx_core, _rx_proposer, _rx_commit) =
+        core_on_with(name, secret, committee.clone(), Store::new(store_path).unwrap(), 100, faults);
+    for (author, key) in keys() {
+        let vote = Vote::new_from_key(block.digest(), block.round, author, &key);
+        tx_core.send(ConsensusMessage::Vote(vote)).await.unwrap();
+    }
+
+    let frame = timeout(Duration::from_secs(5), forwarded.recv()).await.expect("no QC for the next leader").unwrap();
+    match bincode::deserialize(&frame).unwrap() {
+        ConsensusMessage::QC(qc) => {
+            assert_eq!(qc.hash, block.digest());
+            assert_eq!(qc.round, 1);
+            assert!(qc.verify(&committee).is_ok());
+        }
+        _ => panic!("Unexpected protocol message"),
+    }
+}
+
+#[tokio::test]
+async fn with_forward_qc_the_leader_proposes_on_a_forwarded_qc_once() {
+    // DESIGN.md §15.44: no vote of round 1 reached the leader of round 2, but another member sends it the QC.
+    let (leader, leader_key) = leader_keys(1);
+    let (next_leader, next_leader_key) = leader_keys(2);
+    let block = Block::new_from_key(QC::genesis(), leader, 1, Vec::new(), &leader_key);
+
+    let store_path = ".db_test_with_forward_qc_the_leader_proposes";
+    let _ = fs::remove_dir_all(store_path);
+    let faults = Faults { broadcast_votes: true, forward_qc: true, ..Faults::default() };
+    let (tx_core, mut rx_proposer, _rx_commit) =
+        core_on_with(next_leader, next_leader_key, committee(), Store::new(store_path).unwrap(), 100, faults);
+
+    // A certificate without a quorum moves nothing.
+    tx_core.send(ConsensusMessage::QC(certificate(&block, &next_leader, 2))).await.unwrap();
+    assert!(timeout(Duration::from_millis(300), rx_proposer.recv()).await.is_err());
+
+    // The QC moves the leader to round 2, and it proposes on it.
+    let qc = certificate(&block, &next_leader, 3);
+    tx_core.send(ConsensusMessage::QC(qc.clone())).await.unwrap();
+    let made = timeout(Duration::from_secs(5), rx_proposer.recv()).await.expect("no proposal on the forwarded QC");
+    match made.unwrap() {
+        ProposerMessage::Make { round, qc: high_qc, tc, .. } => {
+            assert_eq!(round, 2);
+            assert_eq!(high_qc, qc);
+            assert!(tc.is_none());
+        }
+        _ => panic!("Unexpected protocol message"),
+    }
+
+    // The QC that another member sends after it is of a round the leader has left: no second proposal.
+    tx_core.send(ConsensusMessage::QC(qc)).await.unwrap();
+    assert!(timeout(Duration::from_millis(300), rx_proposer.recv()).await.is_err());
+}
+
+#[tokio::test]
+async fn without_forward_qc_a_forwarded_qc_is_ignored() {
+    // The switch is off by default: the message changes nothing.
+    let (leader, leader_key) = leader_keys(1);
+    let (next_leader, next_leader_key) = leader_keys(2);
+    let block = Block::new_from_key(QC::genesis(), leader, 1, Vec::new(), &leader_key);
+
+    let store_path = ".db_test_without_forward_qc";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(next_leader, next_leader_key, committee(), store_path);
+    tx_core.send(ConsensusMessage::QC(certificate(&block, &next_leader, 3))).await.unwrap();
+    assert!(timeout(Duration::from_millis(300), rx_proposer.recv()).await.is_err());
+}
+
 #[tokio::test]
 async fn generate_proposal() {
     // Get the keys of the leaders of this round and the next.

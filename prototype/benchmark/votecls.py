@@ -4,6 +4,8 @@ that leader still sit in the round before (it timed out there: it had not gather
 did it make no block for the round, did its block come late, or was the block in time. Also the rounds in which some
 node timed out, to compare how often the two arms stall. Reads the tarballs; standard library only.
 Run from prototype/benchmark/:  python3 votecls.py results-probe47/cmp_votes_logs/*-trust2-*.tgz
+The arm is in the name of the tarball: next (votes to the next leader), all (to all members), fwd (to all members,
+and the QC forwarded to the next leader, probe48.py).
 """
 import os
 import re
@@ -72,7 +74,7 @@ def main(paths):
     print("| run | rounds with a timeout | " + " | ".join(KINDS) + " |")
     print("|---|---|" + "---|" * len(KINDS))
     for path in sorted(paths):
-        m = re.match(r"(.+)-trust2-(all|next)-(\d+)\.tgz$", os.path.basename(path))
+        m = re.match(r"(.+)-trust2-(all|next|fwd)-(\d+)\.tgz$", os.path.basename(path))
         if not m:
             continue
         kinds, stalled = classify(path)

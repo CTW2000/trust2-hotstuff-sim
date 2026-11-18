@@ -82,6 +82,8 @@ def main(path):
     print("\n## Against Trust 2.0 (exact two-sided rank-sum test; relative difference of medians, bootstrap 95%)\n")
     rnd = random.Random(7)
     for sc in FAULTY:
+        if (sc, "trust2") not in cell:      # a batch with fewer scenarios (probe48.py)
+            continue
         ref = cell[(sc, "trust2")]
         for rule in ("none", "aptos", "failed", "trust2@1e4"):
             g = cell.get((sc, rule))
