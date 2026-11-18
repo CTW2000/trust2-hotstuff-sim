@@ -1,0 +1,6 @@
+scenario,build,nodes,net,epoch_length,rep,faults,consensus_tps,consensus_latency_ms,e2e_tps,e2e_latency_ms,timeouts,client_misses,timeout_rounds,top_round,rounds_per_s,epochs,lag_median_ms,lag_max_ms,accusations_faulty,g2_excluded_faulty,min_r_faulty,honest_cut,faulty_share_end,accusations_honest
+silent,trust2,31,base,25,1,3,9883,301,9877,683,18,0,25,650,6.5,26,67,71,14,3,900000,0,0.0888,
+silent,trust2,31,base,25,2,3,10126,281,10087,571,15,0,22,674,6.7,27,67,76,11,3,900000,0,0.0893,
+silent,trust2,31,base,25,3,3,10060,397,9831,871,27,0,36,548,5.5,22,68,71,19,3,900000,0,0.0879,
+silent,trust2,31,base,25,4,3,9515,320,9500,805,25,0,34,567,5.7,23,67,1107,17,3,900000,0,0.0881,1
+silent,trust2,31,base,25,5,3,10343,324,9905,778,23,4,29,607,6.1,25,67,71,16,3,900000,0,0.0885,

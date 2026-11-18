@@ -720,6 +720,16 @@ def h5live():
                                    no_h5=no_h5, **faults), duration, keep_logs=f"{name}_{'off' if no_h5 else 'on'}_{rep}")
 
 
+def is_number(value):
+    if value in (None, ""):
+        return True
+    try:
+        float(value)
+        return True
+    except ValueError:
+        return False
+
+
 def report():
     for path in sorted(glob(f"{OUT}/*.csv")):
         with open(path) as fh:
@@ -733,6 +743,8 @@ def report():
                                                    "silent", "leader_rule", "g2_threshold",
                                                    "aptos_failure_percent", "g2_no_reputation", "fault",
                                                    "fault_nodes", "fault_at", "fault_for")]
+        # A column of switches or names (no_sync, no_h5, workload, ...) is part of the cell, not a metric.
+        metrics = [k for k in metrics if k == "rep" or all(is_number(r.get(k)) for r in rows)]
         keys = [k for k in rows[0] if k not in metrics and k != "rep"]
         groups = defaultdict(list)
         for r in rows:
