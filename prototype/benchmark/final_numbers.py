@@ -163,6 +163,9 @@ def main():
     section("§6.4 Leader rules (cmpgstat.py)")
     script("cmpgstat.py", os.path.join(OUT, "cmpg.csv"))
 
+    section("§6.4 Leader rules with votes to all members (cmpgstat.py on cmpb.csv)")
+    script("cmpgstat.py", os.path.join(OUT, "cmpb.csv"))
+
     section("§6.5 Forks within one epoch")
     forks("fork.jsonl", False)
     section("§6.5 Forks across epochs, with evidence packages")

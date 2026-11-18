@@ -28,7 +28,12 @@ log "commit ${TTRU_COMMIT:-unknown}"
 # 1. Message sizes and verification times; size and verification time of an evidence package (n = 100, 25 epochs).
 if want unit; then
   log "start: unit-test measurements"
-  (cd .. && cargo test -p consensus --release overhead -- --ignored --nocapture) > $TTRU_OUT/x1_overhead.txt 2>&1
+  # Both builds, alternating, three times each: the table of the paper gives the medians.
+  (cd ../baseline && cargo test -p consensus --release --no-run) >> $TTRU_OUT/run.log 2>&1
+  for i in 1 2 3; do
+    (cd .. && cargo test -p consensus --release overhead -- --ignored --nocapture) > $TTRU_OUT/x1_overhead_trust2_$i.txt 2>&1
+    (cd ../baseline && cargo test -p consensus --release overhead -- --ignored --nocapture) > $TTRU_OUT/x1_overhead_baseline_$i.txt 2>&1
+  done
   (cd .. && cargo test -p consensus --release package_cost -- --ignored --nocapture) > $TTRU_OUT/package_cost.txt 2>&1
   log "end:   unit-test measurements"
 fi
@@ -51,12 +56,14 @@ if want cost; then
 fi
 
 # 4. Faults and framing: late messages, silent leaders (both builds), the weighted path, entity binding, long
-#    framing, censorship; where the cost under late messages comes from; the leader rules; the B_rep = 0 ablation.
+#    framing, censorship; where the cost under late messages comes from; the leader rules, with votes to the next
+#    leader and with votes to all (DESIGN.md §15.42); the B_rep = 0 ablation.
 if want faults; then
   step p5 f25
   step p5 silent2
   step p5 lc
   step p5 cmpg
+  step p5 cmpb
   step p5 a3
 fi
 

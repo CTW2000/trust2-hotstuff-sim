@@ -15,7 +15,8 @@ import time
 OUT = os.path.join(os.environ.get("TTRU_OUT", "results-p5"), "r7_cpu.csv")
 # (nodes, input rate): the highest rate of r7_xt without timeouts and the rates past the knee.
 CELLS = [(4, 200_000), (4, 350_000), (4, 400_000), (10, 100_000), (10, 150_000), (10, 175_000),
-         (31, 40_000), (31, 50_000), (31, 60_000), (31, 70_000)]
+         (31, 40_000), (31, 50_000), (31, 60_000), (31, 70_000),
+         (100, 2_000)]      # the largest committee of the scale batch: is the quota far from its limit there?
 WARMUP, DURATION, SKIP, WINDOW = 10, 30, 5, 20
 
 
