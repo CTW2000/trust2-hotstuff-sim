@@ -124,7 +124,9 @@ class LogParser:
         tmp = findall(r'Batch ([^ ]+) contains sample tx (\d+)', log)
         samples = {int(s): d for d, s in tmp}
 
-        tmp = findall(r'\[([^ ]*Z) WARN .* Timeout', log)
+        # \S, not [^ ]: the latter crosses line ends, and a trace line that ends in "[]}" right before a timeout
+        # (AptosEvent with no voters, DESIGN.md 15.42) then gives a time stamp that is not one.
+        tmp = findall(r'\[(\S*Z) WARN .* Timeout', log)
         timeouts = [self._to_posix(t) for t in tmp]
 
         configs = {

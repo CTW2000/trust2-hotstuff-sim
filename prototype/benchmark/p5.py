@@ -123,8 +123,9 @@ def otx_stats(logs):
     return res
 
 
-def run(experiment, config, duration, keep_logs=None, extra=None):
-    """One run_local.py run; keep_logs names a tarball of the run's logs under results-p5/<experiment>_logs/."""
+def run(experiment, config, duration, keep_logs=None, extra=None, parse_only=False):
+    """One run_local.py run; keep_logs names a tarball of the run's logs under results-p5/<experiment>_logs/.
+    parse_only records the run whose logs are in logs/ without running it again (after a failure of the parser)."""
     args = ["python3", "run_local.py", "--rate", str(config.get("rate", RATE)), "--warmup", str(WARMUP),
             "--duration", str(duration)]
     for key, value in config.items():
@@ -136,10 +137,11 @@ def run(experiment, config, duration, keep_logs=None, extra=None):
         elif value not in (False, None, 0, "0") or key == "epoch_length":   # epoch length 0: a single epoch
             args += [flag, str(value)]
     print(" ".join(args[2:]), flush=True)
-    done = subprocess.run(args, capture_output=True, text=True, timeout=duration + WARMUP + 600)
-    if done.returncode != 0:
-        print(done.stdout[-2000:], done.stderr[-2000:], flush=True)
-        return None
+    if not parse_only:
+        done = subprocess.run(args, capture_output=True, text=True, timeout=duration + WARMUP + 600)
+        if done.returncode != 0:
+            print(done.stdout[-2000:], done.stderr[-2000:], flush=True)
+            return None
     faults = int(config.get("faults", 0))
     parser = LogParser.process("logs", faults=faults, warmup=WARMUP)
     tps, _, _ = parser._consensus_throughput()
