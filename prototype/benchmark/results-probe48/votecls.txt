@@ -1,0 +1,29 @@
+| run | rounds with a timeout | leader in the round before | leader made no block | leader's block late | leader's block in time |
+|---|---|---|---|---|---|
+| framers+late all 1 | 197 | 38 | 0 | 0 | 0 |
+| framers+late all 2 | 194 | 38 | 0 | 0 | 0 |
+| framers+late all 3 | 197 | 41 | 1 | 0 | 0 |
+| framers+late all 4 | 192 | 42 | 1 | 0 | 0 |
+| framers+late all 5 | 200 | 39 | 1 | 0 | 0 |
+| framers+late fwd 1 | 174 | 0 | 0 | 0 | 0 |
+| framers+late fwd 2 | 163 | 0 | 0 | 1 | 0 |
+| framers+late fwd 3 | 159 | 0 | 1 | 0 | 0 |
+| framers+late fwd 4 | 166 | 0 | 0 | 1 | 0 |
+| framers+late fwd 5 | 143 | 0 | 0 | 0 | 0 |
+| late all 1 | 61 | 27 | 1 | 0 | 0 |
+| late all 2 | 60 | 25 | 1 | 2 | 0 |
+| late all 3 | 68 | 29 | 1 | 1 | 0 |
+| late all 4 | 60 | 26 | 0 | 1 | 0 |
+| late all 5 | 46 | 20 | 0 | 0 | 0 |
+| late fwd 1 | 21 | 0 | 2 | 4 | 0 |
+| late fwd 2 | 22 | 0 | 2 | 4 | 0 |
+| late fwd 3 | 20 | 1 | 4 | 2 | 0 |
+| late fwd 4 | 25 | 0 | 1 | 8 | 0 |
+| late fwd 5 | 16 | 0 | 1 | 4 | 0 |
+
+| scenario | votes to | runs | rounds with a timeout | accusations of honest leaders | leader in the round before | leader made no block | leader's block late | leader's block in time |
+|---|---|---|---|---|---|---|---|---|
+| framers+late | all | 5 | 980 | 201 | 198 | 3 | 0 | 0 |
+| framers+late | fwd | 5 | 805 | 3 | 0 | 1 | 2 | 0 |
+| late | all | 5 | 295 | 134 | 127 | 3 | 4 | 0 |
+| late | fwd | 5 | 104 | 33 | 1 | 10 | 22 | 0 |
