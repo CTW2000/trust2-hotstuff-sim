@@ -1,0 +1,16 @@
+scenario,build,nodes,net,epoch_length,rep,leader_rule,g2_threshold,broadcast_votes,forward_qc,consensus_tps,consensus_latency_ms,e2e_tps,e2e_latency_ms,timeouts,client_misses,timeout_rounds,top_round,rounds_per_s,epochs,lag_median_ms,lag_max_ms,honest_cut,cores,throttled_pct,lo_mb_s
+none,trust2,100,base,25,1,trust2,0,False,False,1997,228,1992,340,0,0,0,455,9.1,19,76,86,0,4.21,0.0,113.3
+none,trust2,100,base,25,1,trust2,0,True,False,1997,218,1993,333,0,0,0,437,8.7,18,37,51,0,10.51,15.0,136.3
+none,trust2,100,base,25,1,trust2,0,True,True,1998,218,1995,334,0,0,0,438,8.8,18,38,47,0,10.71,15.5,143.5
+none,trust2,100,base,25,2,trust2,0,False,False,2001,223,2000,332,0,0,0,458,9.2,19,76,87,0,4.28,0.0,113.5
+none,trust2,100,base,25,2,trust2,0,True,False,2003,220,1998,337,0,0,0,434,8.7,18,38,45,0,10.36,10.5,136.1
+none,trust2,100,base,25,2,trust2,0,True,True,2001,220,1990,337,0,0,0,433,8.7,18,33,55,0,10.5,13.0,142.9
+none,trust2,100,base,25,3,trust2,0,False,False,1994,225,1990,335,0,0,0,463,9.3,19,81,87,0,4.22,0.0,113.4
+none,trust2,100,base,25,3,trust2,0,True,False,2000,219,2000,335,0,0,0,436,8.7,18,41,52,0,10.45,14.0,136.2
+none,trust2,100,base,25,3,trust2,0,True,True,2002,218,1995,333,0,0,0,439,8.8,18,38,45,0,10.75,20.5,143.9
+none,trust2,100,base,25,4,trust2,0,False,False,1996,228,1995,338,0,0,0,455,9.1,19,76,82,0,4.21,0.0,113.3
+none,trust2,100,base,25,4,trust2,0,True,False,1996,219,1993,336,0,0,0,440,8.8,18,39,57,0,10.43,12.5,136.2
+none,trust2,100,base,25,4,trust2,0,True,True,2000,219,1996,335,0,0,0,438,8.8,18,39,51,0,10.58,17.0,143.1
+none,trust2,100,base,25,5,trust2,0,False,False,1997,228,1994,340,0,0,0,459,9.2,19,75,87,0,4.19,0.0,113.2
+none,trust2,100,base,25,5,trust2,0,True,False,1995,219,1990,335,0,0,0,436,8.7,18,36,47,0,10.56,16.5,136.5
+none,trust2,100,base,25,5,trust2,0,True,True,2002,216,1999,332,0,0,0,441,8.8,18,40,57,0,10.69,19.5,143.4
