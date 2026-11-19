@@ -1,9 +1,11 @@
-"""The threshold of the leader rule, 10^2 against 10^4, on both sides of the trade (DESIGN.md 15.45): the runs of
-probe51.py (lateness by sender, threshold 10^2) and probe52.py (the same at 10^4; three silent leaders at both).
+"""The threshold of the leader rule, from 10^2 to 10^4, on both sides of the trade (DESIGN.md 15.45): the runs of
+probe51.py (lateness by sender, threshold 10^2), probe52.py (the same at 10^4; three silent leaders at both) and
+probe53.py (300 and 10^3 on both sides, with 10^2 again for the silent leaders).
 - Lateness by sender, per share and threshold: honest leads, AT per thousand leads, honest leaders convicted, leads
   per conviction, the highest CUSUM against the threshold, the voting weight cut from honest members at the end.
-- Silent leaders, per threshold: timeouts, rounds per second, latencies, accusations and exclusions of the silent
-  nodes; then 10^4 against 10^2 (exact rank-sum test, relative difference of the medians, bootstrap 95%).
+- Silent leaders, per batch and threshold: timeouts, rounds per second, latencies, accusations and exclusions of the
+  silent nodes; each threshold against the 10^2 of its own batch (exact rank-sum test, relative difference of the
+  medians, bootstrap 95%).
 With tarballs of kept logs as further arguments: when each exclusion of a run happened (round, seconds from the
 first block), from node 0's log. Standard library only.
 Run from prototype/benchmark/:  python3 thrstat.py [results-probe52/threshold_logs/silent-*.tgz]
@@ -20,7 +22,9 @@ from statistics import median
 import cmpgstat as C
 import stats_a4 as A
 
-LN = {"0": ("10^2", 4_605_170), "9210340": ("10^4", 9_210_340)}
+LN = {"0": ("10^2", 4_605_170), "5703782": ("300", 5_703_782), "6907755": ("10^3", 6_907_755),
+      "9210340": ("10^4", 9_210_340)}
+BATCHES = ("results-probe51/slots_rate.csv", "results-probe52/threshold.csv", "results-probe53/threshold.csv")
 
 
 def num(rows, key):
@@ -37,7 +41,7 @@ def load(path):
 
 
 def tables():
-    rows = load("results-probe51/slots_rate.csv") + load("results-probe52/threshold.csv")
+    rows = [r for path in BATCHES for r in load(path)]
     slots = [r for r in rows if r["scenario"].startswith("slots")]
     print(f"## Lateness by sender: {len(slots)} runs\n")
     print("| late share | threshold | runs | rounds/s | honest leads | AT per 1000 leads | convictions (per run) | "
@@ -54,28 +58,32 @@ def tables():
                   f"{1000 * at / leads:.1f} | {conv:.0f} ({mr(num(g, 'honest_convictions'))}) | {per} | "
                   f"{mr([x / threshold for x in num(g, 'honest_cusum_peak_ppm')], 2)} | "
                   f"{mr([100 * x for x in num(g, 'honest_cut')], 2)} |")
-    silent = [r for r in rows if r["scenario"] == "silent"]
-    if not silent:
-        return
-    print(f"\n## Three silent leaders: {len(silent)} runs\n")
     keys = (("timeouts", 0), ("rounds_per_s", 1), ("consensus_latency_ms", 0), ("e2e_latency_ms", 0),
             ("accusations_faulty", 0), ("g2_excluded_faulty", 0), ("honest_accusations", 0), ("honest_convictions", 0))
-    arm = {key: [r for r in silent if (r.get("g2_threshold") or "0") == key] for key in LN}
-    print("| metric | 10^2 | 10^4 | p | 10^4 against 10^2 |")
-    print("|---|---|---|---|---|")
     rnd = random.Random(7)
-    for key, d in keys:
-        a, b = num(arm["0"], key), num(arm["9210340"], key)
-        if not a or not b:
+    for path in BATCHES:
+        silent = [r for r in load(path) if r["scenario"] == "silent"]
+        if not silent:
             continue
-        rel = ""
-        if median(a) > 0:
-            try:
-                lo, hi = A.boot([(b, a)], rnd)
-                rel = f"{100 * A.rel(b, a):+.1f}% [{100 * lo:+.1f}%, {100 * hi:+.1f}%]"
-            except ZeroDivisionError:
-                rel = f"{100 * A.rel(b, a):+.1f}%"
-        print(f"| {key} | {mr(a, d)} | {mr(b, d)} | {C.ranksum_p(a, b):.3f} | {rel} |")
+        arm = {key: [r for r in silent if (r.get("g2_threshold") or "0") == key] for key in LN}
+        others = [key for key in LN if key != "0" and arm[key]]
+        print(f"\n## Three silent leaders, {path}: {len(silent)} runs\n")
+        print("| metric | 10^2 | " + " | ".join(f"{LN[k][0]} | p | against 10^2" for k in others) + " |")
+        print("|---|---|" + "---|---|---|" * len(others))
+        for key, d in keys:
+            a = num(arm["0"], key)
+            cells = []
+            for other in others:
+                b = num(arm[other], key)
+                rel = ""
+                if median(a) > 0:
+                    try:
+                        lo, hi = A.boot([(b, a)], rnd)
+                        rel = f"{100 * A.rel(b, a):+.1f}% [{100 * lo:+.1f}%, {100 * hi:+.1f}%]"
+                    except ZeroDivisionError:
+                        rel = f"{100 * A.rel(b, a):+.1f}%"
+                cells.append(f"{mr(b, d)} | {C.ranksum_p(a, b):.3f} | {rel}")
+            print(f"| {key} | {mr(a, d)} | " + " | ".join(cells) + " |")
 
 
 def when(paths):
