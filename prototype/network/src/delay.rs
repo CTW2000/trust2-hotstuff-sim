@@ -18,6 +18,11 @@
 //! are late by slow_ms more, always -- an adversary that controls the network before GST holds back the proposals of
 //! chosen honest leaders from some honest nodes, so that their views end in AT accusations.
 //!
+//! Lateness by sender (DESIGN.md §15.45): with late_slot_ms > 0 lateness is not drawn per message. Time is cut into
+//! slots of that length, in each slot this node is slow with probability late_p, and then every consensus message it
+//! queues in the slot, to any node, is late. The share of late messages is the same as before, but all receivers
+//! miss the same messages, as when a node's own uplink is congested for a while.
+//!
 //! Configured through the environment: TTRU_DELAYS names a JSON file {"addresses": {"<ip:port>": node, ...},
 //! "base_ms": [[...]], "jitter_ms": x, "bandwidth_mbps": y, "late_p": p, "late_ms": z, "late_to": ["<ip:port>",
 //! ...]} and TTRU_NODE is this node's index. Without them there is no delay at all.
@@ -66,6 +71,8 @@ pub struct Delays {
     slow_to: HashSet<usize>,
     #[serde(default)]
     slow_ms: f64,
+    #[serde(default)]
+    late_slot_ms: u64,
     #[serde(skip)]
     me: usize,
 }
@@ -90,7 +97,7 @@ impl Delays {
         let transmission = bytes as f64 * 8.0 / (self.bandwidth_mbps * 1e3);
         let now = unix_ms();
         let late_p = self.late_p_at(now);
-        let late = match late_p > 0.0 && self.late_to.contains(to) && rand::thread_rng().gen_bool(late_p) {
+        let late = match late_p > 0.0 && self.late_to.contains(to) && self.is_late(now, late_p) {
             true => self.late_ms,
             false => 0.0,
         };
@@ -120,6 +127,15 @@ impl Delays {
         }
     }
 
+    /// Whether a consensus message queued at `now_ms` is late: drawn per message, or, with late_slot_ms, fixed for
+    /// this node and the slot `now_ms` falls into.
+    pub fn is_late(&self, now_ms: u64, late_p: f64) -> bool {
+        match self.late_slot_ms {
+            0 => rand::thread_rng().gen_bool(late_p),
+            slot => unit(self.me as u64, now_ms / slot) < late_p,
+        }
+    }
+
     /// The probability that a message queued at `now_ms` is late: burst_late_p inside a burst, late_p otherwise.
     pub fn late_p_at(&self, now_ms: u64) -> f64 {
         let in_burst = self.burst_period_ms > 0
@@ -131,6 +147,16 @@ impl Delays {
             self.late_p
         }
     }
+}
+
+/// A number in [0, 1) fixed by a node and a time slot, the same for every message of that node in that slot (the
+/// finalizer of splitmix64 over the two).
+fn unit(node: u64, slot: u64) -> f64 {
+    let mut z = node.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ slot.wrapping_mul(0xD1B5_4A32_D192_ED03);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 11) as f64 / (1u64 << 53) as f64
 }
 
 fn unix_ms() -> u64 {

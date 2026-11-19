@@ -121,3 +121,34 @@ fn a_targeted_node_is_slow_only_towards_the_chosen_nodes_and_only_on_consensus_p
     let d = victim.of(&"127.0.0.1:9000".parse().unwrap(), 0).unwrap().as_secs_f64() * 1e3;
     assert!(d < 60.0, "{}", d);
 }
+
+#[test]
+fn with_slots_a_sender_is_late_for_a_whole_slot_towards_everyone() {
+    // DESIGN.md §15.45: lateness is fixed per sender and slot, so every message of a slot shares it, and the share
+    // of slow slots is late_p.
+    let json = JSON.replace(
+        "\"bandwidth_mbps\": 1000.0",
+        "\"bandwidth_mbps\": 1000.0, \"late_p\": 0.1, \"late_ms\": 5000.0, \"late_slot_ms\": 1000, \
+         \"late_to\": [\"127.0.0.1:9001\"]",
+    );
+    let delays = Delays::from_json(&json, 0).unwrap();
+    let other = Delays::from_json(&json, 1).unwrap();
+    let (mut slow, mut differ) = (0, 0);
+    for slot in 0..10_000u64 {
+        let first = delays.is_late(slot * 1000, 0.1);
+        // The same at any time inside the slot.
+        assert_eq!(first, delays.is_late(slot * 1000 + 1, 0.1));
+        assert_eq!(first, delays.is_late(slot * 1000 + 999, 0.1));
+        slow += first as u32;
+        differ += (first != other.is_late(slot * 1000, 0.1)) as u32;
+    }
+    // About 10% of the slots (10,000 draws: the standard deviation is 30), and another node has its own slow slots.
+    assert!((850..1150).contains(&slow), "{}", slow);
+    assert!(differ > 1000, "{}", differ);
+
+    // Without slots the draw is per message: at p = 0.5 a thousand messages of one instant are not all alike.
+    let json = json.replace("\"late_slot_ms\": 1000, ", "");
+    let delays = Delays::from_json(&json, 0).unwrap();
+    let late = (0..1000).filter(|_| delays.is_late(0, 0.5)).count();
+    assert!((300..700).contains(&late), "{}", late);
+}

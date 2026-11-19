@@ -160,6 +160,8 @@ def delays_file(args, committee):
         table = dict(addresses=addresses, base_ms=net["base_ms"], jitter_ms=net["jitter_ms"],
                      bandwidth_mbps=net["bandwidth_mbps"], late_p=args.late_p, late_ms=args.late_ms,
                      late_to=committee.consensus[:args.nodes])
+        if args.late_slot > 0:                               # lateness by sender and time slot (DESIGN.md §15.45)
+            table.update(late_slot_ms=int(args.late_slot * 1000))
         if args.fault == "outage":                           # region outage (DESIGN.md §15.22)
             start = int((args.start + args.fault_at) * 1000)
             table.update(outage=fault_nodes(args), outage_from_ms=start,
@@ -317,6 +319,9 @@ def main():
     ap.add_argument("--net", choices=["none", "base", "wide"], default="none", help="synthetic link delays")
     ap.add_argument("--late-p", type=float, default=0.0, help="probability that a message is late (model P)")
     ap.add_argument("--late-ms", type=float, default=5000.0, help="extra delay of a late message")
+    ap.add_argument("--late-slot", type=float, default=0.0,
+                    help="seconds: lateness is drawn once per sender and slot of this length, not per message, so "
+                         "all receivers miss the same messages (DESIGN.md §15.45; 0: per message)")
     ap.add_argument("--faults", type=int, default=0)
     ap.add_argument("--clients", type=int, default=4)
     ap.add_argument("--rate", type=int, default=50_000)
