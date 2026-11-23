@@ -835,17 +835,32 @@ fn node_with(store: Store, faults: Faults) -> (Core, Receiver<ProposerMessage>) 
 
 /// The same node with epochs of `length` rounds (0: a single epoch).
 fn node_with_epochs(store: Store, faults: Faults, length: Round) -> (Core, Receiver<ProposerMessage>) {
-    let (name, secret) = leader_keys(1);
+    node_in(committee(), store, faults, length)
+}
+
+/// The same node in `committee`, for checks that listen at the addresses of the other members.
+fn node_in(committee: Committee, store: Store, faults: Faults, length: Round) -> (Core, Receiver<ProposerMessage>) {
+    node_named(leader_keys(1), committee, store, faults, length)
+}
+
+/// The member of `committee` with these keys, not running.
+fn node_named(
+    (name, secret): (PublicKey, SecretKey),
+    committee: Committee,
+    store: Store,
+    faults: Faults,
+    length: Round,
+) -> (Core, Receiver<ProposerMessage>) {
     let (tx_loopback, rx_loopback) = channel(1);
     let (tx_mempool, mut rx_mempool) = channel(1);
     tokio::spawn(async move { while rx_mempool.recv().await.is_some() {} });
     let (_tx_message, rx_message) = channel(1);
     let (tx_proposer, rx_proposer) = channel(1);
     let (tx_commit, _rx_commit) = channel(1);
-    let synchronizer = Synchronizer::new(name, committee(), store.clone(), tx_loopback.clone(), 100_000);
+    let synchronizer = Synchronizer::new(name, committee.clone(), store.clone(), tx_loopback.clone(), 100_000);
     let core = Core::new(
         name,
-        committee(),
+        committee,
         EpochConfig {
             length,
             reference_length: 0,
@@ -1487,6 +1502,231 @@ async fn h6_a_node_notes_its_entry_proof_and_sends_it_with_its_timeouts() {
     assert_eq!(node.entry, Some(proof.clone()));
     let expected = bincode::serialize(&ConsensusMessage::Entry(proof)).unwrap();
     assert_eq!(node.entry_message(), Some(Bytes::from(expected)));
+}
+
+#[tokio::test]
+async fn p1_a_received_tc_goes_on_to_the_leader_of_the_new_round_once() {
+    // Mock review M1, DA-M6 (DESIGN.md §15.50). A TC that another member assembled may have reached us and not the
+    // leader of the round it opens; that leader then never proposes, and we would time out on it with NR = 1. So the
+    // TC goes on to that leader -- once: the same TC again is of a round we have left, and the next thing the leader
+    // hears from us is our timeout of the new round.
+    let committee = committee_with_base_port(19_000);
+    let tc2 = tc_of(2, &QC::genesis(), &committee);
+    let (l3, _) = leader_keys(3);
+    let (name, secret) = keys().into_iter().find(|(key, _)| *key != l3).unwrap();
+    let passed = Bytes::from(bincode::serialize(&ConsensusMessage::TC(tc2.clone())).unwrap());
+    let stalled = Timeout::new_from_key(QC::genesis(), 3, true, name, &secret);
+    let stalled = Bytes::from(bincode::serialize(&ConsensusMessage::Timeout(stalled)).unwrap());
+    let mut received = frames(committee.address(&l3).unwrap(), 2);
+    sleep(Duration::from_millis(50)).await;
+
+    let store_path = ".db_test_p1_a_received_tc_goes_on";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::TC(tc2.clone())).await.unwrap();
+    tx_core.send(ConsensusMessage::TC(tc2)).await.unwrap();
+
+    let first = timeout(Duration::from_secs(5), received.recv()).await.expect("nothing for the leader of round 3");
+    assert_eq!(first.unwrap(), passed, "the TC goes on to the leader of round 3");
+    let second = timeout(Duration::from_secs(5), received.recv()).await.expect("no timeout of round 3");
+    assert_eq!(second.unwrap(), stalled, "and only once");
+}
+
+#[tokio::test]
+async fn p1_the_entry_proof_goes_on_with_the_tc() {
+    // The leader of the new round may still be in the epoch before, where a TC of ours waits until it enters (H6):
+    // the TC goes on with the proof by which we entered. The node enters the next epoch on B12, then gets a TC of
+    // that epoch for a round whose successor it does not lead.
+    let committee = committee_with_base_port(19_100);
+    let (mut node, mut rx_proposer) = node_in(committee.clone(), store_at(".db_test_p1_entry"), Faults::default(), 10);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    let round = (13..19).find(|round| leader_in(EPOCH + 1, round + 1).0 != node.name).unwrap();
+    let (next_leader, _) = leader_in(EPOCH + 1, round + 1);
+    let mut received = all_frames(committee.address(&next_leader).unwrap());
+    sleep(Duration::from_millis(50)).await;
+
+    let mut proof = QC::genesis();
+    for round in 1..=11 {
+        let block = block_in(proof, None, round, EPOCH);
+        node.handle_proposal(&block).await.unwrap();
+        proof = qc_in(&block);
+    }
+    let b12 = block_in(proof.clone(), None, 12, EPOCH + 1);
+    node.handle_proposal(&b12).await.unwrap();
+    assert_eq!(node.epochs.epoch(), EPOCH + 1);
+
+    let tc = tc_in(round, EPOCH + 1, &qc_in(&b12));
+    let passed = Bytes::from(bincode::serialize(&ConsensusMessage::TC(tc.clone())).unwrap());
+    let entry = Bytes::from(bincode::serialize(&ConsensusMessage::Entry(proof)).unwrap());
+    node.handle_message(ConsensusMessage::TC(tc)).await.unwrap();
+    assert_eq!(node.round, round + 1);
+
+    // The votes of the rounds before may have gone to the same member: look for the two frames, in order.
+    let mut got = Vec::new();
+    while let Ok(Some(frame)) = timeout(Duration::from_millis(500), received.recv()).await {
+        got.push(frame);
+    }
+    let tc_at = got.iter().position(|frame| *frame == passed).expect("the TC did not go on");
+    let entry_at = got.iter().position(|frame| *frame == entry).expect("no entry proof with the TC");
+    assert!(tc_at < entry_at);
+}
+
+/// P2 (DESIGN.md §15.51): a member, with epochs of 10 rounds, that holds B1..B11 and came to round 14 of the first
+/// epoch on a TC of round 13: the leader of round 12 kept the commit proof back, and rounds 12 and 13 timed out.
+/// Returns it with the commit proof QC(B11), that TC, and the proposals it makes as (round, epoch, with a TC).
+async fn node_past_the_end(
+    who: (PublicKey, SecretKey),
+    committee: Committee,
+    tag: &str,
+) -> (Core, QC, TC, Receiver<(Round, EpochNumber, bool)>) {
+    let store = store_at(&format!(".db_test_p2_{}", tag));
+    let (mut node, mut rx_proposer) = node_named(who, committee, store, Faults::default(), 10);
+    let (tx_made, rx_made) = channel(10);
+    tokio::spawn(async move {
+        while let Some(message) = rx_proposer.recv().await {
+            if let ProposerMessage::Make { round, tc, committee, .. } = message {
+                let _ = tx_made.send((round, committee.epoch, tc.is_some())).await;
+            }
+        }
+    });
+    let mut qc = QC::genesis();
+    let mut terminal = QC::genesis();
+    for round in 1..=11 {
+        let block = block_in(qc, None, round, EPOCH);
+        node.handle_proposal(&block).await.unwrap();
+        qc = qc_in(&block);
+        if round == 10 {
+            terminal = qc.clone();
+        }
+    }
+    let tc = tc_in(13, EPOCH, &terminal);
+    node.handle_message(ConsensusMessage::TC(tc.clone())).await.unwrap();
+    assert_eq!((node.epochs.epoch(), node.round), (EPOCH, 14));
+    (node, qc, tc, rx_made)
+}
+
+#[tokio::test]
+async fn p2_a_leader_that_enters_in_the_middle_of_its_round_proposes() {
+    // DESIGN.md §15.51. The leader of round 12 keeps the commit proof back, rounds 12 and 13 time out in the old
+    // epoch, and the proof comes out while the members are in round 14. The member that leads round 14 under the new
+    // table learns only now that it does. It proposes at once, in the new epoch and on the TC by which it came to
+    // the round; before, nothing made it propose, and the others timed out on it with NR = 1.
+    let leader14 = leader_in(EPOCH + 1, 14);
+    let (mut node, proof, _tc, mut made) = node_past_the_end(leader14, committee(), "leader").await;
+    node.handle_message(ConsensusMessage::Entry(proof)).await.unwrap();
+    assert_eq!((node.epochs.epoch(), node.round), (EPOCH + 1, 14));
+    let mut last = None;
+    while let Ok(Some(proposal)) = timeout(Duration::from_millis(200), made.recv()).await {
+        last = Some(proposal);
+    }
+    assert_eq!(last, Some((14, EPOCH + 1, true)));
+}
+
+#[tokio::test]
+async fn p2_a_member_that_enters_in_the_middle_of_a_round_tells_its_leader() {
+    // The same execution at a member that does not lead round 14 under the new table: the TC by which it came to the
+    // round and its entry proof go to the member that does, which may still be in the old epoch, or in the new one
+    // in an earlier round.
+    let committee = committee_with_base_port(19_200);
+    let (leader14, _) = leader_in(EPOCH + 1, 14);
+    let member = keys().into_iter().find(|(key, _)| *key != leader14).unwrap();
+    let mut received = all_frames(committee.address(&leader14).unwrap());
+    sleep(Duration::from_millis(50)).await;
+    let (mut node, proof, tc, _made) = node_past_the_end(member, committee, "member").await;
+    node.handle_message(ConsensusMessage::Entry(proof.clone())).await.unwrap();
+    assert_eq!((node.epochs.epoch(), node.round), (EPOCH + 1, 14));
+
+    let passed = Bytes::from(bincode::serialize(&ConsensusMessage::TC(tc)).unwrap());
+    let entry = Bytes::from(bincode::serialize(&ConsensusMessage::Entry(proof)).unwrap());
+    let mut got = Vec::new();
+    while let Ok(Some(frame)) = timeout(Duration::from_millis(500), received.recv()).await {
+        got.push(frame);
+    }
+    let entry_at = got.iter().position(|frame| *frame == entry).expect("no entry proof for the leader of the round");
+    assert!(got[..entry_at].contains(&passed), "the TC goes before the entry proof");
+}
+
+#[tokio::test]
+async fn p2_a_tc_of_the_epoch_before_still_moves_a_member_on() {
+    // A member that entered alone, rounds ago, hears no certificate of the new epoch: the others are still in the old
+    // one and move on by its TCs. One of those, past the end of the old epoch and with a quorum of both tables (H5),
+    // moves the member on as it would inside a block.
+    let (mut node, proof) = node_at_the_end_of_the_epoch("p2_old_tc").await;
+    node.handle_message(ConsensusMessage::Entry(proof.clone())).await.unwrap();
+    assert_eq!((node.epochs.epoch(), node.round), (EPOCH + 1, 12));
+    let tc = tc_in(13, EPOCH, &proof);
+    node.handle_message(ConsensusMessage::TC(tc)).await.unwrap();
+    assert_eq!(node.round, 14);
+}
+
+#[tokio::test]
+async fn p2_a_qc_of_the_epoch_before_still_moves_a_member_on() {
+    // Likewise for a QC: past the end of the old epoch it is assembled by the leader under the old table, and the
+    // member that leads the next round under the new table may hold no other certificate of the round before. It is
+    // verified as any QC (a forged one is refused), and one of a round we have left is dropped unverified.
+    let (mut node, proof) = node_at_the_end_of_the_epoch("p2_old_qc").await;
+    node.handle_message(ConsensusMessage::Entry(proof.clone())).await.unwrap();
+    assert_eq!((node.epochs.epoch(), node.round), (EPOCH + 1, 12));
+    let qc13 = qc_in(&block_in(proof.clone(), None, 13, EPOCH));
+    let forged = QC { votes: Vec::new(), ..qc13.clone() };
+    assert!(node.handle_message(ConsensusMessage::Entry(forged)).await.is_err());
+    assert_eq!(node.round, 12);
+    node.handle_message(ConsensusMessage::Entry(qc13)).await.unwrap();
+    assert_eq!(node.round, 14);
+    let stale = QC { votes: Vec::new(), ..proof };
+    assert!(node.handle_message(ConsensusMessage::Entry(stale)).await.is_ok());
+}
+
+#[tokio::test]
+async fn p2_a_member_that_came_to_the_round_on_a_qc_passes_the_qc_on() {
+    // A member came to round 14 of the old epoch on a QC of round 13, which only the leader of round 14 under the old
+    // table could assemble, and no block of round 14 has reached it. When it enters the new epoch in that round, the
+    // QC and then its entry proof go to the member that leads round 14 under the new table.
+    let committee = committee_with_base_port(19_300);
+    let (leader14, _) = leader_in(EPOCH + 1, 14);
+    let member = keys().into_iter().find(|(key, _)| *key != leader14).unwrap();
+    let mut received = all_frames(committee.address(&leader14).unwrap());
+    sleep(Duration::from_millis(50)).await;
+    let (mut node, mut rx_proposer) = node_named(member, committee, store_at(".db_test_p2_qc"), Faults::default(), 10);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    let mut proof = QC::genesis();
+    for round in 1..=11 {
+        let block = block_in(proof, None, round, EPOCH);
+        node.handle_proposal(&block).await.unwrap();
+        proof = qc_in(&block);
+    }
+    let qc13 = qc_in(&block_in(proof.clone(), None, 13, EPOCH));
+    node.handle_message(ConsensusMessage::Entry(qc13.clone())).await.unwrap();
+    assert_eq!((node.epochs.epoch(), node.round), (EPOCH, 14));
+    node.handle_message(ConsensusMessage::Entry(proof.clone())).await.unwrap();
+    assert_eq!((node.epochs.epoch(), node.round), (EPOCH + 1, 14));
+
+    let passed = Bytes::from(bincode::serialize(&ConsensusMessage::Entry(qc13)).unwrap());
+    let entry = Bytes::from(bincode::serialize(&ConsensusMessage::Entry(proof)).unwrap());
+    let mut got = Vec::new();
+    while let Ok(Some(frame)) = timeout(Duration::from_millis(500), received.recv()).await {
+        got.push(frame);
+    }
+    let entry_at = got.iter().position(|frame| *frame == entry).expect("no entry proof for the leader of the round");
+    assert!(got[..entry_at].contains(&passed), "the QC goes before the entry proof");
+}
+
+#[tokio::test]
+async fn p2_one_proposal_per_epoch_and_round() {
+    // Entering an epoch can call for a proposal that another path has made already: the second is not made.
+    let (mut node, mut rx_proposer) = node_with_proposer(store_at(".db_test_p2_one_proposal"));
+    let (tx_made, mut made) = channel(10);
+    tokio::spawn(async move {
+        while let Some(message) = rx_proposer.recv().await {
+            if let ProposerMessage::Make { round, .. } = message {
+                let _ = tx_made.send(round).await;
+            }
+        }
+    });
+    node.generate_proposal(None).await;
+    node.generate_proposal(None).await;
+    assert_eq!(timeout(Duration::from_millis(200), made.recv()).await.unwrap(), Some(1));
+    assert!(timeout(Duration::from_millis(200), made.recv()).await.is_err());
 }
 
 #[tokio::test]

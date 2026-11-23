@@ -205,6 +205,12 @@ pub struct Core {
     entry_seen: Option<Digest>,
     // The round at the last round-based cleanup of the detection / accusation / inclusion state.
     last_cleanup: Round,
+    // P2 (§15.51): the epoch and round of our last proposal (one proposal per epoch and round), and the TC by which
+    // we came to our round, kept for the proposal we owe if we enter an epoch in the middle of that round.
+    proposed: Option<(EpochNumber, Round)>,
+    round_tc: Option<TC>,
+    // The epoch and round whose leader has had from us the certificate by which we came to the round (P1, P2).
+    told: Option<(EpochNumber, Round)>,
 }
 
 impl Core {
@@ -303,6 +309,9 @@ impl Core {
             entry: None,
             entry_seen: None,
             last_cleanup: 0,
+            proposed: None,
+            round_tc: None,
+            told: None,
         }
     }
 
@@ -666,7 +675,15 @@ impl Core {
     /// past its end is dropped unverified, and one we have processed is not verified again; the message is not
     /// signed by its sender, and a forged one costs us what a forged TC does.
     async fn handle_entry(&mut self, qc: &QC) -> ConsensusResult<()> {
-        if qc.epoch != self.epochs.epoch() || !self.epochs.past_end(qc.round) {
+        let ours = qc.epoch == self.epochs.epoch() && self.epochs.past_end(qc.round);
+        // P2 (§15.51): a QC of the epoch before ours, past its end, that moves us on. The leader of a round may
+        // have entered alone, rounds ago; the members that come to its round later hold this QC and no certificate
+        // of our epoch. Not when our high QC is of our epoch (no such QC is then of a round we have not left).
+        let of_the_epoch_before = qc.epoch + 1 == self.epochs.epoch()
+            && self.epochs.past_end_of(qc.epoch, qc.round)
+            && qc.round >= self.round
+            && self.high_qc.epoch <= qc.epoch;
+        if !(ours || of_the_epoch_before) {
             return Ok(());
         }
         let digest = qc.digest();
@@ -1056,6 +1073,7 @@ impl Core {
 
             // Try to advance the round.
             self.advance_round(tc.round).await;
+            self.keep_round_tc(&tc);
 
             // Broadcast the TC.
             debug!("Broadcasting {:?}", tc);
@@ -1070,6 +1088,7 @@ impl Core {
             self.network
                 .broadcast(addresses, Bytes::from(message))
                 .await;
+            self.told = Some((self.epochs.epoch(), self.round));
 
             self.broadcast_entry().await;
 
@@ -1134,6 +1153,11 @@ impl Core {
         if self.faults.silent {
             return;
         }
+        // One proposal per epoch and round: entering an epoch can call for one that another path has made (P2).
+        let slot = (self.epochs.epoch(), self.round);
+        if self.proposed == Some(slot) {
+            return;
+        }
         let committee = self.committee().clone();
         // The table chain: at or past the end of the epoch the block names the next table too; before the end it
         // names none, so we propose even if we entered this epoch before our ledger got there (names_next_table).
@@ -1158,6 +1182,7 @@ impl Core {
         let otxs = if suffix { Vec::new() } else { self.inclusion.select() };
         // Experiment switch: the first block of an epoch (its QC is of the previous one) to half the nodes only.
         let withhold = self.faults.withhold_proof && qc.epoch < committee.epoch;
+        self.proposed = Some(slot);
         self.tx_proposer
             .send(ProposerMessage::Make {
                 round: self.round,
@@ -1563,6 +1588,7 @@ impl Core {
             self.accuse_from_tc(tc).await;
             self.process_qc(&tc.high_qc).await;
             self.advance_round(tc.round).await;
+            self.keep_round_tc(tc);
         }
 
         // Let's see if we have the block's data. If we don't, the mempool
@@ -1586,15 +1612,123 @@ impl Core {
         }
         self.process_qc(&tc.high_qc).await;
         self.advance_round(tc.round).await;
-        if self.name == leader(self.committee(), self.round) {
+        self.keep_round_tc(&tc);
+        let next_leader = leader(self.committee(), self.round);
+        if self.name == next_leader {
             self.propose(Some(tc)).await;
+        } else {
+            self.pass_on(&tc, &next_leader).await;
         }
         Ok(())
     }
 
-    /// Votes, timeouts and TCs of the current epoch are handled; those of a later epoch wait (their QC is
-    /// processed first, it may move us there); those of an older epoch are dropped (H3).
+    /// P1 (DESIGN.md §15.50): a TC that another member assembled, and that moved us to a round we do not lead, goes
+    /// on to the leader of that round, with our entry proof (H6). A TC we assemble is sent to all; one we receive may
+    /// have been sent to us and not to that leader, which would then stay behind while we time out on it with
+    /// NR = 1. To the leader alone: its block carries the TC to the others. At most once per round, as a TC of a
+    /// round we have left does not get here.
+    async fn pass_on(&mut self, tc: &TC, to: &PublicKey) {
+        let address = match self.committee().address(to) {
+            Some(address) => address,
+            None => return,
+        };
+        debug!("Passing {:?} on to {}", tc, to);
+        self.told = Some((self.epochs.epoch(), self.round));
+        let message = bincode::serialize(&ConsensusMessage::TC(tc.clone())).expect("Failed to serialize TC");
+        self.network.send(address, Bytes::from(message)).await;
+        if let Some(entry) = self.entry_message() {
+            self.network.send(address, entry).await;
+        }
+    }
+
+    /// P2: the TC of the round before ours is kept while we are in that round.
+    fn keep_round_tc(&mut self, tc: &TC) {
+        if tc.round + 1 == self.round {
+            self.round_tc = Some(tc.clone());
+        }
+    }
+
+    /// P2 (DESIGN.md §15.51): what is owed once an event that made us enter an epoch, or brought us to a round, is
+    /// handled; `before` is our epoch and round before the event. Within an epoch the paths that handle a
+    /// certificate see to it: the leader of a round proposes when it comes to the round, a TC goes to that leader
+    /// (P1), and a QC of the round before is assembled by that leader alone. At a handover they do not. The commit
+    /// proof can reach us in the middle of a round, long after the first round of the new epoch, when the leader of
+    /// that first round kept it back; and past the end of the old epoch a QC is assembled by the leader under the
+    /// old table, not by the one under the new table. So:
+    /// - entering in the middle of a round, our timer starts again: the round starts again under the new table;
+    /// - if we lead the round and have signed nothing in it under our epoch, we propose, on the TC by which we came
+    ///   to the round when our high QC is not of the round before;
+    /// - otherwise the certificate by which we came to the round (that TC, or our high QC) and our entry proof go
+    ///   to the leader of the round, which may still be in the epoch before, or in a round before ours.
+    /// Without this the members that enter would time out with NR = 1 on a leader that never had a chance to propose.
+    async fn on_entry(&mut self, before: (EpochNumber, Round)) {
+        let (epoch, round) = before;
+        let now = self.epochs.epoch();
+        let (entered, moved) = (now == epoch + 1, self.round != round);
+        if now > epoch + 1 || !(entered || moved) {
+            return; // nothing of the kind, or several epochs at once (a node catching up through its chain)
+        }
+        if entered && !moved {
+            self.timer.reset();
+        }
+        let tc = self.round_tc.clone().filter(|tc| tc.round + 1 == self.round);
+        let adjacent = self.high_qc.round + 1 == self.round;
+        // What the other paths do not cover: an entry, and a round we came to on a QC of the epoch before ours.
+        if !(entered || (adjacent && self.high_qc.epoch < now)) {
+            return;
+        }
+        let current = leader(self.committee(), self.round);
+        if self.name == current {
+            // After a restart we may have signed in this round under this epoch already (R8): then no proposal.
+            let signed = self.signed_epoch >= now && self.last_voted_round >= self.round;
+            if !signed && (adjacent || tc.is_some()) {
+                self.propose(if adjacent { None } else { tc }).await;
+            }
+            return;
+        }
+        if self.told == Some((now, self.round)) {
+            return;
+        }
+        let address = match self.committee().address(&current) {
+            Some(address) => address,
+            None => return,
+        };
+        if adjacent {
+            // We came to the round on a QC. If we came to it in this event and hold a block of the round, that block
+            // brought the QC and its author has it.
+            if moved && self.ready_round >= self.round {
+                return;
+            }
+            self.told = Some((now, self.round));
+            let qc = self.high_qc.clone();
+            if self.entry.as_ref() != Some(&qc) {
+                debug!("Passing {:?} on to {}", qc, current);
+                let message = bincode::serialize(&ConsensusMessage::Entry(qc)).expect("Failed to serialize QC");
+                self.network.send(address, Bytes::from(message)).await;
+            }
+            if let Some(entry) = self.entry_message() {
+                self.network.send(address, entry).await;
+            }
+        } else if let Some(tc) = tc {
+            self.pass_on(&tc, &current).await;
+        } else if let Some(entry) = self.entry_message() {
+            self.told = Some((now, self.round));
+            self.network.send(address, entry).await;
+        }
+    }
+
+    /// One message, then what entering an epoch calls for if the message made us enter (P2).
     async fn handle_message(&mut self, message: ConsensusMessage) -> ConsensusResult<()> {
+        let before = (self.epochs.epoch(), self.round);
+        let result = self.dispatch(message).await;
+        self.on_entry(before).await;
+        result
+    }
+
+    /// Votes, timeouts and TCs of the current epoch are handled; those of a later epoch wait (their QC is
+    /// processed first, it may move us there); those of an older epoch are dropped (H3), but for a TC of the epoch
+    /// before ours past its end (P2).
+    async fn dispatch(&mut self, message: ConsensusMessage) -> ConsensusResult<()> {
         // Observed transactions carry no epoch.
         let message = match message {
             ConsensusMessage::Otx(otx) => return self.handle_otx(otx).await,
@@ -1658,6 +1792,18 @@ impl Core {
                 }
                 Ok(())
             }
+            // P2: a TC of the epoch before ours, past its end, still moves us on, as it does inside a block (V3).
+            // It counts under both tables (H5). The leader of a round may have entered alone, rounds ago, and the
+            // members that come to its round later hold this TC and no other certificate of the round before. Not
+            // when our high QC is of our epoch: no block of ours could carry the TC then (V3).
+            ConsensusMessage::TC(tc)
+                if epoch + 1 == self.epochs.epoch()
+                    && self.epochs.past_end_of(tc.epoch, tc.round)
+                    && self.high_qc.epoch <= tc.epoch =>
+            {
+                self.handle_tc(tc).await
+            }
+            ConsensusMessage::Entry(qc) if epoch + 1 == self.epochs.epoch() => self.handle_entry(&qc).await,
             _ if epoch < self.epochs.epoch() => Ok(()),
             ConsensusMessage::Vote(vote) => self.handle_vote(&vote).await,
             ConsensusMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
@@ -1695,7 +1841,12 @@ impl Core {
         loop {
             let result = tokio::select! {
                 Some(message) = self.rx_message.recv() => self.handle_message(message).await,
-                Some(block) = self.rx_loopback.recv() => self.process_block(&block).await,
+                Some(block) = self.rx_loopback.recv() => {
+                    let before = (self.epochs.epoch(), self.round);
+                    let result = self.process_block(&block).await;
+                    self.on_entry(before).await;
+                    result
+                },
                 () = &mut self.timer => self.local_timeout_round().await,
             };
             Self::log_result(result);
