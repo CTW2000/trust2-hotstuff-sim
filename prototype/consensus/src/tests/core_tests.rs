@@ -97,6 +97,7 @@ fn core_on_with(
         governance_malicious: false,
         leader_rule: Default::default(),
         g2_threshold: 0,
+        g2_window: 0,
         g2_no_reputation: false,
         aptos_failure_percent: 0,
     };
@@ -854,6 +855,7 @@ fn node_with_epochs(store: Store, faults: Faults, length: Round) -> (Core, Recei
             governance_malicious: false,
             leader_rule: Default::default(),
             g2_threshold: 0,
+            g2_window: 0,
             g2_no_reputation: false,
             aptos_failure_percent: 0,
         },
@@ -1420,36 +1422,71 @@ async fn a_timeout_of_the_next_epoch_fetches_the_block_its_qc_certifies() {
     assert!(asked(received, Bytes::from(expected)).await, "a signer of the QC is asked");
 }
 
-#[tokio::test]
-#[ignore = "reproduces an open gap (mock review M1, R2-W1; DESIGN.md 15.47): fails until the catch-up rule covers it"]
-async fn a_timeout_of_the_next_epoch_with_a_qc_of_that_epoch_fetches_its_block() {
-    // Mock review M1, R2-W1: the members that entered the next epoch may already hold a QC of it, formed on a block
-    // that the lagging nodes were never sent. Their timeouts then carry that QC and not the commit proof of our
-    // terminal block. The lagging node must still ask for the block it certifies and walk back from it to the first
-    // block of the epoch, whose QC is the commit proof; otherwise the two groups stall for good when the leaders
-    // that withheld the blocks fall silent.
-    let committee = committee_with_base_port(17_800);
-    let mut members = keys();
-    let (name, secret) = members.remove(0);
-    let hash = Digest([6; 32]);
-    let unsigned = QC { hash: hash.clone(), round: 12, epoch: EPOCH + 1, votes: Vec::new() };
-    let digest = unsigned.digest();
-    let votes = members.iter().map(|(key, secret)| (*key, Signature::new(&digest, secret))).collect();
-    let high_qc = QC { votes, ..unsigned };
-    let signer = members[2].0;
-    let (author, author_secret) = members.remove(0);
-    let mut stalled = Timeout::new_from_key(high_qc, 13, false, author, &author_secret);
-    stalled.epoch = EPOCH + 1;
-    stalled.signature = Signature::new(&stalled.digest(), &author_secret);
-    let expected = bincode::serialize(&ConsensusMessage::SyncRequest(hash, name)).unwrap();
-
-    let received = frames(committee.address(&signer).unwrap(), 4);
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    let store_path = ".db_test_a_timeout_of_the_next_epoch_with_a_qc_of_that_epoch";
-    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+/// A node with epochs of 10 rounds that holds B1..B11 of the first epoch: B10 is the terminal block and B11 its
+/// child, so it is past the end of its epoch and waits for the commit proof, QC(B11). Returns it with that QC.
+async fn node_at_the_end_of_the_epoch(tag: &str) -> (Core, QC) {
+    let (mut node, mut rx_proposer) = node_with_epochs(store_at(&format!(".db_test_h6_{}", tag)), Faults::default(), 10);
     tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
-    tx_core.send(ConsensusMessage::Timeout(stalled)).await.unwrap();
-    assert!(asked(received, Bytes::from(expected)).await, "a signer of the QC is asked");
+    let mut qc = QC::genesis();
+    for round in 1..=11 {
+        let block = block_in(qc, None, round, EPOCH);
+        node.handle_proposal(&block).await.unwrap();
+        qc = qc_in(&block);
+    }
+    assert_eq!(node.epochs.epoch(), EPOCH);
+    (node, qc)
+}
+
+#[tokio::test]
+async fn h6_a_node_left_behind_enters_on_the_entry_proof() {
+    // Mock review M1, R2-W1 (DESIGN.md §15.47, §15.48). The members that entered the next epoch already hold a QC of
+    // it, formed on a block this node was never sent, so their timeouts carry that QC and not the commit proof of
+    // our terminal block: from them alone the node cannot enter, and when the leaders that withheld the blocks fall
+    // silent both groups would stall for good. The entry proof that goes out with the timeout lets it in.
+    let (mut node, proof) = node_at_the_end_of_the_epoch("left_behind").await;
+    let b12 = block_in(proof.clone(), None, 12, EPOCH + 1);
+    let (author, secret) = keys().into_iter().find(|(key, _)| *key != node.name).unwrap();
+    let mut stalled = Timeout::new_from_key(qc_in(&b12), 13, false, author, &secret);
+    stalled.epoch = EPOCH + 1;
+    stalled.signature = Signature::new(&stalled.digest(), &secret);
+
+    node.handle_message(ConsensusMessage::Timeout(stalled)).await.unwrap();
+    assert_eq!(node.epochs.epoch(), EPOCH, "a timeout whose high QC is of the next epoch does not let us in");
+    node.handle_message(ConsensusMessage::Entry(proof.clone())).await.unwrap();
+    assert_eq!(node.epochs.epoch(), EPOCH + 1, "the entry proof does");
+    assert_eq!(node.entry, Some(proof), "and it is now ours to pass on");
+}
+
+#[tokio::test]
+async fn h6_an_entry_proof_must_be_a_valid_qc_past_the_end_of_our_epoch() {
+    let (mut node, proof) = node_at_the_end_of_the_epoch("checked").await;
+    // A QC before the end of the epoch is no commit proof of the terminal block: dropped.
+    let b5 = block_in(QC::genesis(), None, 5, EPOCH);
+    node.handle_message(ConsensusMessage::Entry(qc_in(&b5))).await.unwrap();
+    assert_eq!(node.epochs.epoch(), EPOCH);
+    // A QC past the end without a quorum is refused.
+    let short = QC { votes: proof.votes[..2].to_vec(), ..proof.clone() };
+    assert!(node.handle_message(ConsensusMessage::Entry(short)).await.is_err());
+    assert_eq!(node.epochs.epoch(), EPOCH);
+    // In the next epoch the proof of the one before is of no use and is dropped unverified.
+    node.handle_message(ConsensusMessage::Entry(proof.clone())).await.unwrap();
+    assert_eq!(node.epochs.epoch(), EPOCH + 1);
+    let forged = QC { votes: Vec::new(), ..proof };
+    assert!(node.handle_message(ConsensusMessage::Entry(forged)).await.is_ok());
+}
+
+#[tokio::test]
+async fn h6_a_node_notes_its_entry_proof_and_sends_it_with_its_timeouts() {
+    // The usual way in: the first block of the next epoch carries the commit proof. The node notes that QC, and the
+    // frame that goes out with its timeouts and TCs carries it; before the first handover there is none.
+    let (mut node, proof) = node_at_the_end_of_the_epoch("noted").await;
+    assert!(node.entry_message().is_none());
+    let b12 = block_in(proof.clone(), None, 12, EPOCH + 1);
+    node.handle_proposal(&b12).await.unwrap();
+    assert_eq!(node.epochs.epoch(), EPOCH + 1);
+    assert_eq!(node.entry, Some(proof.clone()));
+    let expected = bincode::serialize(&ConsensusMessage::Entry(proof)).unwrap();
+    assert_eq!(node.entry_message(), Some(Bytes::from(expected)));
 }
 
 #[tokio::test]

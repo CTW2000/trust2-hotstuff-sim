@@ -34,6 +34,10 @@ pub struct G2Config {
     pub recover_ppm: u64,
     /// Reputation budget: at most this much base weight is cut (fixed point).
     pub b_rep: u128,
+    /// Experiment switch (DESIGN.md §15.49; 0: off, the protocol): after an adverse fact against a leader is
+    /// counted, its leads in the next `window` rounds are not observed at all, so that a run of failures within the
+    /// window (a node that stalls for a few seconds and is drawn to lead several times) is one episode.
+    pub window: Round,
 }
 
 impl Default for G2Config {
@@ -55,6 +59,7 @@ impl Default for G2Config {
             step_ppm: 100_000,
             recover_ppm: 20_000,
             b_rep: ONE / 10,
+            window: 0,
         }
     }
 }
@@ -77,6 +82,8 @@ pub struct Reputation {
     peak: Vec<i64>,
     excluded: Vec<bool>,
     until: Vec<Round>,
+    /// With `G2Config::window`: the leads of a member before this round are within its last counted episode.
+    quiet_until: Vec<Round>,
     /// Rounds up to here have been processed.
     done: Round,
     r_ppm: Vec<u64>,
@@ -95,6 +102,7 @@ impl Reputation {
             peak: vec![0; n],
             excluded: vec![false; n],
             until: vec![0; n],
+            quiet_until: vec![0; n],
             done: 0,
             r_ppm: vec![PPM as u64; n],
             accused: BTreeMap::new(),
@@ -207,6 +215,14 @@ impl Reputation {
             Some(k) if !self.excluded[k] => k,
             _ => return,
         };
+        if self.config.window > 0 {
+            if u < self.quiet_until[leader] {
+                return;
+            }
+            if accusation.is_some() {
+                self.quiet_until[leader] = u + self.config.window;
+            }
+        }
         let increment = match accusation {
             Some(_) => self.config.up,
             None => self.config.down,

@@ -44,6 +44,9 @@ pub enum ConsensusMessage {
     /// Experiment switch (DESIGN.md §15.44): with votes to all members, the QC a member assembled, sent to the
     /// leader of the next round.
     QC(QC),
+    /// H6 (DESIGN.md §15.48): the commit proof by which the sender entered its epoch. It goes out with every
+    /// timeout and TC of the sender, so that a node still in the epoch before can enter on it.
+    Entry(QC),
 }
 
 pub struct Consensus;
@@ -199,6 +202,7 @@ pub(crate) fn epoch_config(parameters: &Parameters) -> EpochConfig {
         governance_malicious: parameters.governance_malicious,
         leader_rule: parameters.leader_rule,
         g2_threshold: parameters.g2_threshold,
+        g2_window: parameters.g2_window,
         g2_no_reputation: parameters.g2_no_reputation,
         aptos_failure_percent: parameters.aptos_failure_percent,
     }

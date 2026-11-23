@@ -106,6 +106,7 @@ fn config(case: &Case) -> EpochConfig {
         governance_malicious: false,
         leader_rule: LeaderRule::Trust2,
         g2_threshold: 0,
+        g2_window: 0,
         g2_no_reputation: false,
         aptos_failure_percent: 0,
     }

@@ -110,6 +110,36 @@ fn rule_and_reputation_match_the_simulator() {
 }
 
 #[test]
+fn with_a_window_a_run_of_accused_leads_is_one_episode() {
+    // Experiment switch (DESIGN.md §15.49). Member 0 leads every round. Without a window four accused leads in a row
+    // convict; with a window of 25 rounds the three that follow the first are not observed, and four accused leads
+    // that are 25 rounds apart convict as before.
+    let windowed = G2Config { window: 25, ..G2Config::default() };
+    let mut rep = Reputation::new(vec![ONE / 4; 4], windowed);
+    for u in 1..=4 {
+        rep.record(u, 1);
+    }
+    assert!(rep.advance(4, |_, _| Some(0)).is_empty());
+    assert!(!rep.excluded()[0]);
+
+    // The leads inside the window are not observed either way: the statistic is still that of one fact at round 26,
+    // so the facts of rounds 26, 51 and 76 make four and convict at 76.
+    for u in [26, 51, 76] {
+        rep.record(u, 1);
+    }
+    assert!(rep.advance(75, |_, _| Some(0)).is_empty());
+    assert_eq!(rep.advance(76, |_, _| Some(0)).to_vec(), vec![Event::Exclude(0, 76)]);
+
+    // Another member is not held back by the window of the first.
+    let mut rep = Reputation::new(vec![ONE / 4; 4], windowed);
+    for u in 1..=8 {
+        rep.record(u, 1);
+    }
+    let events = rep.advance(8, |u, _| Some((u % 2) as usize)).to_vec();
+    assert!(events.is_empty(), "one counted fact each for members 0 and 1");
+}
+
+#[test]
 fn budget_binds_in_some_case() {
     // The vectors must exercise the budget: some table where the cut weight would exceed B_rep.
     let b_rep = G2Config::default().b_rep as f64 / ONE as f64;

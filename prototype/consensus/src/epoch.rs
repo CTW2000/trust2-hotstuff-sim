@@ -88,6 +88,8 @@ pub struct EpochConfig {
     pub leader_rule: LeaderRule,
     /// Experiment switch: the G2 CUSUM threshold in millionths, 0 for the protocol's (DESIGN.md §15.13).
     pub g2_threshold: i64,
+    /// Experiment switch (DESIGN.md §15.49): `G2Config::window`, in rounds (0: off).
+    pub g2_window: Round,
     /// Ablation (DESIGN.md §15.18): no reputation cut (B_rep = 0); convictions still exclude from leading.
     pub g2_no_reputation: bool,
     /// LeaderRule::Aptos failure threshold in percent, 0 for aptos-core's (DESIGN.md §15.20).
@@ -176,6 +178,7 @@ pub fn scaled(config: &EpochConfig) -> (PunishConfig, G2Config) {
     if config.g2_threshold > 0 {
         g2.threshold = config.g2_threshold;
     }
+    g2.window = config.g2_window;
     if config.g2_no_reputation {
         g2.b_rep = 0;
     }

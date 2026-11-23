@@ -198,6 +198,11 @@ pub struct Core {
     headers: HashMap<Digest, Block>,
     // A proposal for the round held back until we have the block certified by our high QC.
     pending_proposal: Option<(Round, Option<TC>)>,
+    // H6 (§15.48): the QC that completed the commit proof of the terminal block of the epoch before ours, by which
+    // we entered our epoch. It goes out with our timeouts and TCs, so that a node still in that epoch enters on it.
+    entry: Option<QC>,
+    // The entry proof of another node that we have verified and processed (cleared when we enter an epoch).
+    entry_seen: Option<Digest>,
     // The round at the last round-based cleanup of the detection / accusation / inclusion state.
     last_cleanup: Round,
 }
@@ -295,6 +300,8 @@ impl Core {
             requested: HashMap::new(),
             headers: HashMap::new(),
             pending_proposal: None,
+            entry: None,
+            entry_seen: None,
             last_cleanup: 0,
         }
     }
@@ -498,7 +505,7 @@ impl Core {
     /// Whether a message is for a round more than ACCEPT_WINDOW beyond ours. Never a TC: it is a certificate
     /// (2f+1 signatures), so it cannot be forged to fill our maps, and it moves a node that fell behind forward.
     fn beyond_window(&self, message: &ConsensusMessage) -> bool {
-        !matches!(message, ConsensusMessage::TC(_))
+        !matches!(message, ConsensusMessage::TC(_) | ConsensusMessage::Entry(_))
             && round_of(message).map_or(false, |round| round > self.round.saturating_add(ACCEPT_WINDOW))
     }
 
@@ -618,9 +625,70 @@ impl Core {
         self.replay.extend(self.deferred.take());
         self.requested.clear();
         self.headers.clear();
+        self.entry_seen = None;
         self.accuser.cleanup(self.epochs.done() + 1);
         self.inclusion.cleanup(self.epochs.done() + 1);
         self.detector.cleanup(self.round.saturating_sub(DETECT_WINDOW));
+    }
+
+    /// H6 (§15.48): if we went from epoch `before` to the next while `qc`, a QC of `before`, was processed, it is
+    /// the QC that completed the commit proof of the terminal block: our entry proof.
+    fn note_entry(&mut self, before: EpochNumber, qc: &QC) {
+        let now = self.epochs.epoch();
+        if now == before + 1 && qc.epoch == before {
+            self.entry = Some(qc.clone());
+        } else if now > before {
+            self.entry = None; // entered otherwise (several epochs at once): no proof of ours to pass on
+        }
+    }
+
+    /// The frame that carries our entry proof, if we have one.
+    fn entry_message(&self) -> Option<Bytes> {
+        self.entry.as_ref().map(|qc| {
+            let message = bincode::serialize(&ConsensusMessage::Entry(qc.clone())).expect("Failed to serialize entry proof");
+            Bytes::from(message)
+        })
+    }
+
+    /// H6: every timeout and TC we send goes out with our entry proof. The members that entered an epoch may hold
+    /// no QC of the epoch before any more (their high QC is of the new epoch), and a node left behind gets no block
+    /// when the round stalls; without this it could not enter, and two honest groups could stall for good.
+    async fn broadcast_entry(&mut self) {
+        if let Some(message) = self.entry_message() {
+            let addresses = self.committee().broadcast_addresses(&self.name).into_iter().map(|(_, x)| x).collect();
+            self.network.broadcast(addresses, message).await;
+        }
+    }
+
+    /// H6: the entry proof of a member of the next epoch, while we are still in ours. It is a QC of our epoch past
+    /// its end: process it as any QC, which enters the next epoch when it completes the commit proof of our
+    /// terminal block (H3), and propose if we lead the round it moves us to. A QC that is not of our epoch or not
+    /// past its end is dropped unverified, and one we have processed is not verified again; the message is not
+    /// signed by its sender, and a forged one costs us what a forged TC does.
+    async fn handle_entry(&mut self, qc: &QC) -> ConsensusResult<()> {
+        if qc.epoch != self.epochs.epoch() || !self.epochs.past_end(qc.round) {
+            return Ok(());
+        }
+        let digest = qc.digest();
+        if self.entry_seen.as_ref() != Some(&digest) {
+            self.verify_qc(qc)?;
+            self.entry_seen = Some(digest);
+            debug!("Processing the entry proof {:?}", qc);
+            let round = self.round;
+            self.process_qc(qc).await;
+            if self.round > round && self.name == leader(self.committee(), self.round) {
+                self.propose(None).await;
+            }
+        }
+        if qc.epoch == self.epochs.epoch() {
+            // Still in our epoch: the block it certifies is missing. Ask its signers for it; when it comes it
+            // completes the proof our high QC already is (process_block).
+            let missing = matches!(self.read_block(&qc.hash).await, Ok(None)) && !self.headers.contains_key(&qc.hash);
+            if missing && self.ask_now(&qc.hash) {
+                self.request_certified(qc).await;
+            }
+        }
+        Ok(())
     }
 
     fn increase_last_voted_round(&mut self, target: Round) {
@@ -885,6 +953,9 @@ impl Core {
             .broadcast(addresses, Bytes::from(message))
             .await;
 
+        // H6: with it, the proof by which we entered our epoch, for the nodes still in the epoch before.
+        self.broadcast_entry().await;
+
         // Process our message (once: a resent timeout is already in our aggregator).
         if resent {
             return Ok(());
@@ -999,6 +1070,8 @@ impl Core {
             self.network
                 .broadcast(addresses, Bytes::from(message))
                 .await;
+
+            self.broadcast_entry().await;
 
             // Make a new block if we are the next leader.
             if self.name == leader(self.committee(), self.round) {
@@ -1178,6 +1251,7 @@ impl Core {
 
     #[async_recursion]
     async fn process_qc(&mut self, qc: &QC) {
+        let before = self.epochs.epoch();
         // G1: the votes of its signers (every QC we process is verified).
         let found = self.detector.qc(qc);
         self.propose_evidence(found).await;
@@ -1196,6 +1270,7 @@ impl Core {
         }
         // The commit proof of our terminal block, while a block before it is missing.
         self.enter_on_proof(qc).await;
+        self.note_entry(before, qc);
     }
 
     /// Commit as soon as we hold a commit proof, a QC for b1 whose parent b0 is from the round just
@@ -1298,9 +1373,11 @@ impl Core {
         // A block fetched by synchronization may complete the commit proof we already hold (for instance
         // the child of the terminal block when we catch up with a later epoch).
         let high_qc = self.high_qc.clone();
+        let before = self.epochs.epoch();
         if let Err(e) = self.try_commit_via_qc(&high_qc).await {
             warn!("{}", e);
         }
+        self.note_entry(before, &high_qc);
 
         // The block our held-back proposal was waiting for (we may have entered the next epoch meanwhile).
         if let Some((round, _)) = self.pending_proposal {
@@ -1318,7 +1395,9 @@ impl Core {
         // Note that we commit blocks only if we have all its ancestors.
         if b0.round + 1 == b1.round {
             self.mempool_driver.cleanup(b0.round).await;
+            let before = self.epochs.epoch();
             self.commit(b0).await?;
+            self.note_entry(before, &block.qc);
         }
 
         // Ensure the block's round is as expected.
@@ -1466,7 +1545,9 @@ impl Core {
             // It may complete the commit proof our high QC already is: nothing else would check again, as a
             // timeout repeated in the same round is resent without being processed.
             let high_qc = self.high_qc.clone();
+            let before = self.epochs.epoch();
             self.enter_on_proof(&high_qc).await;
+            self.note_entry(before, &high_qc);
             // It may be one a held-back proposal waits for (propose).
             if matches!(self.pending_proposal, Some((round, _)) if round == self.round) {
                 let (_, tc) = self.pending_proposal.take().unwrap();
@@ -1583,6 +1664,7 @@ impl Core {
             ConsensusMessage::TC(tc) => self.handle_tc(tc).await,
             ConsensusMessage::Attest(attestation) => self.handle_attestation(attestation).await,
             ConsensusMessage::QC(qc) => self.handle_qc(&qc).await,
+            ConsensusMessage::Entry(qc) => self.handle_entry(&qc).await,
             _ => panic!("Unexpected protocol message"),
         }
     }
@@ -1634,7 +1716,7 @@ fn epoch_of(message: &ConsensusMessage) -> u128 {
         ConsensusMessage::Timeout(timeout) => timeout.epoch,
         ConsensusMessage::TC(tc) => tc.epoch,
         ConsensusMessage::Attest(attestation) => attestation.epoch,
-        ConsensusMessage::QC(qc) => qc.epoch,
+        ConsensusMessage::QC(qc) | ConsensusMessage::Entry(qc) => qc.epoch,
         ConsensusMessage::SyncRequest(..) | ConsensusMessage::Otx(..) => 0,
     }
 }
@@ -1685,7 +1767,7 @@ fn round_of(message: &ConsensusMessage) -> Option<Round> {
         ConsensusMessage::Timeout(timeout) => Some(timeout.round),
         ConsensusMessage::TC(tc) => Some(tc.round),
         ConsensusMessage::Attest(attestation) => Some(attestation.round),
-        ConsensusMessage::QC(qc) => Some(qc.round),
+        ConsensusMessage::QC(qc) | ConsensusMessage::Entry(qc) => Some(qc.round),
         ConsensusMessage::SyncRequest(..) | ConsensusMessage::Otx(..) => None,
     }
 }

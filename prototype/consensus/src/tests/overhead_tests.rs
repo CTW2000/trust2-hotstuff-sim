@@ -141,6 +141,7 @@ fn overhead() {
             governance_malicious: false,
             leader_rule: Default::default(),
             g2_threshold: 0,
+            g2_window: 0,
             g2_no_reputation: false,
             aptos_failure_percent: 0,
         };

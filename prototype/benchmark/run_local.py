@@ -44,6 +44,8 @@ def node_parameters(args):
         consensus["leader_rule"] = args.leader_rule
     if args.g2_threshold:                                    # another G2 threshold, for comparisons (§15.13)
         consensus["g2_threshold"] = args.g2_threshold
+    if getattr(args, "g2_window", 0):                        # facts within a window are one episode (§15.49)
+        consensus["g2_window"] = args.g2_window
     if args.g2_no_reputation:                                # ablation: convictions only exclude (§15.18)
         consensus["g2_no_reputation"] = True
     if args.aptos_failure_percent:                           # LeaderRule::Aptos threshold sweep (§15.20)
@@ -371,6 +373,9 @@ def main():
                     help="ablation: G2 convictions only exclude from leading, reputation stays 1 (B_rep = 0)")
     ap.add_argument("--g2-threshold", type=int, default=0,
                     help="G2 CUSUM threshold ln(gamma) in millionths (0: the protocol's), for comparisons")
+    ap.add_argument("--g2-window", type=int, default=0,
+                    help="rounds within which further adverse facts against one leader are the same episode "
+                         "(DESIGN.md §15.49; 0: off, the protocol)")
     ap.add_argument("--fault", choices=["none", "crash", "restart", "outage", "target"], default="none",
                     help="fault of honest nodes (DESIGN.md §15.22): crash, maintenance restart, region outage, or "
                          "targeted framing (§15.27: their consensus messages to --target-victims honest nodes late)")

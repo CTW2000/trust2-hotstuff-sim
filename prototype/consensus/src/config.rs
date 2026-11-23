@@ -91,6 +91,10 @@ pub struct Parameters {
     /// Experiment switch: the G2 CUSUM threshold ln γ in millionths (0: the protocol's, `G2Config::default`).
     #[serde(default)]
     pub g2_threshold: i64,
+    /// Experiment switch (DESIGN.md §15.49): adverse facts against one leader within this many rounds of a counted
+    /// one are one episode (0: off, the protocol).
+    #[serde(default)]
+    pub g2_window: u64,
     /// Experiment switch (DESIGN.md §15.18, ablation): G2 convictions only exclude from leading; reputation stays 1
     /// (B_rep = 0), as a leader-only reputation would.
     #[serde(default)]
@@ -179,6 +183,7 @@ impl Default for Parameters {
             withhold_proof: false,
             leader_rule: LeaderRule::default(),
             g2_threshold: 0,
+            g2_window: 0,
             g2_no_reputation: false,
             aptos_failure_percent: 0,
             fork_vote_from: 0,
@@ -276,6 +281,9 @@ impl Parameters {
         }
         if self.g2_threshold != 0 {
             info!("G2 threshold set to {} millionths (experiment)", self.g2_threshold);
+        }
+        if self.g2_window != 0 {
+            info!("G2 episode window set to {} rounds (experiment)", self.g2_window);
         }
         info!(
             "Entity cap set to {} ppm, uncertified class cap to {} ppm",
