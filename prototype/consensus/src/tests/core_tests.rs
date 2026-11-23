@@ -1421,6 +1421,38 @@ async fn a_timeout_of_the_next_epoch_fetches_the_block_its_qc_certifies() {
 }
 
 #[tokio::test]
+#[ignore = "reproduces an open gap (mock review M1, R2-W1; DESIGN.md 15.47): fails until the catch-up rule covers it"]
+async fn a_timeout_of_the_next_epoch_with_a_qc_of_that_epoch_fetches_its_block() {
+    // Mock review M1, R2-W1: the members that entered the next epoch may already hold a QC of it, formed on a block
+    // that the lagging nodes were never sent. Their timeouts then carry that QC and not the commit proof of our
+    // terminal block. The lagging node must still ask for the block it certifies and walk back from it to the first
+    // block of the epoch, whose QC is the commit proof; otherwise the two groups stall for good when the leaders
+    // that withheld the blocks fall silent.
+    let committee = committee_with_base_port(17_800);
+    let mut members = keys();
+    let (name, secret) = members.remove(0);
+    let hash = Digest([6; 32]);
+    let unsigned = QC { hash: hash.clone(), round: 12, epoch: EPOCH + 1, votes: Vec::new() };
+    let digest = unsigned.digest();
+    let votes = members.iter().map(|(key, secret)| (*key, Signature::new(&digest, secret))).collect();
+    let high_qc = QC { votes, ..unsigned };
+    let signer = members[2].0;
+    let (author, author_secret) = members.remove(0);
+    let mut stalled = Timeout::new_from_key(high_qc, 13, false, author, &author_secret);
+    stalled.epoch = EPOCH + 1;
+    stalled.signature = Signature::new(&stalled.digest(), &author_secret);
+    let expected = bincode::serialize(&ConsensusMessage::SyncRequest(hash, name)).unwrap();
+
+    let received = frames(committee.address(&signer).unwrap(), 4);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let store_path = ".db_test_a_timeout_of_the_next_epoch_with_a_qc_of_that_epoch";
+    let (tx_core, mut rx_proposer, _rx_commit) = core(name, secret, committee.clone(), store_path);
+    tokio::spawn(async move { while rx_proposer.recv().await.is_some() {} });
+    tx_core.send(ConsensusMessage::Timeout(stalled)).await.unwrap();
+    assert!(asked(received, Bytes::from(expected)).await, "a signer of the QC is asked");
+}
+
+#[tokio::test]
 async fn nr_timeouts_make_an_accusation() {
     // G2: NR = 1 timeouts of a round from more than 2/3 of the weight go to the proposer as an AT accusation.
     let (leader1, leader2) = (leader_keys(1).0, leader_keys(2).0);
