@@ -98,6 +98,23 @@ class SilentLeader(Adversary):
         return ViewPlan()
 
 
+class Offline(Adversary):
+    """Replicas that are down from a given view on: as leader such a replica sends no proposal, and it does not
+    vote. `starts` maps (Byzantine) replicas to the first view in which they are down. Their timeouts are still
+    sent, since the engine has no silent timeouts; this only lets views end when the down replicas hold more than
+    one third, where no QC forms either way."""
+    name = "offline"
+
+    def __init__(self, starts):
+        self.starts = {int(k): int(v) for k, v in dict(starts).items()}
+
+    def plan(self, w, st):
+        down = frozenset(k for k, s in self.starts.items() if w >= s)
+        if st.leader(w) in down:
+            return ViewPlan(prop_targets=np.zeros(st.cfg.n, bool), silent_voters=down)
+        return ViewPlan(silent_voters=down)
+
+
 class SlowLeader(Adversary):
     """A5: a colluding leader delays its proposal to every recipient by xi ms (slow but successful
     while xi stays well below the timeout), in each of its views with probability p."""
