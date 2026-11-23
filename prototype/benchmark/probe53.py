@@ -9,7 +9,7 @@ import os
 os.environ["TTRU_OUT"] = "results-probe53"
 import p5
 
-LN300, LN1E3 = 5_703_782, 6_907_755     # in millionths; 0 stands for the protocol's ln 10^2
+LN300, LN1E3 = 5_703_782, 6_907_755     # in millionths; 0 stood for the protocol's ln 10^2 (ln 300 since 2026-11-22)
 
 
 def main():

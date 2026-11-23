@@ -37,16 +37,18 @@ pub struct G2Config {
 }
 
 impl Default for G2Config {
-    /// The recommended protocol (信任2.0_协议级验证 §4.4, γ from §4.9): q = 0.5, ρ̄ = 0.1, γ = 10², D = 500,
-    /// cap 0.5, r_min = 0.7, step 0.1, recovery 0.02, B_rep = 0.10, lag 10. γ was 10⁴ until the threshold sweep
-    /// of 2026-11-04 (DESIGN.md §15.13): a run of bad facts now convicts after 3 leads, not 6. Convictions beyond
-    /// the cap queued (FIFO, dropped after 500 rounds) until §15.31.
+    /// The recommended protocol (信任2.0_协议级验证 §4.4, γ from §4.9): q = 0.5, ρ̄ = 0.1, γ = 300, D = 500,
+    /// cap 0.5, r_min = 0.7, step 0.1, recovery 0.02, B_rep = 0.10, lag 10. A run of bad facts convicts after
+    /// 4 leads: ln 300 = 5.70 lies between 3 ln 5 = 4.83 and 4 ln 5 = 6.44. γ was 10⁴ (6 leads) until the
+    /// threshold sweep of 2026-11-04 (DESIGN.md §15.13) and 10² (3 leads) until 2026-11-22 (§15.46): three failed
+    /// leads in a row also happen to an honest node whose own messages stall for a few seconds. Convictions
+    /// beyond the cap queued (FIFO, dropped after 500 rounds) until §15.31.
     fn default() -> Self {
         Self {
             lag: 10,
             up: 1_609_438,         // ln 5
             down: -587_787,        // ln(5/9)
-            threshold: 4_605_170,  // ln 10²
+            threshold: 5_703_782,  // ln 300
             exclusion: 500,
             cap: ONE / 2,
             r_min_ppm: 700_000,

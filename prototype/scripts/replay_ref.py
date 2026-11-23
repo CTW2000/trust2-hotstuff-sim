@@ -108,7 +108,7 @@ def scaled(n, length):
 class G2Params:
     def __init__(self, length):
         self.lag = 10
-        self.up, self.down, self.threshold = 1_609_438, -587_787, 4_605_170
+        self.up, self.down, self.threshold = 1_609_438, -587_787, 5_703_782      # ln 5, ln(5/9), ln 300
         self.exclusion = 500
         self.cap = ONE // 2
         self.r_min, self.step = 700_000, 100_000

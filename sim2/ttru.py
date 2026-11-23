@@ -32,9 +32,10 @@ import numpy as np
 
 from . import schedule as S
 
-# The recommended protocol's G2 CUSUM threshold gamma (h = ln gamma): 10^2 since 2026-11-05 (prototype DESIGN.md
-# §15.13, 验证 v0.21 §4.9), 10^4 before. The experiments of the recommended protocol (dirTtruV12, dirTtruV12b) use it.
-GAMMA = 1e2
+# The recommended protocol's G2 CUSUM threshold gamma (h = ln gamma): 300 since 2026-11-22 (prototype DESIGN.md
+# §15.46: four bad leads in a row convict), 10^2 from 2026-11-05 (§15.13, 验证 v0.21 §4.9), 10^4 before. The
+# experiments of the recommended protocol (dirTtruV12, dirTtruV12b) use it.
+GAMMA = 300.0
 
 
 def scheme(epoch=25, reference=100):

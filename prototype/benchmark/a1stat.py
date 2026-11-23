@@ -6,9 +6,10 @@ round R led by X"), the exclusions ("G2: X excluded from leading") and the final
   - the accused share of honest-led rounds (rounds of the last 20 left out: their accusations may not be on the
     ledger yet);
   - P(accused | the same leader's previous lead was accused) against P(accused | it was not): serial correlation;
-  - runs of 2 and 3 consecutive accused leads of one honest leader (3 in a row convict at gamma = 10^2);
+  - runs of 2, 3 and 4 consecutive accused leads of one honest leader (4 in a row convict at gamma = 300, the
+    protocol's since 2026-11-22; 3 did at 10^2);
   - honest exclusions (convictions) and the honest weight cut at the end;
-  - the convictions per 1000 honest-led rounds that the CUSUM (up ln 5, down ln(5/9), threshold ln 100) would give
+  - the convictions per 1000 honest-led rounds that the CUSUM (up ln 5, down ln(5/9), threshold ln 300) would give
     if accusations were independent at the measured rate (Monte Carlo), to set against the simulator.
 Only the standard library is used."""
 import math
@@ -30,7 +31,7 @@ REPUTATION = re.compile(r"G2: reputation of (\S+) is (\d+) ppm")
 TIMEOUT = re.compile(r"Timeout reached for round (\d+)")
 COMMITTED = re.compile(r"Committed B(\d+)")
 TAIL = 20
-UP, DOWN, THRESHOLD = math.log(5), math.log(5 / 9), math.log(100)
+UP, DOWN, THRESHOLD = math.log(5), math.log(5 / 9), math.log(300)
 
 
 def run_stats(logs):
@@ -69,7 +70,7 @@ def run_stats(logs):
     for r in honest:
         leads[leader[r]].append(r in accused)
     after = {(True, True): 0, (True, False): 0, (False, True): 0, (False, False): 0}
-    run2 = run3 = 0
+    run2 = run3 = run4 = 0
     for seq in leads.values():
         for a, b in zip(seq, seq[1:]):
             after[(a, b)] += 1
@@ -78,6 +79,7 @@ def run_stats(logs):
             streak = streak + 1 if x else 0
             run2 += streak == 2
             run3 += streak == 3
+            run4 += streak == 4
     f = (len(names) - 1) // 3
     stalled = {r for r, nodes in timed_out.items() if len(nodes) >= f + 1}
     # Where accusations of honest leaders come from: after a stalled round (entered by TC), or after a QC; and
@@ -90,7 +92,7 @@ def run_stats(logs):
     n = len(names)
     cut = sum((1 - rep.get(node, 10**6) / 1e6) / n for node in names if roles[node] == "honest")
     return dict(top=top, created_top=max(leader, default=0), honest_led=len(honest), accused=sum(r in accused for r in honest), after=after,
-                run2=run2, run3=run3, after_stall=after_stall, repeat_lead=repeat_lead, honest_excluded=sum(roles.get(x) == "honest" for x in excluded),
+                run2=run2, run3=run3, run4=run4, after_stall=after_stall, repeat_lead=repeat_lead, honest_excluded=sum(roles.get(x) == "honest" for x in excluded),
                 framer_excluded=sum(roles.get(x) == "framer" for x in excluded), honest_cut=cut)
 
 
@@ -118,7 +120,7 @@ def main():
                 arms[arm].append(run_stats(os.path.join(tmp, "logs")))
             finally:
                 shutil.rmtree(tmp)
-    print("arm | runs | committed top (created top) | honest-led rounds | accused (share) | P(acc|prev acc) / P(acc|prev not) | 2 / 3 in a row | "
+    print("arm | runs | committed top (created top) | honest-led rounds | accused (share) | P(acc|prev acc) / P(acc|prev not) | 2 / 3 / 4 in a row | "
           "honest convictions (per 1000) | framer convictions | honest cut max | CUSUM if independent (per 1000)")
     for arm, rows in sorted(arms.items()):
         h = sum(r["honest_led"] for r in rows)
@@ -136,7 +138,7 @@ def main():
                  f"(n={rl[(True, True)] + rl[(True, False)]}) vs {cond(rl, False):.4f}")
         tops = "/".join(f"{r['top']}({r['created_top']})" for r in rows)
         print(f"{arm} | {len(rows)} | {tops} | {h} | {a} ({p:.4f}) | {p_aa:.3f} / {p_na:.4f} | "
-              f"{sum(r['run2'] for r in rows)} / {sum(r['run3'] for r in rows)} | {conv} ({1000 * conv / max(1, h):.2f}) | "
+              f"{sum(r['run2'] for r in rows)} / {sum(r['run3'] for r in rows)} / {sum(r['run4'] for r in rows)} | {conv} ({1000 * conv / max(1, h):.2f}) | "
               f"{sum(r['framer_excluded'] for r in rows)} | {max(r['honest_cut'] for r in rows):.4f} | "
               f"{cusum_rate(p):.3f}" + extra)
 

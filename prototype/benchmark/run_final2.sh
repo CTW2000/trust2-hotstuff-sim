@@ -1,6 +1,6 @@
 #!/bin/bash
 # The unified final reruns (DESIGN.md §15.40): every number of the evaluation section on one binary and one
-# configuration (next table an epoch ahead, epochs of 25 rounds, threshold ln 10^2, H1-H5, the table chain, the
+# configuration (next table an epoch ahead, epochs of 25 rounds, threshold ln 300, H1-H5, the table chain, the
 # synced safety state), one run at a time, on the lab server. Results go to results-final/ and leave results-p5/
 # as it is. About a day in all.
 #

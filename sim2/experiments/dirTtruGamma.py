@@ -1,12 +1,14 @@
 """Threshold sweep of the G2 CUSUM (2026-11-04, after the prototype comparison of leader rules, prototype/DESIGN.md
 §15.12): how much faster silent leaders are convicted at a lower threshold h = ln(gamma), and what it costs the
-honest replicas. With q = 0.5 and rho_bar = 0.1 a run of bad facts convicts after 6, 5, 3, 2 and 1 leads for the
-gammas below (10^4 was the recommended protocol; 10^2 since 2026-11-05, ttru.GAMMA). The sweep sets h itself. Everything else is dirTtruV12 under the adopted scheme:
+honest replicas. With q = 0.5 and rho_bar = 0.1 a run of bad facts convicts after 6, 5, 4, 3, 2 and 1 leads for the
+gammas below (10^4 was the recommended protocol, 10^2 from 2026-11-05, 300 since 2026-11-22, ttru.GAMMA). The sweep
+sets h itself. Everything else is dirTtruV12 under the adopted scheme:
   silent   colluding leaders send nothing (target 0.2 / 0.25, eps 0 / 0.1, doubling off);
   frame    colluders claim NR = 1 and withhold votes in honest views, late messages eps 0.1 / 0.2 / 0.3, base
            network only (the wide network gives the same results);
   chaos    GST at view 3000 of 5000 with the framing adversary (iid, outage, adv), doubling off.
-Environment: SIM_PROCS (default 8), SIM_SEEDS (default 50; chaos uses half); set SIM_SCHEME=h1p.
+Environment: SIM_PROCS (default 8), SIM_SEEDS (default 50; chaos uses half); set SIM_SCHEME=h1p. SIM_GAMMAS (a
+comma-separated list) runs only those gammas and keeps the rows of the others that the result files already hold.
 Run from the repository root:  python -m sim2.experiments.dirTtruGamma [silent|frame|chaos|all|report]
 Out: results/dirTtru_gamma_<part><suffix>.csv and results/dirTtru_gamma<suffix>.md.
 """
@@ -22,7 +24,8 @@ from sim2 import ttru
 from sim2.experiments import dirTtruV12 as V
 from sim2.experiments.dirTtruReview import fmt, poisson_upper, wilson_upper
 
-GAMMAS = (1e4, 1e3, 1e2, 20.0, 4.0)
+GAMMAS = (1e4, 1e3, 300.0, 1e2, 20.0, 4.0)
+ONLY = tuple(float(g) for g in os.environ.get("SIM_GAMMAS", "").split(",") if g) or GAMMAS
 UP = float(np.log(0.5 / 0.1))
 _build = V.build
 
@@ -51,11 +54,11 @@ def job(args):
 def jobs_of(part):
     seeds, half = V.SEEDS, max(1, V.SEEDS // 2)
     if part == "silent":
-        return [(part, g, (tg, e, False, s)) for g in GAMMAS for tg in (0.2, 0.25) for e in (0.0, 0.1) for s in range(seeds)]
+        return [(part, g, (tg, e, False, s)) for g in ONLY for tg in (0.2, 0.25) for e in (0.0, 0.1) for s in range(seeds)]
     if part == "frame":
-        return [(part, g, (tg, e, "base", s)) for g in GAMMAS for tg in (0.2, 0.25) for e in (0.1, 0.2, 0.3)
+        return [(part, g, (tg, e, "base", s)) for g in ONLY for tg in (0.2, 0.25) for e in (0.1, 0.2, 0.3)
                 for s in range(seeds)]
-    return [(part, g, (nm, False, s)) for g in GAMMAS for nm in ("iid", "outage", "adv") for s in range(half)]
+    return [(part, g, (nm, False, s)) for g in ONLY for nm in ("iid", "outage", "adv") for s in range(half)]
 
 
 def name(part):
@@ -66,6 +69,9 @@ def run(part):
     t0 = time.time()
     with Pool(V.PROCS) as pool:
         rows = pool.map(job, jobs_of(part), chunksize=1)
+    if ONLY != GAMMAS and os.path.exists(name(part)):      # a partial sweep: the other gammas keep their rows
+        with open(name(part)) as fh:
+            rows = [r for r in csv.DictReader(fh) if float(r["gamma"]) not in ONLY] + rows
     with open(name(part), "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=sorted({k for r in rows for k in r}))
         w.writeheader()
@@ -88,7 +94,8 @@ def load(part):
 
 def report():
     L = ["# G2 CUSUM 阈值扫描\n",
-         "h = ln γ，q = 0.5、ρ̄ = 0.1 时连续坏事实在下列次数的领导后定罪；γ = 10⁴ 是推荐协议。其余同 dirTtruV12（公式 A、"
+         "h = ln γ，q = 0.5、ρ̄ = 0.1 时连续坏事实在下列次数的领导后定罪；推荐协议取 γ = 300（2026-11-22 起；此前 10²，更早 "
+         "10⁴）。其余同 dirTtruV12（公式 A、"
          "按本文交接规则），n = 31。区间为对人群的自助法 95% 区间。\n"]
     sl = load("silent")
     if sl:

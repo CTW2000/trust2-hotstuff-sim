@@ -17,7 +17,7 @@ import stats_a4 as A
 
 NODES = 31
 FAULTY = {"silent": 3, "late": 0, "framers+late": 6}
-LN1E4 = "9210340"
+EARLIER = {"9210340": "@1e4", "4605170": "@1e2"}      # the protocol's threshold until 2026-11-05 and 2026-11-22
 
 
 def col(rows, key):
@@ -53,7 +53,7 @@ def main(path):
     rows = list(csv.DictReader(open(path)))
     cell = {}
     for r in rows:
-        rule = r["leader_rule"] + ("@1e4" if r["g2_threshold"] == LN1E4 else "")
+        rule = r["leader_rule"] + EARLIER.get(r["g2_threshold"], "")
         cell.setdefault((r["scenario"], rule), []).append(r)
     print(f"## {path}: {len(rows)} runs\n")
     print("| scenario | rule | timeouts | rounds/s | e2e ms | against honest leaders | excluded honest / faulty |")
@@ -85,7 +85,7 @@ def main(path):
         if (sc, "trust2") not in cell:      # a batch with fewer scenarios (probe48.py)
             continue
         ref = cell[(sc, "trust2")]
-        for rule in ("none", "aptos", "failed", "trust2@1e4"):
+        for rule in ("none", "aptos", "failed", "trust2@1e2", "trust2@1e4"):
             g = cell.get((sc, rule))
             if not g:
                 continue

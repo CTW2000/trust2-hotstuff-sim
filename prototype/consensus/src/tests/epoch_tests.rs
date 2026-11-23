@@ -247,8 +247,8 @@ fn accusations_count_against_the_leader_of_their_own_table() {
 
 #[test]
 fn silent_leader_loses_leadership_and_reputation() {
-    // G2 (DESIGN.md §12.2): every round led by one member is accused. Once three accusations are processed it
-    // is convicted at an epoch change: it no longer leads, and its reputation drops to 0.9 until the
+    // G2 (DESIGN.md §12.2): every round led by one member is accused. Once four accusations in a row are processed
+    // (γ = 300, §15.46) it is convicted at an epoch change: it no longer leads, and its reputation drops to 0.9 until the
     // exclusion (500 rounds) ends; the others are untouched.
     let mut epochs = Epochs::new(&committee(), config(10));
     let silent = leader(epochs.current(), 1);
@@ -272,8 +272,8 @@ fn silent_leader_loses_leadership_and_reputation() {
         assert!(r.iter().enumerate().all(|(i, x)| i == idx || *x == 1_000_000), "an honest member was cut");
     }
 
-    // Convicted at the second epoch change (rounds <= 11 processed: three accusations at γ = 10², §15.13), excluded
-    // for 500 rounds from the table after next (H1').
+    // Convicted at the second epoch change (rounds <= 11 processed, at least four of them its own and accused, which
+    // is what γ = 300 asks for, §15.46), excluded for 500 rounds from the table after next (H1').
     assert_eq!(excluded_epochs.first(), Some(&3));
     assert!(excluded_epochs.windows(2).take(49).all(|w| w[1] == w[0] + 1));
     assert!(excluded_epochs.len() < 80, "the exclusion never ended");

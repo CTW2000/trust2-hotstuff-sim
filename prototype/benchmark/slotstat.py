@@ -8,7 +8,7 @@ import csv
 import sys
 from statistics import median
 
-THRESHOLD = 4_605_170
+THRESHOLD = 4_605_170      # ln 10^2, the protocol's threshold when probe51.py ran (ln 300 since 2026-11-22)
 
 
 def num(rows, key):

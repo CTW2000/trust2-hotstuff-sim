@@ -18,7 +18,7 @@ from sim2 import ttru
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "consensus", "src", "tests", "g2_vectors.json")
 E, LAG, EPOCHS = 100, 10, 40
-RULE = dict(q=0.5, rho_bar=0.1, gamma=1e2, D=500, cap=0.5, evidence="at", queue=False)
+RULE = dict(q=0.5, rho_bar=0.1, gamma=300, D=500, cap=0.5, evidence="at", queue=False)
 WEIGHTS = dict(epoch=E, r_min=0.7, b_rep=0.10, step=0.1, recover=0.02)
 CASES = [  # (name, base, silent members, probability that another leader's round is accused, seed)
     ("silent3-n31-equal", "equal31", [0, 5, 9], 0.0, 1),

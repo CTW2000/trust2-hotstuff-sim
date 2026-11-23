@@ -385,17 +385,17 @@ def cmp():
 
 
 def cmpg():
-    """The comparison of leader rules (cmp) again after the G2 threshold changed from ln 10^4 to ln 10^2 (DESIGN.md
-    §15.13): the four rules at the new threshold and, in the silent scenario, Trust 2.0 at the old one as well
-    (g2_threshold = 9_210_340), interleaved within each repetition. Same scenarios and durations as cmp."""
-    old = 9_210_340
+    """The comparison of leader rules (cmp) at the protocol's G2 threshold, ln 300 since 2026-11-22 (DESIGN.md
+    §15.46): the four rules at it and, in the silent scenario, Trust 2.0 at the two earlier ones as well, ln 10^2
+    (§15.13) and ln 10^4, interleaved within each repetition. Same scenarios and durations as cmp."""
+    earlier = (4_605_170, 9_210_340)
     scenarios = (("silent", dict(silent=3), 90), ("late", dict(late_p=0.1), 90),
                  ("framers+late", dict(frame=6, late_p=0.1), 180))
     for rep in range(1, 6):
         for name, faults, duration in scenarios:
             runs = [(rule, 0) for rule in ("none", "aptos", "failed", "trust2")]
             if name == "silent":
-                runs.append(("trust2", old))
+                runs += [("trust2", threshold) for threshold in earlier]
             for rule, threshold in runs:
                 run("cmpg", dict(scenario=name, build="trust2", nodes=31, net="base", epoch_length=25, rep=rep,
                                  leader_rule=rule, g2_threshold=threshold, **faults), duration)
@@ -419,11 +419,11 @@ def cmpb():
 
 def a6():
     """Trade-off of detection speed against honest demotion for the leader rules (DESIGN.md §15.20; mock review A6):
-    the Aptos-style rule at failure thresholds 10% (aptos-core), 30% and 50%, and Trust 2.0 at gamma 10^4, 10^2 (the
-    protocol) and 20, alternating, 3 times each, n = 31, base, 25-round epochs, in three scenarios: 3 Byzantine silent
+    the Aptos-style rule at failure thresholds 10% (aptos-core), 30% and 50%, and Trust 2.0 at gamma 10^4, 10^2, 300
+    (the protocol since 2026-11-22, §15.46) and 20, alternating, 3 times each, n = 31, base, 25-round epochs, in three scenarios: 3 Byzantine silent
     leaders (90 s), 20% late messages (90 s), and 6 framers with 10% late (180 s)."""
     rules = [("aptos", dict(aptos_failure_percent=p)) for p in (10, 30, 50)]
-    rules += [("trust2", dict(g2_threshold=t)) for t in (9_210_340, 0, 2_995_732)]
+    rules += [("trust2", dict(g2_threshold=t)) for t in (9_210_340, 4_605_170, 0, 2_995_732)]
     scenarios = [("silent", dict(silent=3), 90), ("late20", dict(late_p=0.2), 90),
                  ("framers+late", dict(frame=6, late_p=0.1), 180)]
     for rep in range(1, 4):
@@ -524,7 +524,7 @@ def lc():
 
 
 def g100():
-    """Everything the G2 threshold can change, at the new one (ln 10^2; DESIGN.md §15.13): the comparison of leader
+    """Everything the G2 threshold can change, at the protocol's (DESIGN.md §15.13, §15.46): the comparison of leader
     rules (cmpg), then the parts of f25 where G2 convicts -- silent leaders (crashed, and on the weighted path), long
     framing with its control, long censorship. Runs without a conviction are the same at either threshold."""
     cmpg()
@@ -609,10 +609,11 @@ def r34x():
 
 def thr():
     """Mock review S1 (DESIGN.md §15.27): the G2 threshold was chosen in the simulator (§15.13); check the choice on
-    the prototype in new runs, at ln 4, ln 10^2 and ln 10^4 -- three silent Byzantine leaders (how fast they are
-    excluded) and six framing colluders with 20% late messages (whether honest leaders are convicted)."""
+    the prototype in new runs, at ln 4, ln 10^2, ln 300 (the protocol since 2026-11-22, §15.46) and ln 10^4 -- three
+    silent Byzantine leaders (how fast they are excluded) and six framing colluders with 20% late messages (whether
+    honest leaders are convicted)."""
     base = dict(build="trust2", nodes=31, net="base", epoch_length=25)
-    gammas = (("ln4", 1_386_294), ("ln1e2", 4_605_170), ("ln1e4", 9_210_340))
+    gammas = (("ln4", 1_386_294), ("ln1e2", 4_605_170), ("ln300", 5_703_782), ("ln1e4", 9_210_340))
     for rep in (1, 2, 3):
         for name, g in gammas:
             run("thr_silent", dict(scenario=name, rep=rep, **base, silent=3, g2_threshold=g), 90, extra=local_stats)
@@ -627,7 +628,7 @@ def thr2():
     20% the six colluders' withheld votes leave too few on time for a QC, nothing is committed and no fact reaches
     the ledger (thr_frame_late20.csv)."""
     base = dict(build="trust2", nodes=31, net="base", epoch_length=25)
-    gammas = (("ln4", 1_386_294), ("ln1e2", 4_605_170), ("ln1e4", 9_210_340))
+    gammas = (("ln4", 1_386_294), ("ln1e2", 4_605_170), ("ln300", 5_703_782), ("ln1e4", 9_210_340))
     for rep in (1, 2):
         for name, g in gammas:
             run("thr_frame", dict(scenario=name, rep=rep, **base, frame=6, late_p=0.1, g2_threshold=g), 300,

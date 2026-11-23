@@ -6,6 +6,8 @@ probe53.py (300 and 10^3 on both sides, with 10^2 again for the silent leaders).
 - Silent leaders, per batch and threshold: timeouts, rounds per second, latencies, accusations and exclusions of the
   silent nodes; each threshold against the 10^2 of its own batch (exact rank-sum test, relative difference of the
   medians, bootstrap 95%).
+These batches were run while the protocol's threshold was 10^2: a g2_threshold of 0 in their rows means 10^2 (it is
+300 since 2026-11-22, DESIGN.md 15.46).
 With tarballs of kept logs as further arguments: when each exclusion of a run happened (round, seconds from the
 first block), from node 0's log. Standard library only.
 Run from prototype/benchmark/:  python3 thrstat.py [results-probe52/threshold_logs/silent-*.tgz]

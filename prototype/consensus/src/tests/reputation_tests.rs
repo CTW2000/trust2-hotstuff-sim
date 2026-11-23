@@ -37,7 +37,36 @@ fn increments_are_the_log_likelihood_ratios() {
     let c = G2Config::default();
     assert!((c.up as f64 / 1e6 - (0.5f64 / 0.1).ln()).abs() < 1e-6);
     assert!((c.down as f64 / 1e6 - (0.5f64 / 0.9).ln()).abs() < 1e-6);
-    assert!((c.threshold as f64 / 1e6 - 1e2f64.ln()).abs() < 1e-6);
+    assert!((c.threshold as f64 / 1e6 - 300f64.ln()).abs() < 1e-6);
+}
+
+#[test]
+fn four_accused_leads_in_a_row_convict_and_three_do_not() {
+    // γ = 300 (DESIGN.md §15.46): ln 300 lies between 3 ln 5 and 4 ln 5, so three accused leads in a row leave the
+    // statistic below the threshold and the fourth convicts. One clean lead after three takes back less than an
+    // accusation adds, so the fourth accusation of five leads convicts too.
+    let c = G2Config::default();
+    assert!(3 * c.up < c.threshold && c.threshold <= 4 * c.up);
+    assert!(4 * c.up + c.down >= c.threshold);
+
+    // Member 0 leads every round; rounds 1 to 4 are accused.
+    let mut rep = Reputation::new(vec![ONE / 4; 4], c);
+    for u in 1..=3 {
+        rep.record(u, 1);
+    }
+    assert!(rep.advance(3, |_, _| Some(0)).is_empty());
+    assert!(!rep.excluded()[0]);
+    rep.record(4, 1);
+    assert_eq!(rep.advance(4, |_, _| Some(0)).to_vec(), vec![Event::Exclude(0, 4)]);
+    assert!(rep.excluded()[0]);
+
+    // Three accused leads, a clean one, then an accused one.
+    let mut rep = Reputation::new(vec![ONE / 4; 4], c);
+    for u in [1, 2, 3, 5] {
+        rep.record(u, 1);
+    }
+    assert!(rep.advance(4, |_, _| Some(0)).is_empty());
+    assert_eq!(rep.advance(5, |_, _| Some(0)).to_vec(), vec![Event::Exclude(0, 5)]);
 }
 
 /// Replays each simulator run: leaders by round robin over the members not excluded at the epoch's start,

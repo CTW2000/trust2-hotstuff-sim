@@ -9,7 +9,8 @@
   (suffix_otxs_on_ledger of suffix_otxs);
 - per node: rounds led ("Proposed B<round>"), and on node 0's ledger the AT accusation and omission facts against it,
   its G2 convictions (exclusions, queueing) with the time of the first one, its lowest reputation, and the highest
-  value its CUSUM reached (ppm; the threshold ln 10^2 is 4605170, one fact adds ln 5 = 1609438).
+  value its CUSUM reached (ppm; the threshold ln 300 is 5703782, one fact adds ln 5 = 1609438; until 2026-11-22
+  the threshold was ln 10^2 = 4605170).
 Honest nodes are those without an experiment switch; nodes hit by a crash, restart or region outage count as honest
 here (they are: the outage only delays their messages), reported apart as "region".
 """
