@@ -1,0 +1,166 @@
+{
+  "arm": "on",
+  "culprits": [],
+  "first_epoch": "250",
+  "forensics": {
+    "a_commits": 22,
+    "a_top": 23,
+    "b_commits": 19,
+    "b_top": 20,
+    "epochs": {
+      "e2_a_judges_b": {
+        "blocks": 0,
+        "named_blocks": 0,
+        "named_voters": [],
+        "other_table": 0,
+        "own_blocks": 0,
+        "own_voters": [],
+        "unjudged": 0
+      },
+      "e2_b_judges_a": {
+        "blocks": 0,
+        "named_blocks": 0,
+        "named_voters": [],
+        "other_table": 0,
+        "own_blocks": 0,
+        "own_voters": [],
+        "unjudged": 0
+      },
+      "h2_a_judges_b": {
+        "blocks": 0,
+        "epochs": null,
+        "off_terminal": 0,
+        "same_table": 0
+      },
+      "h2_b_judges_a": {
+        "blocks": 1,
+        "epochs": null,
+        "off_terminal": 0,
+        "same_table": 1
+      },
+      "terminals_a": [
+        [
+          250,
+          10
+        ],
+        [
+          251,
+          20
+        ]
+      ],
+      "terminals_b": [
+        [
+          250,
+          10
+        ]
+      ]
+    },
+    "fork": false
+  },
+  "h5": true,
+  "ledger": {
+    "AH": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+    ],
+    "R1": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      22
+    ]
+  },
+  "package": {
+    "error": "no two conflicting direct commits made of blocks of one epoch"
+  },
+  "second_branch_committed": false,
+  "shares": {
+    "Z": {
+      "second": 0.29,
+      "third": 0.3222223222223222
+    },
+    "tc_signers_AS_AH_Z": {
+      "second": 0.68,
+      "third": 0.6444446444446444
+    },
+    "voters_of_N1_R1_R2_Z": {
+      "second": 0.61,
+      "third": 0.6777776777776777
+    },
+    "voters_of_N_prime_AH_R2_Z": {
+      "second": 0.61,
+      "third": 0.6777776777776777
+    }
+  },
+  "steps": [
+    "rounds 1-21: the double vote of AS at round 2 is on the ledger; the third table gives AS no weight and Z 32.2%",
+    "R1 is given N1 (round 22): votes for it",
+    "R2 is given N1 (round 22): votes for it",
+    "R1 is given N2 (round 23): votes for it",
+    "R2 is given N2 (round 23): votes for it",
+    "R1 and R2 are given QC(N2) in a timeout of Z: both commit N1 (round 22) in the third epoch",
+    "round 21: AS, AH and Z time out; they hold 68.0% of the second table and 64.4% of the third: AH assembles no TC, and refuses the one Z assembles: Received TC without a quorum"
+  ],
+  "tables": {
+    "second": {
+      "AH": 290000,
+      "AS": 100000,
+      "R1": 290000,
+      "R2": 30000,
+      "Z": 290000
+    },
+    "third": {
+      "AH": 322222,
+      "AS": 0,
+      "R1": 322222,
+      "R2": 33333,
+      "Z": 322222
+    }
+  },
+  "tc_refused": {
+    "error": "Received TC without a quorum",
+    "requires_quorum": true,
+    "round": 21,
+    "round_of_AH": 21
+  },
+  "verify": null,
+  "weights": [
+    10,
+    29,
+    29,
+    3,
+    29
+  ]
+}

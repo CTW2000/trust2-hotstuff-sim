@@ -1,0 +1,210 @@
+{
+  "arm": "off",
+  "culprits": [
+    "Z"
+  ],
+  "first_epoch": "250",
+  "forensics": {
+    "a_commits": 22,
+    "a_top": 23,
+    "b_commits": 21,
+    "b_top": 25,
+    "case": "C3",
+    "culprits": [
+      "Eha2ruBiJdTh8gNjoQFe5zFJbfxVlV7VetJUeyWP+ws="
+    ],
+    "e1": 0,
+    "e2": 0,
+    "e3": 0,
+    "e4": 1,
+    "e_star": 252,
+    "epochs": {
+      "e2_a_judges_b": {
+        "blocks": 0,
+        "named_blocks": 0,
+        "named_voters": [],
+        "other_table": 0,
+        "own_blocks": 0,
+        "own_voters": [],
+        "unjudged": 0
+      },
+      "e2_b_judges_a": {
+        "blocks": 0,
+        "named_blocks": 0,
+        "named_voters": [],
+        "other_table": 0,
+        "own_blocks": 0,
+        "own_voters": [],
+        "unjudged": 0
+      },
+      "h2_a_judges_b": {
+        "blocks": 2,
+        "epochs": null,
+        "off_terminal": 0,
+        "same_table": 2
+      },
+      "h2_b_judges_a": {
+        "blocks": 2,
+        "epochs": null,
+        "off_terminal": 0,
+        "same_table": 2
+      },
+      "terminals_a": [
+        [
+          250,
+          10
+        ],
+        [
+          251,
+          20
+        ]
+      ],
+      "terminals_b": [
+        [
+          250,
+          10
+        ],
+        [
+          251,
+          20
+        ]
+      ]
+    },
+    "fork": true,
+    "licensed": 1,
+    "missing": null,
+    "share": 0.3222223222223222,
+    "tables_agree": true,
+    "x_epoch": 252,
+    "x_round": 22,
+    "x_side": "a",
+    "y_epoch": 252,
+    "y_round": 24,
+    "z_round": 24
+  },
+  "h5": false,
+  "ledger": {
+    "AH": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      24
+    ],
+    "R1": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      22
+    ]
+  },
+  "package": {
+    "branch": 0,
+    "bytes": 6186,
+    "case": "C3",
+    "evidence": 1,
+    "links": 2,
+    "missing": null
+  },
+  "second_branch_committed": true,
+  "shares": {
+    "Z": {
+      "second": 0.29,
+      "third": 0.3222223222223222
+    },
+    "tc_signers_AS_AH_Z": {
+      "second": 0.68,
+      "third": 0.6444446444446444
+    },
+    "voters_of_N1_R1_R2_Z": {
+      "second": 0.61,
+      "third": 0.6777776777776777
+    },
+    "voters_of_N_prime_AH_R2_Z": {
+      "second": 0.61,
+      "third": 0.6777776777776777
+    }
+  },
+  "steps": [
+    "rounds 1-21: the double vote of AS at round 2 is on the ledger; the third table gives AS no weight and Z 32.2%",
+    "R1 is given N1 (round 22): votes for it",
+    "R2 is given N1 (round 22): votes for it",
+    "R1 is given N2 (round 23): votes for it",
+    "R2 is given N2 (round 23): votes for it",
+    "R1 and R2 are given QC(N2) in a timeout of Z: both commit N1 (round 22) in the third epoch",
+    "round 21: AS, AH and Z time out; AS and AH assemble TC(21) and move on",
+    "round 22: AS, AH and Z time out; AS and AH assemble TC(22) and move on",
+    "round 23: AS, AH and Z time out; AS and AH assemble TC(23) and move on",
+    "AH is given N' (round 24): votes for it",
+    "R2 is given N' (round 24): votes for it",
+    "AH is given N'' (round 25): votes for it",
+    "R2 is given N'' (round 25): votes for it",
+    "AH is given QC(N'') in a timeout of Z: it commits N' (round 24) in the third epoch"
+  ],
+  "tables": {
+    "second": {
+      "AH": 290000,
+      "AS": 100000,
+      "R1": 290000,
+      "R2": 30000,
+      "Z": 290000
+    },
+    "third": {
+      "AH": 322222,
+      "AS": 0,
+      "R1": 322222,
+      "R2": 33333,
+      "Z": 322222
+    }
+  },
+  "tc_refused": null,
+  "verify": {
+    "accountable": false,
+    "culprits": [
+      "Eha2ruBiJdTh8gNjoQFe5zFJbfxVlV7VetJUeyWP+ws="
+    ],
+    "epoch": 252,
+    "total": 999999,
+    "weight": 322222,
+    "x_round": 22,
+    "y_round": 24
+  },
+  "weights": [
+    10,
+    29,
+    29,
+    3,
+    29
+  ]
+}

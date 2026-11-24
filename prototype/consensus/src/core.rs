@@ -31,6 +31,10 @@ use std::time::{Duration, Instant};
 #[path = "tests/core_tests.rs"]
 pub mod core_tests;
 
+#[cfg(test)]
+#[path = "tests/handover_tests.rs"]
+pub mod handover_tests;
+
 /// Messages of the next epoch wait in `Deferred` up to this many bytes, shared equally by the members.
 const MAX_DEFERRED_BYTES: usize = 64 << 20;
 
