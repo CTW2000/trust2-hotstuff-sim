@@ -130,6 +130,8 @@ pub struct Epochs {
     /// LeaderRule::Aptos: how many committed blocks were recorded in all (names the history a table was made from in
     /// the trace that casestudy/aptos_leader_reputation_check.rs replays against aptos-core, DESIGN.md §15.42).
     aptos_recorded: u64,
+    /// The rounds whose AT accusation is logged under a rule that does not use it (`note_accusations`).
+    noted: HashSet<Round>,
 }
 
 /// What Aptos keeps of a committed block (NewBlockEvent): its proposer, the failed proposers it records (the leaders
@@ -289,6 +291,7 @@ impl Epochs {
             watermark: HashMap::new(),
             history: VecDeque::new(),
             aptos_recorded: 0,
+            noted: HashSet::new(),
         };
         // H1': the second epoch has no ledger two terminal blocks back either, so it starts from the same state.
         for epoch in roster.epoch..=roster.epoch + 1 {
@@ -431,9 +434,15 @@ impl Epochs {
     pub fn record(&mut self, block: &Block) {
         match self.config.leader_rule {
             LeaderRule::Trust2 => self.record_accusations(block),
-            LeaderRule::Failed => self.record_failed(block),
-            LeaderRule::Aptos => self.record_aptos(block),
-            LeaderRule::None => (),
+            LeaderRule::Failed => {
+                self.note_accusations(block);
+                self.record_failed(block)
+            }
+            LeaderRule::Aptos => {
+                self.note_accusations(block);
+                self.record_aptos(block)
+            }
+            LeaderRule::None => self.note_accusations(block),
         }
         self.record_ledger(block);
     }
@@ -473,6 +482,20 @@ impl Epochs {
         self.history.push_back(event);
         while self.history.len() > aptos::PROPOSER_WINDOW_MULTIPLIER * self.members.len() {
             self.history.pop_front();
+        }
+    }
+
+    /// The rules of the comparison do not use the AT accusations a block carries. They are logged all the same, the
+    /// first of a round and as under LeaderRule::Trust2, so that the accusations per leader can be read off a run
+    /// under any rule (DESIGN.md §15.53); nothing else depends on them.
+    fn note_accusations(&mut self, block: &Block) {
+        for accusation in &block.accusations {
+            if !self.noted.insert(accusation.round) {
+                continue;
+            }
+            if let Some(table) = self.tables.get(&accusation.epoch) {
+                info!("G2: accusation of round {} led by {}", accusation.round, leader(table, accusation.round));
+            }
         }
     }
 

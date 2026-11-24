@@ -613,6 +613,14 @@ fn no_rule_keeps_everyone_leading() {
     }
     assert!(epochs.reputation.facts().is_empty());
     assert!(epochs.current().authorities.values().all(|a| a.leader && a.lead == 0 && a.stake == 250_000));
+    // The accusations are noted for the log (DESIGN.md §15.53), each round once, and change nothing else.
+    let table = epochs.current().clone();
+    let noted = epochs.noted.len();
+    assert!(noted > 0);
+    epochs.record(&accusing(table.epoch, 50, &[41]));
+    epochs.record(&accusing(table.epoch, 50, &[41]));
+    assert_eq!(epochs.noted.len(), noted + 1);
+    assert!(epochs.reputation.facts().is_empty());
 }
 
 #[test]
