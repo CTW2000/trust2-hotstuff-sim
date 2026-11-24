@@ -152,3 +152,17 @@ fn with_slots_a_sender_is_late_for_a_whole_slot_towards_everyone() {
     let late = (0..1000).filter(|_| delays.is_late(0, 0.5)).count();
     assert!((300..700).contains(&late), "{}", late);
 }
+
+#[test]
+fn with_fifo_a_message_is_due_no_earlier_than_the_one_queued_before_it() {
+    // DESIGN.md §15.53: the queueing model. A late message holds back the ones behind it on the link; a message
+    // behind an earlier one is not moved, and the first message of a link is due when its own delay says.
+    let now = Instant::now();
+    let (early, late) = (now + Duration::from_millis(50), now + Duration::from_millis(5_050));
+    assert_eq!(behind(None, early), early);
+    assert_eq!(behind(Some(late), early), late);
+    assert_eq!(behind(Some(early), late), late);
+    let json = JSON.replacen("\"bandwidth_mbps\": 1000.0", "\"bandwidth_mbps\": 1000.0, \"late_fifo\": true", 1);
+    assert!(Delays::from_json(&json, 0).unwrap().late_fifo);
+    assert!(!Delays::from_json(JSON, 0).unwrap().late_fifo);
+}

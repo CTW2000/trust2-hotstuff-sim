@@ -164,6 +164,8 @@ def delays_file(args, committee):
                      late_to=committee.consensus[:args.nodes])
         if args.late_slot > 0:                               # lateness by sender and time slot (DESIGN.md §15.45)
             table.update(late_slot_ms=int(args.late_slot * 1000))
+        if args.late_fifo:                                   # queueing: late messages hold back a link (§15.53)
+            table.update(late_fifo=True)
         if args.fault == "outage":                           # region outage (DESIGN.md §15.22)
             start = int((args.start + args.fault_at) * 1000)
             table.update(outage=fault_nodes(args), outage_from_ms=start,
@@ -214,8 +216,17 @@ def run(args):
     os.makedirs(PathMaker.results_path(), exist_ok=True)
 
     key_files = [PathMaker.key_file(i) for i in range(args.nodes)]
-    for f in key_files:
+    for i, f in enumerate(key_files):
+        # --keys-dir (DESIGN.md §15.53): the runs of a block share their keys, and with them the leader sequence of a
+        # table; the keys are made by the first run that names the directory.
+        kept = join(args.keys_dir, f"node-{i}.json") if args.keys_dir else None
+        if kept and os.path.exists(kept):
+            shutil.copyfile(kept, f)
+            continue
         subprocess.run([node, "keys", "--filename", f], check=True)
+        if kept:
+            os.makedirs(args.keys_dir, exist_ok=True)
+            shutil.copyfile(f, kept)
     names = [Key.from_file(f).name for f in key_files]
     args.target_names = [names[i] for i in fault_nodes(args)] if args.fault == "target" else []
     committee = LocalCommittee(names, BASE_PORT, *base_weights(args))
@@ -324,6 +335,12 @@ def main():
     ap.add_argument("--late-slot", type=float, default=0.0,
                     help="seconds: lateness is drawn once per sender and slot of this length, not per message, so "
                          "all receivers miss the same messages (DESIGN.md §15.45; 0: per message)")
+    ap.add_argument("--late-fifo", action="store_true",
+                    help="queueing: the consensus messages of a link leave in the order they were queued, so a late "
+                         "message holds back the ones behind it (DESIGN.md §15.53)")
+    ap.add_argument("--keys-dir", default="",
+                    help="keep the node keys in this directory and reuse them: the runs of a block share their keys "
+                         "and so the leader sequence of a table (DESIGN.md §15.53)")
     ap.add_argument("--faults", type=int, default=0)
     ap.add_argument("--clients", type=int, default=4)
     ap.add_argument("--rate", type=int, default=50_000)

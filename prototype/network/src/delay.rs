@@ -23,6 +23,9 @@
 //! queues in the slot, to any node, is late. The share of late messages is the same as before, but all receivers
 //! miss the same messages, as when a node's own uplink is congested for a while.
 //!
+//! Queueing (DESIGN.md §15.53): with late_fifo the messages of a link leave in the order they were queued (see
+//! `due`), so one late message makes the following ones on that link late as well.
+//!
 //! Configured through the environment: TTRU_DELAYS names a JSON file {"addresses": {"<ip:port>": node, ...},
 //! "base_ms": [[...]], "jitter_ms": x, "bandwidth_mbps": y, "late_p": p, "late_ms": z, "late_to": ["<ip:port>",
 //! ...]} and TTRU_NODE is this node's index. Without them there is no delay at all.
@@ -30,7 +33,7 @@ use rand::Rng as _;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use tokio::time::{Duration, Instant};
 
 #[cfg(test)]
@@ -73,6 +76,8 @@ pub struct Delays {
     slow_ms: f64,
     #[serde(default)]
     late_slot_ms: u64,
+    #[serde(default)]
+    late_fifo: bool,
     #[serde(skip)]
     me: usize,
 }
@@ -179,13 +184,32 @@ pub fn enabled() -> bool {
     DELAYS.get_or_init(load).is_some()
 }
 
+/// Queueing (DESIGN.md §15.53): with late_fifo the messages to an address leave in the order they were queued, so a
+/// late message holds back the ones queued behind it on that link, as on a congested connection. The consensus,
+/// mempool and client ports of a node are different addresses, so late consensus messages do not hold back data.
+static LAST_DUE: OnceLock<Mutex<HashMap<SocketAddr, Instant>>> = OnceLock::new();
+
 /// When a message of `bytes` bytes to `to`, queued now, is due.
 pub fn due(to: &SocketAddr, bytes: usize) -> Instant {
     let now = Instant::now();
     match DELAYS.get_or_init(load) {
-        Some(delays) => now + delays.of(to, bytes).unwrap_or_default(),
+        Some(delays) => {
+            let at = now + delays.of(to, bytes).unwrap_or_default();
+            if !delays.late_fifo {
+                return at;
+            }
+            let mut last = LAST_DUE.get_or_init(Default::default).lock().expect("the map of due times is poisoned");
+            let at = behind(last.get(to).copied(), at);
+            last.insert(*to, at);
+            at
+        }
         None => now,
     }
+}
+
+/// The due time of a message queued behind one that is due at `before` on the same link.
+fn behind(before: Option<Instant>, at: Instant) -> Instant {
+    before.map_or(at, |before| at.max(before))
 }
 
 /// Where a message due at `at` goes in a queue kept in due order (after the messages due at the same time, so
