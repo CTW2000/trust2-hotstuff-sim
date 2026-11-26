@@ -3,7 +3,7 @@
 Reads the results folder (results-final/ by default, or the folder given as the first argument) and prints, in the
 order of the paper: overhead and the throughput-latency curve (r7stat.py), scale, the cost of the synced safety
 state, two-table counting, the database workloads and their saturation, late messages (stats_a4.py), silent
-leaders, the leader rules (cmpgstat.py), and the forks with their evidence packages. The other batches (the local
+leaders, and the forks with their evidence packages; the leader rules are in results-rmain/ (DESIGN.md §15.53). The other batches (the local
 experiments, G1, the accusation rates) are summarized by `p5.py report` into <folder>/<batch>.md and by the .stat
 files the run wrote; this script lists them at the end. A batch that is missing is reported as such.
 
@@ -160,11 +160,10 @@ def main():
     section("§6.4 Silent leaders, both builds (fin_silent): baseline -> Trust 2.0")
     compare(rows_of("fin_silent.csv"), ("scenario",), "build", ("baseline", "trust2"), ("timeouts", "rounds_per_s", "e2e_latency_ms"))
 
-    section("§6.4 Leader rules (cmpgstat.py)")
-    script("cmpgstat.py", os.path.join(OUT, "cmpg.csv"))
-
-    section("§6.4 Leader rules with votes to all members (cmpgstat.py on cmpb.csv)")
-    script("cmpgstat.py", os.path.join(OUT, "cmpb.csv"))
+    section("§6.4 Leader rules: see results-rmain/rmainstat.md and rmainextra.md (DESIGN.md §15.53)")
+    for name in ("cmpg.csv", "cmpb.csv"):                    # only the reruns before 2026-11-26 have these batches
+        if os.path.exists(os.path.join(OUT, name)):
+            script("cmpgstat.py", os.path.join(OUT, name))
 
     section("§6.5 Forks within one epoch")
     forks("fork.jsonl", False)

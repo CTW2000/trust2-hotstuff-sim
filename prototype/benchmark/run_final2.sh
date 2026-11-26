@@ -56,14 +56,13 @@ if want cost; then
 fi
 
 # 4. Faults and framing: late messages, silent leaders (both builds), the weighted path, entity binding, long
-#    framing, censorship; where the cost under late messages comes from; the leader rules, with votes to the next
-#    leader and with votes to all (DESIGN.md §15.42); the B_rep = 0 ablation.
+#    framing, censorship; where the cost under late messages comes from; the B_rep = 0 ablation. The comparison of
+#    the leader rules (cmpg, cmpb) is not run here: the batch of DESIGN.md §15.53 (results-rmain/, 930 runs on the
+#    same consensus code and configuration) replaces it.
 if want faults; then
   step p5 f25
   step p5 silent2
   step p5 lc
-  step p5 cmpg
-  step p5 cmpb
   step p5 a3
 fi
 
