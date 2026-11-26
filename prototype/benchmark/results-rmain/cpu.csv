@@ -1,0 +1,12 @@
+scenario,leader_rule,cores,throttled_pct,scope
+no lateness,trust2,2.57,2.0,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2360896-i6532440.scope
+P2,trust2,2.6,1.8,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2362069-i6551935.scope
+P10,trust2,3.01,3.2,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2363212-i6578793.scope
+P20,trust2,4.26,7.8,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2364579-i6556122.scope
+S20,trust2,4.29,8.8,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2365655-i6583017.scope
+B20,trust2,3.21,3.2,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2366886-i6559322.scope
+Q2,trust2,2.67,1.8,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2368029-i6583113.scope
+P10,aptos,3.27,3.8,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2369103-i6571495.scope
+late-all,trust2,4.0,9.0,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2370254-i6559528.scope
+silent-all,trust2,3.98,9.0,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2371329-i6528863.scope
+framers-all,trust2,4.53,11.8,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2372402-i6575647.scope
