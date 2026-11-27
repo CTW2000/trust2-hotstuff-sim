@@ -118,7 +118,8 @@ def report(label, runs):
               f"The first block with a payload of an epoch holds {100 * n_first / len(batches):.1f}% of the batches and "
               f"{100 * w_first / sum(b[1] for b in batches):.1f}% of the total wait; elsewhere a batch waits {1000 * other:.0f} ms. "
               f"What these batches wait beyond that, spread over all batches: {1000 * excess:.0f} ms per batch, "
-              f"of which {1000 * (w_long - n_long * other) / len(batches):.0f} ms from the {len(long)} pauses longer than 1 s.")
+              f"of which {1000 * (w_long - n_long * other) / len(batches):.0f} ms from the {len(long)} pauses longer than 1 s "
+              f"({', '.join(f'{h[0]:.2f}' for h in sorted(long))} s).")
     print("\n| position | blocks to the next | mean time to the next block ms | rounds skipped after it | batches % | "
           "mean wait ms | share of the total wait % | mean block-to-commit ms |")
     print("|---|---|---|---|---|---|---|---|")
