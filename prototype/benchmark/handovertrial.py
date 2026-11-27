@@ -10,8 +10,11 @@ late    10% late messages: the baseline; Trust 2.0 without the switch, with it, 
 silent  three Byzantine silent leaders: Trust 2.0 without the switch and with it (same keys, same leader sequence up
         to the first handover that the switch changes).
 
-Every run keeps its logs (results-trial/trial_logs/) for latediag.py. A pilot of one block first:
-    mkdir -p results-trial && (setsid nohup python3 handovertrial.py 1 > results-trial/run-1.log 2>&1 < /dev/null &)"""
+The Trust 2.0 runs keep their logs (results-trial/trial_logs/) for latediag.py. A pilot of one block first, then the
+repetitions under late messages only (the baseline, without the switch, with it):
+    mkdir -p results-trial && (setsid nohup python3 handovertrial.py 1 > results-trial/run-1.log 2>&1 < /dev/null &)
+    (setsid nohup python3 handovertrial.py 2-9 late > results-trial/run-2-9.log 2>&1 < /dev/null &)
+The statistics are in trialstat.py."""
 import json
 import os
 import sys
@@ -29,11 +32,14 @@ DURATION = 180
 BASE = dict(nodes=31, net="base")
 
 
-def cells(block):
+def cells(block, late_only=False):
     late = [("late-baseline", dict(scenario="late", build="baseline", epoch_length=25, late_p=0.1)),
             ("late-e25", dict(scenario="late", build="trust2", epoch_length=25, late_p=0.1)),
             ("late-e25-holder", dict(scenario="late", build="trust2", epoch_length=25, late_p=0.1, proof_holder_leads=True)),
             ("late-e0", dict(scenario="late", build="trust2", epoch_length=0, late_p=0.1))]
+    if late_only:                                # the repetitions: the gain under late messages, three arms
+        late = late[:3]
+        return late[block % len(late):] + late[:block % len(late)]
     late = late[block % len(late):] + late[:block % len(late)]
     silent = [("silent-e25", dict(scenario="silent", build="trust2", epoch_length=25, silent=3)),
               ("silent-e25-holder", dict(scenario="silent", build="trust2", epoch_length=25, silent=3, proof_holder_leads=True))]
@@ -55,10 +61,10 @@ def extra_for(config, path):
     return extra
 
 
-def main(blocks, duration=DURATION, only=None):
+def main(blocks, duration=DURATION, only=None, late_only=False):
     for block in blocks:
         keys = os.path.abspath(f"{OUT}/keys/block-{block}")
-        for tag, config in cells(block):
+        for tag, config in cells(block, late_only):
             if only and tag != only:
                 continue
             path = f"{OUT}/facts/{tag}-b{block}.json"
@@ -67,7 +73,8 @@ def main(blocks, duration=DURATION, only=None):
             while os.path.exists(f"{OUT}/pause"):
                 time.sleep(30)
             row = p5.run("trial", dict(rep=block, keys_dir=keys, **BASE, **config), duration,
-                         keep_logs=f"{tag}-b{block}", extra=extra_for(config, path))
+                         keep_logs=f"{tag}-b{block}" if config["build"] == "trust2" or block == 1 else None,
+                         extra=extra_for(config, path))
             if row is None:
                 print(f"FAILED {tag} block {block}", flush=True)
     print("handovertrial done", flush=True)
@@ -90,4 +97,4 @@ if __name__ == "__main__":      # the pool of the log parser starts a fork serve
         for tag in ("late-e25-holder", "silent-e25-holder"):
             main(blocks=(1,), duration=40, only=tag)
     else:
-        main(blocks_of(sys.argv[1]) if len(sys.argv) > 1 else range(1, 5))
+        main(blocks_of(sys.argv[1]) if len(sys.argv) > 1 else range(1, 5), late_only="late" in sys.argv[2:])
