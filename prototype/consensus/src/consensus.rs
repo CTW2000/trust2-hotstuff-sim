@@ -127,6 +127,7 @@ impl Consensus {
                 no_h5: parameters.no_h5,
                 broadcast_votes: parameters.broadcast_votes,
                 forward_qc: parameters.forward_qc,
+                proof_holder_leads: parameters.proof_holder_leads,
             },
             signature_service.clone(),
             store.clone(),

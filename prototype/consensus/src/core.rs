@@ -128,6 +128,8 @@ pub struct Faults {
     pub no_sync: bool,
     /// Ablation (§15.34): count certificates past the end of an epoch under the table of that epoch alone (H5 off).
     pub no_h5: bool,
+    /// Trial (§15.58): the table of the epoch before names the leader until a block of the new epoch is certified.
+    pub proof_holder_leads: bool,
     /// Comparison (§15.42): send every vote to all members, not only to the next leader. Every member then counts
     /// the votes and can assemble the QC, so a block stays certified when the next leader is slow or silent.
     pub broadcast_votes: bool,
@@ -330,6 +332,20 @@ impl Core {
 
     fn committee(&self) -> &Committee {
         self.epochs.current()
+    }
+
+    /// The leader of `round` for what we do in it: whether we propose, and to whom a certificate goes. Trial
+    /// (§15.58): while no block of our epoch is certified -- our high QC is of the epoch before -- the table of
+    /// that epoch still names it, so the member that assembles the commit proof of the terminal block leads the
+    /// round the proof moves it to, as the members still in the old epoch expect.
+    fn leader_now(&self, round: Round) -> PublicKey {
+        let epoch = self.epochs.epoch();
+        if self.faults.proof_holder_leads && epoch > self.epochs.origin() && self.high_qc.epoch + 1 == epoch {
+            if let Some(old) = self.epochs.get(epoch - 1) {
+                return leader(old, round);
+            }
+        }
+        leader(self.committee(), round)
     }
 
     fn table(&self, epoch: u128) -> ConsensusResult<&Committee> {
@@ -680,7 +696,7 @@ impl Core {
             debug!("Processing the entry proof {:?}", qc);
             let round = self.round;
             self.process_qc(qc).await;
-            if self.round > round && self.name == leader(self.committee(), self.round) {
+            if self.round > round && self.name == self.leader_now(self.round) {
                 self.propose(None).await;
             }
         }
@@ -989,7 +1005,7 @@ impl Core {
             self.process_qc(&qc).await;
 
             // Make a new block if we are the next leader.
-            let next_leader = leader(self.committee(), self.round);
+            let next_leader = self.leader_now(self.round);
             if self.name == next_leader {
                 self.propose(None).await;
             } else if self.faults.forward_qc && !self.faults.frame {
@@ -1016,7 +1032,7 @@ impl Core {
         self.verify_qc(qc)?;
         debug!("Processing forwarded {:?}", qc);
         self.process_qc(qc).await;
-        if self.name == leader(self.committee(), self.round) {
+        if self.name == self.leader_now(self.round) {
             self.propose(None).await;
         }
         Ok(())
@@ -1078,7 +1094,7 @@ impl Core {
             self.broadcast_entry().await;
 
             // Make a new block if we are the next leader.
-            if self.name == leader(self.committee(), self.round) {
+            if self.name == self.leader_now(self.round) {
                 self.propose(Some(tc)).await;
             }
         }
@@ -1485,8 +1501,15 @@ impl Core {
 
         // Ensure the block proposer is the right leader for the round (in the table of its epoch).
         let committee = self.table(block.epoch)?;
+        // Trial (§15.58): the first block of an epoch, whose QC is of the epoch before, is from the leader of its
+        // round in the table of that epoch.
+        let first_of_epoch = block.epoch > self.epochs.origin() && block.qc.epoch + 1 == block.epoch;
+        let expected = match self.faults.proof_holder_leads && first_of_epoch {
+            true => leader(self.table(block.qc.epoch)?, block.round),
+            false => leader(committee, block.round),
+        };
         ensure!(
-            block.author == leader(committee, block.round),
+            block.author == expected,
             ConsensusError::WrongLeader {
                 digest,
                 leader: block.author,
@@ -1590,7 +1613,7 @@ impl Core {
         }
         self.process_qc(&tc.high_qc).await;
         self.advance_round(tc.round).await;
-        let next_leader = leader(self.committee(), self.round);
+        let next_leader = self.leader_now(self.round);
         if self.name == next_leader {
             self.propose(Some(tc)).await;
         } else {

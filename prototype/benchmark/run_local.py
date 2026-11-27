@@ -60,6 +60,8 @@ def node_parameters(args):
         consensus["broadcast_votes"] = True
     if getattr(args, "forward_qc", False):                   # with them, the QC goes to the next leader (§15.44)
         consensus["forward_qc"] = True
+    if getattr(args, "proof_holder_leads", False):           # trial: the old table leads until the epoch's first block (§15.58)
+        consensus["proof_holder_leads"] = True
     if getattr(args, "target_names", None):                  # targeted framing: whom the colluders frame (§15.27)
         consensus["frame_targets"] = args.target_names
     return {
@@ -379,6 +381,9 @@ def main():
     ap.add_argument("--no-h5", action="store_true",
                     help="ablation (DESIGN.md §15.34): certificates past the end of an epoch need no quorum of the "
                          "next table")
+    ap.add_argument("--proof-holder-leads", action="store_true",
+                    help="trial (DESIGN.md §15.58): the old table names the leader until a block of the new epoch is "
+                         "certified, so the holder of the commit proof proposes the first block of the epoch")
     ap.add_argument("--broadcast-votes", action="store_true",
                     help="send every vote to all members, as aptos-core does by default (DESIGN.md §15.42)")
     ap.add_argument("--forward-qc", action="store_true",

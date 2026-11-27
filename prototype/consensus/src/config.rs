@@ -135,6 +135,12 @@ pub struct Parameters {
     /// machine does when it loses power (`Store::new_lossy`).
     #[serde(default)]
     pub lossy_store: bool,
+    /// Experiment switch (DESIGN.md §15.58, a trial): until a block of the new epoch is certified, the table of the
+    /// epoch before names the leader of a round. The member that holds the commit proof of the terminal block then
+    /// proposes the first block of the epoch at whatever round that proof forms; without the switch, the old leader
+    /// is kept only at the round terminal + 2.
+    #[serde(default)]
+    pub proof_holder_leads: bool,
 }
 
 fn default_attest_guard() -> u64 {
@@ -195,6 +201,7 @@ impl Default for Parameters {
             broadcast_votes: false,
             forward_qc: false,
             lossy_store: false,
+            proof_holder_leads: false,
         }
     }
 }
