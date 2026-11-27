@@ -1,0 +1,11 @@
+{'nodes': 4, 'rate': 200000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3154960-i7345817.scope', 'cores': 7.35, 'throttled_pct': 0.0}
+{'nodes': 4, 'rate': 350000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3155221-i7365467.scope', 'cores': 10.6, 'throttled_pct': 20.5}
+{'nodes': 4, 'rate': 400000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3155475-i7349550.scope', 'cores': 10.05, 'throttled_pct': 54.0}
+{'nodes': 10, 'rate': 100000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3155734-i7361719.scope', 'cores': 6.91, 'throttled_pct': 21.5}
+{'nodes': 10, 'rate': 150000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3156260-i7353611.scope', 'cores': 11.14, 'throttled_pct': 77.5}
+{'nodes': 10, 'rate': 175000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3156786-i7335664.scope', 'cores': 11.9, 'throttled_pct': 97.0}
+{'nodes': 31, 'rate': 40000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3157311-i7373269.scope', 'cores': 6.97, 'throttled_pct': 17.0}
+{'nodes': 31, 'rate': 50000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3158785-i7349810.scope', 'cores': 8.49, 'throttled_pct': 29.0}
+{'nodes': 31, 'rate': 60000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3160257-i7349906.scope', 'cores': 9.93, 'throttled_pct': 45.5}
+{'nodes': 31, 'rate': 70000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3161729-i7389602.scope', 'cores': 10.34, 'throttled_pct': 76.5}
+{'nodes': 100, 'rate': 2000, 'scope': '/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3163201-i7358112.scope', 'cores': 4.29, 'throttled_pct': 0.0}

@@ -1,0 +1,252 @@
+
+====================================================================================================
+Commit and progress
+====================================================================================================
+2026-11-26 09:06:06 commit 26383de
+2026-11-26 09:06:06 start: unit-test measurements
+2026-11-26 09:06:21 end:   unit-test measurements
+2026-11-26 09:06:21 start: p5 r7x2
+2026-11-26 09:45:24 end:   p5 r7x2
+2026-11-26 09:45:24 start: p5 r7xt
+2026-11-26 11:10:14 end:   p5 r7xt
+2026-11-26 11:10:14 start: python3 cpustat.py
+2026-11-26 11:17:37 FAILED: python3 cpustat.py
+2026-11-26 11:17:37 start: p5 scale
+2026-11-26 11:44:45 end:   p5 scale
+2026-11-26 11:44:45 start: p5 sync
+2026-11-26 12:28:22 end:   p5 sync
+2026-11-26 12:28:22 start: p5 h5live
+2026-11-26 13:22:24 end:   p5 h5live
+2026-11-26 13:22:24 start: p5 wl
+2026-11-26 14:01:18 end:   p5 wl
+2026-11-26 14:01:18 start: p5 wlsat
+2026-11-26 14:38:53 end:   p5 wlsat
+2026-11-26 14:38:53 start: p5 f25
+2026-11-26 16:13:35 end:   p5 f25
+2026-11-26 16:13:35 start: p5 silent2
+2026-11-26 16:31:14 end:   p5 silent2
+2026-11-26 16:31:14 start: p5 lc
+2026-11-26 17:26:34 end:   p5 lc
+2026-11-26 17:26:34 start: p5 a3
+2026-11-26 18:04:03 end:   p5 a3
+2026-11-26 18:04:03 start: g1
+2026-11-26 18:08:45 end:   g1
+2026-11-26 18:08:45 start: p5 a1
+2026-11-26 19:30:08 end:   p5 a1
+2026-11-26 19:30:24 start: p5 r2
+2026-11-26 19:45:09 end:   p5 r2
+2026-11-26 19:45:09 start: p5 r3
+2026-11-26 21:12:06 end:   p5 r3
+2026-11-26 21:12:06 start: p5 r3
+2026-11-26 22:39:05 end:   p5 r3
+2026-11-26 22:39:05 start: p5 r4
+2026-11-26 22:53:48 end:   p5 r4
+2026-11-26 22:53:48 start: p5 r4k
+2026-11-26 22:58:44 end:   p5 r4k
+2026-11-26 22:58:44 start: p5 r34x
+2026-11-26 23:17:07 end:   p5 r34x
+2026-11-26 23:17:07 start: p5 thr
+2026-11-27 00:20:53 end:   p5 thr
+2026-11-27 00:20:53 start: p5 thr2
+2026-11-27 01:04:19 end:   p5 thr2
+2026-11-27 01:04:19 start: p5 tgt
+2026-11-27 01:37:02 end:   p5 tgt
+2026-11-27 01:37:02 start: forks within one epoch
+2026-11-27 01:55:17 end:   forks within one epoch
+2026-11-27 01:55:17 start: forks across epochs with packages
+2026-11-27 02:20:48 end:   forks across epochs with packages
+2026-11-27 02:20:49 ALLDONE
+2026-11-27 02:21:25 start: python3 cpustat.py (again, after the fix; the rerun itself had ended)
+2026-11-27 02:29:32 end:   python3 cpustat.py (again)
+
+====================================================================================================
+§6.2 Overhead: normal case and throughput-latency curve (r7stat.py)
+====================================================================================================
+## Normal case (54 runs)
+n=4  no delay: rounds/s 644.6 -> 495.4 (-23.1%), baseline [640.5, 644.6, 650.2], trust2 [469.2, 495.4, 502.9], ranges do not overlap
+n=10 no delay: rounds/s 524.5 -> 408.2 (-22.2%), baseline [523.1, 524.5, 524.9], trust2 [403.2, 408.2, 424.0], ranges do not overlap
+n=31 no delay: rounds/s 265.5 -> 198.0 (-25.4%), baseline [261.7, 265.5, 266.6], trust2 [190.2, 198.0, 199.6], ranges do not overlap
+n=4  none e2e 9 / 10 ms (+11.1%), timeouts max 0, e2e tx/s 10009-10011
+n=4  base e2e 283 / 337 ms (+19.1%), timeouts max 0, e2e tx/s 9921-9965
+n=4  wide e2e 545 / 621 ms (+13.9%), timeouts max 0, e2e tx/s 9877-9934
+n=10 none e2e 9 / 10 ms (+11.1%), timeouts max 0, e2e tx/s 10007-10010
+n=10 base e2e 320 / 333 ms (+4.1%), timeouts max 0, e2e tx/s 9926-9975
+n=10 wide e2e 573 / 602 ms (+5.1%), timeouts max 0, e2e tx/s 9876-9932
+n=31 none e2e 16 / 22 ms (+37.5%), timeouts max 0, e2e tx/s 9997-10007
+n=31 base e2e 328 / 341 ms (+4.0%), timeouts max 0, e2e tx/s 9922-9968
+n=31 wide e2e 596 / 604 ms (+1.3%), timeouts max 0, e2e tx/s 9860-9924
+with delay: e2e change +1.3% to +19.1%
+
+## Throughput-latency (108 runs)
+n=4    50000: baseline 49742 tx/s 284 ms timeouts [0, 0, 0]; trust2 49797 tx/s 335 ms timeouts [0, 0, 0]; change +18.0%
+n=4   100000: baseline 99412 tx/s 334 ms timeouts [0, 0, 0]; trust2 99526 tx/s 339 ms timeouts [0, 0, 0]; change +1.5%
+n=4   200000: baseline 198953 tx/s 315 ms timeouts [0, 0, 0]; trust2 198445 tx/s 384 ms timeouts [0, 0, 0]; change +21.9%
+n=4   300000: baseline 283434 tx/s 402 ms timeouts [4, 4, 5]; trust2 281293 tx/s 426 ms timeouts [5, 3, 5]
+n=4   350000: baseline 319119 tx/s 445 ms timeouts [14, 13, 13]; trust2 277216 tx/s 508 ms timeouts [14, 7, 13]
+n=4   400000: baseline 76700 tx/s 0 ms timeouts [27, 8, 19]; trust2 - tx/s - ms timeouts [27, 29, 28]
+n=4  highest rate without timeouts: baseline 200000, trust2 200000
+n=10   25000: baseline 24804 tx/s 328 ms timeouts [0, 0, 0]; trust2 24843 tx/s 333 ms timeouts [0, 0, 0]; change +1.5%
+n=10   50000: baseline 49687 tx/s 332 ms timeouts [0, 0, 0]; trust2 49707 tx/s 336 ms timeouts [0, 0, 0]; change +1.2%
+n=10  100000: baseline 99410 tx/s 354 ms timeouts [0, 0, 0]; trust2 99617 tx/s 365 ms timeouts [0, 0, 0]; change +3.1%
+n=10  150000: baseline 148458 tx/s 523 ms timeouts [0, 0, 0]; trust2 147876 tx/s 549 ms timeouts [0, 0, 0]; change +5.0%
+n=10  175000: baseline 129935 tx/s 1122 ms timeouts [3, 18, 17]; trust2 119491 tx/s 1001 ms timeouts [3, 8, 3]
+n=10  200000: baseline 27466 tx/s 1241 ms timeouts [7, 10, 13]; trust2 44856 tx/s 2427 ms timeouts [24, 23, 27]
+n=10 highest rate without timeouts: baseline 150000, trust2 150000
+n=31   20000: baseline 19890 tx/s 337 ms timeouts [0, 0, 0]; trust2 19893 tx/s 353 ms timeouts [0, 0, 0]; change +4.7%
+n=31   30000: baseline 29766 tx/s 338 ms timeouts [0, 0, 0]; trust2 29847 tx/s 353 ms timeouts [0, 0, 0]; change +4.4%
+n=31   40000: baseline 39677 tx/s 358 ms timeouts [0, 0, 0]; trust2 39676 tx/s 379 ms timeouts [0, 0, 0]; change +5.9%
+n=31   50000: baseline 49705 tx/s 416 ms timeouts [0, 3, 0]; trust2 49634 tx/s 746 ms timeouts [6, 1, 3]
+n=31   60000: baseline 54987 tx/s 852 ms timeouts [7, 3, 7]; trust2 53805 tx/s 796 ms timeouts [5, 4, 14]
+n=31   70000: baseline 50938 tx/s 676 ms timeouts [6, 26, 11]; trust2 56726 tx/s 626 ms timeouts [22, 20, 15]
+n=31 highest rate without timeouts: baseline 40000, trust2 40000
+cells without timeouts in both builds: 10, latency change +1.2% to +21.9%
+  cpu: n=4 rate=200000 cores=7.35 throttled=0.0%
+  cpu: n=4 rate=350000 cores=10.6 throttled=20.5%
+  cpu: n=4 rate=400000 cores=10.05 throttled=54.0%
+  cpu: n=10 rate=100000 cores=6.91 throttled=21.5%
+  cpu: n=10 rate=150000 cores=11.14 throttled=77.5%
+  cpu: n=10 rate=175000 cores=11.9 throttled=97.0%
+  cpu: n=31 rate=40000 cores=6.97 throttled=17.0%
+  cpu: n=31 rate=50000 cores=8.49 throttled=29.0%
+  cpu: n=31 rate=60000 cores=9.93 throttled=45.5%
+  cpu: n=31 rate=70000 cores=10.34 throttled=76.5%
+  cpu: n=100 rate=2000 cores=4.29 throttled=0.0%
+
+====================================================================================================
+§6.2 Scale: baseline -> Trust 2.0
+====================================================================================================
+  nodes=31 (runs 5+5): consensus_latency_ms 216 [211-223] -> 220 [217-221] (+1.9%); e2e_latency_ms 319 [313-328] -> 330 [325-331] (+3.4%); rounds_per_s 9.6 [9.3-9.8] -> 9.4 [9.4-9.5] (-2.1%); timeouts 0 -> 0 (-)
+  nodes=64 (runs 5+5): consensus_latency_ms 220 [215-222] -> 222 [218-223] (+0.9%); e2e_latency_ms 325 [316-327] -> 330 [325-333] (+1.5%); rounds_per_s 9.4 [9.3-9.6] -> 9.4 [9.3-9.5] (+0.0%); timeouts 0 -> 0 (-)
+  nodes=100 (runs 5+5): consensus_latency_ms 219 [216-226] -> 225 [224-228] (+2.7%); e2e_latency_ms 323 [319-332] -> 337 [333-340] (+4.3%); rounds_per_s 9.5 [9.1-9.6] -> 9.1 [9.1-9.3] (-4.2%); timeouts 0 -> 0 (-)
+
+====================================================================================================
+§6.3 Synced safety state: with the sync (no_sync empty or False) -> without
+====================================================================================================
+  net=base, nodes=4 (runs 5+5): rounds_per_s 9.7 [9.7-9.9] -> 9.9 [9.6-9.9] (+2.1%); consensus_latency_ms 217 [210-218] -> 211 [210-218] (-2.8%); e2e_latency_ms 336 [326-339] -> 328 [327-337] (-2.4%); timeouts 0 -> 0 (-)
+  net=base, nodes=10 (runs 5+5): rounds_per_s 9.5 [9.4-9.6] -> 9.5 [9.3-9.6] (+0.0%); consensus_latency_ms 222 [219-222] -> 221 [220-225] (-0.5%); e2e_latency_ms 333 [331-335] -> 332 [329-337] (-0.3%); timeouts 0 -> 0 (-)
+  net=base, nodes=31 (runs 5+5): rounds_per_s 9.2 [9.2-9.3] -> 9.2 [9.1-9.2] (+0.0%); consensus_latency_ms 227 [224-228] -> 228 [228-229] (+0.4%); e2e_latency_ms 336 [333-339] -> 338 [337-339] (+0.6%); timeouts 0 -> 0 (-)
+  net=none, nodes=4 (runs 5+5): rounds_per_s 593.6 [584.5-598.5] -> 502.8 [494.7-507.2] (-15.3%); consensus_latency_ms 5 [4-5] -> 5 [5-6] (+0.0%); e2e_latency_ms 9 [9-10] -> 10 (+11.1%); timeouts 0 -> 0 (-)
+  net=none, nodes=10 (runs 5+5): rounds_per_s 484.1 [480.4-487] -> 422 [420.1-422.7] (-12.8%); consensus_latency_ms 5 -> 5 (+0.0%); e2e_latency_ms 9 [9-10] -> 10 (+11.1%); timeouts 0 -> 0 (-)
+  net=none, nodes=31 (runs 5+5): rounds_per_s 238.1 [231.1-239.2] -> 199.2 [192.8-201.9] (-16.3%); consensus_latency_ms 9 -> 12 [11-15] (+33.3%); e2e_latency_ms 17 -> 20 [19-26] (+17.6%); timeouts 0 -> 0 (-)
+  (reference arm: without the sync; the change is the cost of the sync)
+
+====================================================================================================
+§6.3 Two-table counting: H5 on -> off
+====================================================================================================
+  scenario=framers+late (runs 5+5): rounds_per_s 1.5 [1.5-1.6] -> 1.5 [1.3-1.6] (+0.0%); timeouts 90 [89-93] -> 92 [88-95] (+2.2%); stalls 99 [98-101] -> 99 [97-103] (+0.0%); stalls_near 22 [18-23] -> 19 [16-24] (-13.6%); e2e_latency_ms 4015 [3463-5978] -> 3810 [3103-7149] (-5.1%)
+  scenario=none (runs 5+5): rounds_per_s 9 [8.9-9.1] -> 9 [8.9-9] (+0.0%); timeouts 0 -> 0 (-); stalls 0 -> 0 (-); stalls_near 0 -> 0 (-); e2e_latency_ms 339 [338-339] -> 339 [338-340] (+0.0%)
+  scenario=silent (runs 5+5): rounds_per_s 5.3 [4.9-5.9] -> 5.5 [5.3-5.9] (+3.8%); timeouts 34 [29-37] -> 29 [24-31] (-14.7%); stalls 39 [34-44] -> 37 [32-39] (-5.1%); stalls_near 12 [5-15] -> 5 [2-9] (-58.3%); e2e_latency_ms 1171 [1035-1276] -> 909 [867-971] (-22.4%)
+
+====================================================================================================
+§6.3 Database workloads: baseline -> Trust 2.0
+====================================================================================================
+  workload=smallbank, nodes=4 (runs 3+3): consensus_latency_ms 179 [178-212] -> 219 [216-219] (+22.3%); e2e_latency_ms 283 [283-328] -> 337 [335-340] (+19.1%); e2e_tps 9943 [9932-9959] -> 9933 [9926-9940] (-0.1%); exec_us_per_tx 1.044 [1.036-1.045] -> 1.052 [1.051-1.053] (+0.8%); exec_state_mismatches 0 -> 0 (-); timeouts 0 -> 0 (-)
+  workload=smallbank, nodes=10 (runs 3+3): consensus_latency_ms 215 [206-230] -> 224 [222-224] (+4.2%); e2e_latency_ms 321 [310-338] -> 336 [335-339] (+4.7%); e2e_tps 9949 [9930-9963] -> 9935 [9920-9959] (-0.1%); exec_us_per_tx 1.071 [1.065-1.072] -> 1.076 [1.072-1.078] (+0.5%); exec_state_mismatches 0 -> 0 (-); timeouts 0 -> 0 (-)
+  workload=smallbank, nodes=31 (runs 3+3): consensus_latency_ms 227 [222-234] -> 231 [230-233] (+1.8%); e2e_latency_ms 332 [327-340] -> 343 [341-345] (+3.3%); e2e_tps 9957 [9943-9966] -> 9931 [9926-9936] (-0.3%); exec_us_per_tx 1.191 [1.19-1.201] -> 1.212 [1.205-1.218] (+1.8%); exec_state_mismatches 0 -> 0 (-); timeouts 0 -> 0 (-)
+  workload=ycsb-a, nodes=4 (runs 3+3): consensus_latency_ms 178 [178-212] -> 219 [212-219] (+23.0%); e2e_latency_ms 283 [282-326] -> 340 [329-341] (+20.1%); e2e_tps 9943 [9924-9960] -> 9936 [9922-9937] (-0.1%); exec_us_per_tx 1.051 [1.034-1.058] -> 1.055 [1.052-1.056] (+0.4%); exec_state_mismatches 0 -> 0 (-); timeouts 0 -> 0 (-)
+  workload=ycsb-a, nodes=10 (runs 3+3): consensus_latency_ms 225 [224-225] -> 223 [222-225] (-0.9%); e2e_latency_ms 333 [333-334] -> 337 [333-337] (+1.2%); e2e_tps 9959 [9947-9962] -> 9948 [9923-9952] (-0.1%); exec_us_per_tx 1.07 [1.062-1.074] -> 1.081 [1.08-1.089] (+1.0%); exec_state_mismatches 0 -> 0 (-); timeouts 0 -> 0 (-)
+  workload=ycsb-a, nodes=31 (runs 3+3): consensus_latency_ms 227 [226-230] -> 230 [229-231] (+1.3%); e2e_latency_ms 334 [332-338] -> 342 [340-344] (+2.4%); e2e_tps 9936 [9926-9961] -> 9947 [9942-9963] (+0.1%); exec_us_per_tx 1.208 [1.198-1.218] -> 1.219 [1.21-1.257] (+0.9%); exec_state_mismatches 0 -> 0 (-); timeouts 0 -> 0 (-)
+  workload=ycsb-b, nodes=4 (runs 3+3): consensus_latency_ms 213 [178-213] -> 211 [211-216] (-0.9%); e2e_latency_ms 326 [283-327] -> 330 [330-334] (+1.2%); e2e_tps 9953 [9946-9973] -> 9945 [9939-9957] (-0.1%); exec_us_per_tx 0.988 [0.981-0.999] -> 0.992 [0.99-0.999] (+0.4%); exec_state_mismatches 0 -> 0 (-); timeouts 0 -> 0 (-)
+  workload=ycsb-b, nodes=10 (runs 3+3): consensus_latency_ms 227 [214-234] -> 222 [221-223] (-2.2%); e2e_latency_ms 337 [323-344] -> 335 [332-335] (-0.6%); e2e_tps 9952 [9936-9968] -> 9945 [9940-9978] (-0.1%); exec_us_per_tx 1.01 [1.009-1.016] -> 1.032 [1.024-1.046] (+2.2%); exec_state_mismatches 0 -> 0 (-); timeouts 0 -> 0 (-)
+  workload=ycsb-b, nodes=31 (runs 3+3): consensus_latency_ms 229 [226-231] -> 230 [229-230] (+0.4%); e2e_latency_ms 335 [332-340] -> 340 [339-341] (+1.5%); e2e_tps 9954 [9943-9958] -> 9947 [9945-9960] (-0.1%); exec_us_per_tx 1.142 [1.134-1.143] -> 1.157 [1.144-1.165] (+1.3%); exec_state_mismatches 0 -> 0 (-); timeouts 0 -> 0 (-)
+  all runs, exec_us_per_tx: 1.0705 [0.981-1.257]
+  all runs, exec_state_mismatches: 0
+  all runs, exec_txs: 398371 [396620-403590]
+  runs: 54; columns: ['build', 'client_misses', 'consensus_latency_ms', 'consensus_tps', 'e2e_latency_ms', 'e2e_tps', 'epoch_length', 'epochs', 'exec_blocks', 'exec_nodes', 'exec_rounds_compared', 'exec_state_mismatches', 'exec_txs', 'exec_txs_min', 'exec_us_per_tx', 'honest_cut', 'lag_max_ms', 'lag_median_ms', 'net', 'nodes', 'rep', 'rounds_per_s', 'timeout_rounds', 'timeouts', 'top_round', 'workload']
+
+====================================================================================================
+§6.3 Saturation under the workloads: baseline -> Trust 2.0
+====================================================================================================
+  workload=smallbank, rate=20000 (runs 2+2): e2e_tps 19885 [19859-19911] -> 19897.5 [19877-19918] (+0.1%); e2e_latency_ms 329 [321-337] -> 350.5 [348-353] (+6.5%); consensus_latency_ms 225.5 [220-231] -> 238 [236-240] (+5.5%); timeouts 0 -> 0 (-); exec_us_per_tx 1.262 [1.24-1.284] -> 1.316 [1.298-1.334] (+4.3%); exec_state_mismatches 0 -> 0 (-)
+  workload=smallbank, rate=30000 (runs 2+2): e2e_tps 29849 [29846-29852] -> 29854 [29848-29860] (+0.0%); e2e_latency_ms 352 -> 370.5 [366-375] (+5.3%); consensus_latency_ms 241.5 [241-242] -> 251.5 [248-255] (+4.1%); timeouts 0 -> 0 (-); exec_us_per_tx 1.626 [1.606-1.646] -> 1.684 [1.673-1.695] (+3.6%); exec_state_mismatches 0 -> 0 (-)
+  workload=smallbank, rate=40000 (runs 2+2): e2e_tps 39542.5 [39480-39605] -> 39572.5 [39542-39603] (+0.1%); e2e_latency_ms 465.5 [379-552] -> 410 [403-417] (-11.9%); consensus_latency_ms 285 [256-314] -> 275.5 [271-280] (-3.3%); timeouts 1 [0-2] -> 0 (-100.0%); exec_us_per_tx 2.8475 [2.311-3.384] -> 2.577 [2.462-2.692] (-9.5%); exec_state_mismatches 0 -> 0 (-)
+  workload=smallbank, rate=50000 (runs 2+2): e2e_tps 39007.5 [28239-49776] -> 49428 [49170-49686] (+26.7%); e2e_latency_ms 1491 [639-2343] -> 1050.5 [1031-1070] (-29.5%); consensus_latency_ms 978 [407-1549] -> 667 [646-688] (-31.8%); timeouts 10.5 [3-18] -> 4.5 [4-5] (-57.1%); exec_us_per_tx 10.1325 [5.346-14.919] -> 6.367 [6.084-6.65] (-37.2%); exec_state_mismatches 0 -> 0 (-)
+  workload=smallbank, rate=60000 (runs 2+2): e2e_tps 48469.5 [41615-55324] -> 31332 [30334-32330] (-35.4%); e2e_latency_ms 1233 [1193-1273] -> 3102.5 [1655-4550] (+151.6%); consensus_latency_ms 781 [761-801] -> 2005 [1338-2672] (+156.7%); timeouts 13.5 [11-16] -> 21.5 [17-26] (+59.3%); exec_us_per_tx 10.526 [8.92-12.132] -> 14.985 [9.431-20.539] (+42.4%); exec_state_mismatches 0 -> 0 (-)
+  workload=smallbank, rate=70000 (runs 2+2): e2e_tps 10972 [0-21944] -> 7431 [0-14862] (-32.3%); e2e_latency_ms 1818 [0-3636] -> 6722.5 [0-13445] (+269.8%); consensus_latency_ms 1607.5 [0-3215] -> 4074.5 [0-8149] (+153.5%); timeouts 23.5 [23-24] -> 9.5 [6-13] (-59.6%); exec_us_per_tx 11.0235 [7.572-14.475] -> 22.1975 [18.534-25.861] (+101.4%); exec_state_mismatches 0 -> 0 (-)
+  workload=ycsb-a, rate=20000 (runs 2+2): e2e_tps 19890.5 [19868-19913] -> 19869 [19859-19879] (-0.1%); e2e_latency_ms 336 [332-340] -> 348.5 [343-354] (+3.7%); consensus_latency_ms 231.5 [228-235] -> 237.5 [234-241] (+2.6%); timeouts 0 -> 0 (-); exec_us_per_tx 1.3115 [1.299-1.324] -> 1.371 [1.36-1.382] (+4.5%); exec_state_mismatches 0 -> 0 (-)
+  workload=ycsb-a, rate=30000 (runs 2+2): e2e_tps 29820.5 [29762-29879] -> 29906 [29837-29975] (+0.3%); e2e_latency_ms 352 [349-355] -> 364 (+3.4%); consensus_latency_ms 241.5 [240-243] -> 248.5 [248-249] (+2.9%); timeouts 0 -> 0 (-); exec_us_per_tx 1.694 [1.691-1.697] -> 1.734 [1.725-1.743] (+2.4%); exec_state_mismatches 0 -> 0 (-)
+  workload=ycsb-a, rate=40000 (runs 2+2): e2e_tps 39517.5 [39440-39595] -> 38856 [38549-39163] (-1.7%); e2e_latency_ms 454 [389-519] -> 657.5 [622-693] (+44.8%); consensus_latency_ms 278.5 [263-294] -> 377.5 [358-397] (+35.5%); timeouts 1 [0-2] -> 3 (+200.0%); exec_us_per_tx 2.8615 [2.588-3.135] -> 3.2665 [3.107-3.426] (+14.2%); exec_state_mismatches 0 -> 0 (-)
+  workload=ycsb-a, rate=50000 (runs 2+2): e2e_tps 40110 [30480-49740] -> 44979.5 [40203-49756] (+12.1%); e2e_latency_ms 1617.5 [716-2519] -> 881.5 [732-1031] (-45.5%); consensus_latency_ms 982 [461-1503] -> 537.5 [435-640] (-45.3%); timeouts 12.5 [3-22] -> 6 [3-9] (-52.0%); exec_us_per_tx 12.568 [5.306-19.83] -> 7.46 [5.382-9.538] (-40.6%); exec_state_mismatches 0 -> 0 (-)
+  workload=ycsb-a, rate=60000 (runs 2+2): e2e_tps 41916.5 [29387-54446] -> 51886.5 [51113-52660] (+23.8%); e2e_latency_ms 1233.5 [1058-1409] -> 1595 [1586-1604] (+29.3%); consensus_latency_ms 837 [750-924] -> 1082 [1053-1111] (+29.3%); timeouts 13.5 [13-14] -> 15 [13-17] (+11.1%); exec_us_per_tx 11.876 [10.462-13.29] -> 11.503 [11.304-11.702] (-3.1%); exec_state_mismatches 0 -> 0 (-)
+  workload=ycsb-a, rate=70000 (runs 2+2): e2e_tps 46412 [39081-53743] -> 62903 [61979-63827] (+35.5%); e2e_latency_ms 1971 [1645-2297] -> 1658.5 [1399-1918] (-15.9%); consensus_latency_ms 1400.5 [1220-1581] -> 1157 [1054-1260] (-17.4%); timeouts 20 -> 12.5 [6-19] (-37.5%); exec_us_per_tx 21.3395 [16.575-26.104] -> 18.005 [16.588-19.422] (-15.6%); exec_state_mismatches 0 -> 0 (-)
+
+====================================================================================================
+§6.2/§6.4 Late messages: effect sizes (stats_a4.py; batches f25_late and lc)
+====================================================================================================
+10% late, Trust 2.0 vs baseline, e2e_latency_ms (batches f25_late, lc): +13.6% [+1.5%, +28.5%], stratified permutation p = 0.001, inside +-10%: no  (n = 10v10 + 10v10)
+10% late, Trust 2.0 vs baseline, rounds_per_s (batches f25_late, lc): -4.9% [-9.5%, -0.8%], stratified permutation p = 0.010, inside +-10%: yes  (n = 10v10 + 10v10)
+10% late, Trust 2.0 vs baseline, timeouts (batches f25_late, lc): +23.3% [+2.8%, +42.6%], stratified permutation p = 0.025, inside +-10%: no  (n = 10v10 + 10v10)
+10% late, Trust 2.0 single epoch vs baseline, e2e_latency_ms (lc): +7.1% [-9.9%, +17.6%], stratified permutation p = 0.152, inside +-10%: no  (n = 10v10)
+10% late, Trust 2.0 single epoch vs baseline, rounds_per_s (lc): -3.0% [-6.7%, +2.3%], stratified permutation p = 0.402, inside +-10%: yes  (n = 10v10)
+10% late, Trust 2.0 single epoch vs baseline, timeouts (lc): +3.2% [-17.5%, +17.2%], stratified permutation p = 0.778, inside +-10%: no  (n = 10v10)
+
+====================================================================================================
+§6.4 Silent leaders, both builds (fin_silent): baseline -> Trust 2.0
+====================================================================================================
+  scenario=silent (runs 5+5): timeouts 57 [53-58] -> 27 [22-47] (-52.6%); rounds_per_s 3.3 [3.2-3.7] -> 5.7 [4.2-6.2] (+72.7%); e2e_latency_ms 1191 [1069-2466] -> 1095 [635-1478] (-8.1%)
+
+====================================================================================================
+§6.4 Leader rules: see results-rmain/rmainstat.md and rmainextra.md (DESIGN.md §15.53)
+====================================================================================================
+
+====================================================================================================
+§6.5 Forks within one epoch
+====================================================================================================
+fork.jsonl: 18 runs
+  s1 equal: runs 3, forked 3; adjudications 6, all Byzantine members named in 6, honest blamed 0, evidence E1 2 / E3 4 / E4 0 adjudications, cases ['C1', 'C3'], no attribution 0, share 0.368421, licensed 7
+  s1 weighted: runs 3, forked 3; adjudications 6, all Byzantine members named in 6, honest blamed 0, evidence E1 0 / E3 6 / E4 0 adjudications, cases ['C3'], no attribution 0, share 0.363888, licensed 3
+  s2 equal: runs 3, forked 3; adjudications 6, all Byzantine members named in 6, honest blamed 0, evidence E1 0 / E3 6 / E4 0 adjudications, cases ['C3'], no attribution 0, share 0.368421, licensed 7
+  s2 weighted: runs 3, forked 3; adjudications 6, all Byzantine members named in 6, honest blamed 0, evidence E1 0 / E3 6 / E4 0 adjudications, cases ['C3'], no attribution 0, share 0.363888, licensed 3
+  s3 equal: runs 3, forked 3; adjudications 6, all Byzantine members named in 0, honest blamed 0, evidence E1 0 / E3 0 / E4 0 adjudications, cases ['C3'], no attribution 6, share -, licensed -
+  s3 weighted: runs 3, forked 3; adjudications 6, all Byzantine members named in 0, honest blamed 0, evidence E1 0 / E3 0 / E4 0 adjudications, cases ['C3'], no attribution 6, share -, licensed -
+
+====================================================================================================
+§6.5 Forks across epochs, with evidence packages
+====================================================================================================
+fork_package.jsonl: 18 runs
+  s1 equal: runs 6, forked 6; adjudications 12, all Byzantine members named in 12, honest blamed 0, evidence E1 6 / E3 6 / E4 0 adjudications, cases ['A', 'B', 'C3'], no attribution 0, share 0.368421, licensed 7
+  s1 weighted: runs 6, forked 6; adjudications 12, all Byzantine members named in 12, honest blamed 0, evidence E1 6 / E3 6 / E4 0 adjudications, cases ['B', 'C2', 'C3'], no attribution 0, share 0.363888, licensed 3
+  s2 equal: runs 6, forked 6; adjudications 12, all Byzantine members named in 12, honest blamed 0, evidence E1 0 / E3 12 / E4 0 adjudications, cases ['C3'], no attribution 0, share 0.368421, licensed 7
+  epochs of the fork: 254 [240-257]; tables agree in 36 of 36 adjudications
+  packages: 36, bytes 767962 [720956-800440], links 254 [240-257]; accepted 36 of 36, same as forensics 36, honest blamed 0, culprit weight 36.8 [36.4-36.8]%
+  H2 scan over 72 directions: blocks 2626, declaring the judge's table 1948, of those off the judge's terminal block 1460; runs with such blocks 17
+  E2 scan: blocks 1008, declaring another table 210, honest voters an own-table judgment would name 62, honest voters named by the declared table 0
+
+====================================================================================================
+Other batches: see the tables of `p5.py report` and the .stat files
+====================================================================================================
+  results-final/a1.md
+  results-final/a1_stat.txt
+  results-final/a3.md
+  results-final/f25_censor.md
+  results-final/f25_late.md
+  results-final/f25_silent.md
+  results-final/f25_x2.md
+  results-final/f25_xb.md
+  results-final/f25_xc.md
+  results-final/f25_xe.md
+  results-final/fin_g1_a.stat
+  results-final/fin_g1_b.stat
+  results-final/fin_g1_c.stat
+  results-final/fin_silent.md
+  results-final/h5live.md
+  results-final/lc.md
+  results-final/package_cost.txt
+  results-final/r2_handover.md
+  results-final/r3_long.md
+  results-final/r4_load.md
+  results-final/r7_x2.md
+  results-final/r7_xt.md
+  results-final/scale.md
+  results-final/sync.md
+  results-final/tgt_frame.md
+  results-final/thr_frame.md
+  results-final/thr_silent.md
+  results-final/wl.md
+  results-final/wlsat.md
+  results-final/x1_overhead_baseline_1.txt
+  results-final/x1_overhead_baseline_2.txt
+  results-final/x1_overhead_baseline_3.txt
+  results-final/x1_overhead_trust2_1.txt
+  results-final/x1_overhead_trust2_2.txt
+  results-final/x1_overhead_trust2_3.txt

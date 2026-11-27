@@ -1,0 +1,83 @@
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> mempool/src/processor.rs:30:60
+   |
+30 |                 let digest = Digest(Sha512::digest(&batch).as_slice()[..32].try_into().unwrap());
+   |                                                            ^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: `mempool` (lib) generated 1 warning
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:308:30
+    |
+308 |     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                              ^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:383:30
+    |
+383 |     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                              ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:393:30
+    |
+393 |     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                              ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:407:30
+    |
+407 |     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                              ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:650:34
+    |
+650 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:728:34
+    |
+728 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:770:34
+    |
+770 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:797:30
+    |
+797 |     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                              ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:916:34
+    |
+916 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+    --> consensus/src/messages.rs:1240:34
+     |
+1240 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+     |                                  ^^^^^^^^
+
+warning: `consensus` (lib test) generated 10 warnings
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running unittests src/lib.rs (target/release/deps/consensus-7824ed76a9f75496)
+
+running 1 test
+{"n": 4, "quorum": 3, "bytes": {"vote": 172, "timeout": 553, "qc": 412, "tc": 819, "block_empty": 665, "block_tc": 1484, "block_100": 3865, "accusation": 404, "attestation": 180, "omission": 688, "e1": 348, "nr": 325}, "us": {"verify_qc": 121, "verify_tc": 175, "verify_accusation": 169, "verify_omission": 225, "verify_e1": 112, "epoch_change_median": 36, "epoch_change_max": 46}}
+{"n": 31, "quorum": 21, "bytes": {"vote": 172, "timeout": 2641, "qc": 2500, "tc": 5157, "block_empty": 2753, "block_tc": 7910, "block_100": 5953, "accusation": 2636, "attestation": 180, "omission": 3496, "e1": 348, "nr": 325}, "us": {"verify_qc": 572, "verify_tc": 1192, "verify_accusation": 1185, "verify_omission": 1269, "verify_e1": 114, "epoch_change_median": 137, "epoch_change_max": 149}}
+{"n": 100, "quorum": 67, "bytes": {"vote": 172, "timeout": 7977, "qc": 7836, "tc": 16243, "block_empty": 8089, "block_tc": 24332, "block_100": 11289, "accusation": 8340, "attestation": 180, "omission": 10672, "e1": 348, "nr": 325}, "us": {"verify_qc": 1740, "verify_tc": 3825, "verify_accusation": 3796, "verify_omission": 3870, "verify_e1": 113, "epoch_change_median": 408, "epoch_change_max": 537}}
+test overhead_tests::overhead ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 210 filtered out; finished in 0.82s
+

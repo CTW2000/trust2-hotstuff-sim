@@ -1,0 +1,53 @@
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> /home/bcds/h2h4_fix/mempool/src/processor.rs:30:60
+   |
+30 |                 let digest = Digest(Sha512::digest(&batch).as_slice()[..32].try_into().unwrap());
+   |                                                            ^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: `mempool` (lib) generated 1 warning
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> consensus/src/messages.rs:88:34
+   |
+88 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+   |                                  ^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:154:34
+    |
+154 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:206:34
+    |
+206 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:273:34
+    |
+273 |         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    |                                  ^^^^^^^^
+
+warning: use of deprecated method `generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+   --> consensus/src/messages.rs:311:51
+    |
+311 |             let digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+    |                                                   ^^^^^^^^
+
+warning: `consensus` (lib test) generated 5 warnings
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running unittests src/lib.rs (target/release/deps/consensus-af007f3a17b7f2e4)
+
+running 1 test
+{"n": 4, "quorum": 3, "bytes": {"vote": 156, "timeout": 520, "qc": 396, "tc": 388, "block_empty": 529, "block_tc": 917, "block_100": 3729}, "us": {"verify_qc": 121, "verify_tc": 168}}
+{"n": 31, "quorum": 21, "bytes": {"vote": 156, "timeout": 2608, "qc": 2484, "tc": 2620, "block_empty": 2617, "block_tc": 5237, "block_100": 5817}, "us": {"verify_qc": 571, "verify_tc": 1190}}
+{"n": 100, "quorum": 67, "bytes": {"vote": 156, "timeout": 7944, "qc": 7820, "tc": 8324, "block_empty": 7953, "block_tc": 16277, "block_100": 11153}, "us": {"verify_qc": 1739, "verify_tc": 3794}}
+test overhead_tests::overhead ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.32s
+

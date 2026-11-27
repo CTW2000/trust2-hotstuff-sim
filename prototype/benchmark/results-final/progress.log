@@ -1,0 +1,56 @@
+2026-11-26 09:06:06 commit 26383de
+2026-11-26 09:06:06 start: unit-test measurements
+2026-11-26 09:06:21 end:   unit-test measurements
+2026-11-26 09:06:21 start: p5 r7x2
+2026-11-26 09:45:24 end:   p5 r7x2
+2026-11-26 09:45:24 start: p5 r7xt
+2026-11-26 11:10:14 end:   p5 r7xt
+2026-11-26 11:10:14 start: python3 cpustat.py
+2026-11-26 11:17:37 FAILED: python3 cpustat.py
+2026-11-26 11:17:37 start: p5 scale
+2026-11-26 11:44:45 end:   p5 scale
+2026-11-26 11:44:45 start: p5 sync
+2026-11-26 12:28:22 end:   p5 sync
+2026-11-26 12:28:22 start: p5 h5live
+2026-11-26 13:22:24 end:   p5 h5live
+2026-11-26 13:22:24 start: p5 wl
+2026-11-26 14:01:18 end:   p5 wl
+2026-11-26 14:01:18 start: p5 wlsat
+2026-11-26 14:38:53 end:   p5 wlsat
+2026-11-26 14:38:53 start: p5 f25
+2026-11-26 16:13:35 end:   p5 f25
+2026-11-26 16:13:35 start: p5 silent2
+2026-11-26 16:31:14 end:   p5 silent2
+2026-11-26 16:31:14 start: p5 lc
+2026-11-26 17:26:34 end:   p5 lc
+2026-11-26 17:26:34 start: p5 a3
+2026-11-26 18:04:03 end:   p5 a3
+2026-11-26 18:04:03 start: g1
+2026-11-26 18:08:45 end:   g1
+2026-11-26 18:08:45 start: p5 a1
+2026-11-26 19:30:08 end:   p5 a1
+2026-11-26 19:30:24 start: p5 r2
+2026-11-26 19:45:09 end:   p5 r2
+2026-11-26 19:45:09 start: p5 r3
+2026-11-26 21:12:06 end:   p5 r3
+2026-11-26 21:12:06 start: p5 r3
+2026-11-26 22:39:05 end:   p5 r3
+2026-11-26 22:39:05 start: p5 r4
+2026-11-26 22:53:48 end:   p5 r4
+2026-11-26 22:53:48 start: p5 r4k
+2026-11-26 22:58:44 end:   p5 r4k
+2026-11-26 22:58:44 start: p5 r34x
+2026-11-26 23:17:07 end:   p5 r34x
+2026-11-26 23:17:07 start: p5 thr
+2026-11-27 00:20:53 end:   p5 thr
+2026-11-27 00:20:53 start: p5 thr2
+2026-11-27 01:04:19 end:   p5 thr2
+2026-11-27 01:04:19 start: p5 tgt
+2026-11-27 01:37:02 end:   p5 tgt
+2026-11-27 01:37:02 start: forks within one epoch
+2026-11-27 01:55:17 end:   forks within one epoch
+2026-11-27 01:55:17 start: forks across epochs with packages
+2026-11-27 02:20:48 end:   forks across epochs with packages
+2026-11-27 02:20:49 ALLDONE
+2026-11-27 02:21:25 start: python3 cpustat.py (again, after the fix; the rerun itself had ended)
+2026-11-27 02:29:32 end:   python3 cpustat.py (again)

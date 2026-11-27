@@ -71,6 +71,8 @@ def main():
     for metric in ("e2e_latency_ms", "rounds_per_s", "timeouts"):
         b = (col(load("lc.csv", build="trust2", epoch_length="0"), metric), col(load("lc.csv", build="baseline"), metric))
         report(f"10% late, Trust 2.0 single epoch vs baseline, {metric} (lc)", [b])
+    if not os.path.exists(f"{R}/cmpg.csv"):         # since 2026-11-26 the leader rules are compared in results-rmain/
+        return
     for metric in ("timeouts", "rounds_per_s", "e2e_latency_ms"):
         t = col(load("cmpg.csv", scenario="silent", leader_rule="trust2", g2_threshold="0"), metric)
         a = col(load("cmpg.csv", scenario="silent", leader_rule="aptos"), metric)

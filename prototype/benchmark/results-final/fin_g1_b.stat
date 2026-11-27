@@ -1,0 +1,10 @@
+  nodes: Counter({'honest': 25, 'regressor': 3, 'invalid block': 3})
+  evidence on the ledger (type, culprit role): {('E3', 'regressor'): 5, ('E2', 'invalid block'): 16}
+  punished entities by role: {'regressor': 3, 'invalid block': 3}
+    invalid block Mzl6/tigW1+ozXPL: L3@3 queued@3 L4@6 downgraded@14 L4@30 L4@34 downgraded@38 L4@58
+    invalid block U24P0073Jl3axaqV: L3@5 queued@5 L4@6 L4@10 downgraded@14 L4@33 L4@34 downgraded@41 L4@57
+    invalid block wQk+HIn5GPQGcX25: L3@5 queued@5 L4@6 downgraded@14 L4@30 downgraded@38 L4@54
+    regressor    xtS8g2qSMntyhcwU: L3@3 queued@3 suspended@3
+    regressor    yvdw8QZXXwP5P+9w: L3@3 queued@3 suspended@3
+    regressor    Ix5Wm2n8A31v5jRA: L3@3 queued@3 suspended@3
+  most entities suspended at once: 3

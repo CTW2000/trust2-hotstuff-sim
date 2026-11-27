@@ -1,0 +1,5 @@
+scenario,build,nodes,net,epoch_length,rep,frame,late_p,consensus_tps,consensus_latency_ms,e2e_tps,e2e_latency_ms,timeouts,client_misses,timeout_rounds,top_round,rounds_per_s,epochs,lag_median_ms,lag_max_ms,accusations_honest,accusations_faulty,honest_cut,faulty_share_end
+framers+late,trust2,10,base,25,1,2,0.1,7102,2295,7100,3431,193,0,293,433,1.7,17,1010,2037,4,3,0,0.2
+late,trust2,10,base,25,1,,0.1,9859,451,9856,965,108,0,203,1113,4.5,45,196,2014,8,,0,
+framers+late,trust2,10,base,25,2,2,0.1,7100,1915,7090,2677,194,0,292,430,1.7,17,1063,1126,7,3,0,0.2
+late,trust2,10,base,25,2,,0.1,9714,613,9701,1219,124,0,206,1040,4.2,42,233,1518,12,,0,

@@ -39,7 +39,8 @@ def points(runs_by_rate):
     pts, hollow, dropped = [], [], []
     for rate in sorted(runs_by_rate):
         runs = runs_by_rate[rate]
-        kept = [r for r in runs if int(r["e2e_tps"]) > 0]
+        # A run that committed nothing, or none of whose sampled transactions was committed, has no latency.
+        kept = [r for r in runs if int(r["e2e_tps"]) > 0 and int(r["e2e_latency_ms"]) > 0]
         if len(kept) < len(runs):
             dropped.append((rate, len(runs) - len(kept)))
         if not kept:
@@ -60,7 +61,7 @@ def main():
         for build, color, mark, name in SERIES:
             pts, hollow, dropped = points(data[nodes, build])
             for rate, k in dropped:
-                print("n=%d %s %d tx/s: %d run(s) committed nothing" % (nodes, build, rate, k), file=sys.stderr)
+                print("n=%d %s %d tx/s: %d run(s) without a measured latency" % (nodes, build, rate, k), file=sys.stderr)
             lines.append(r"\addplot[series={%s}{%s}] coordinates {%s};" % (color, mark, " ".join(pts)))
             if nodes == 4:
                 lines.append(r"\addlegendentry{%s}" % name)

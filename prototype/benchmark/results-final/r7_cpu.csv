@@ -1,0 +1,12 @@
+nodes,rate,scope,cores,throttled_pct
+4,200000,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3154960-i7345817.scope,7.35,0.0
+4,350000,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3155221-i7365467.scope,10.6,20.5
+4,400000,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3155475-i7349550.scope,10.05,54.0
+10,100000,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3155734-i7361719.scope,6.91,21.5
+10,150000,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3156260-i7353611.scope,11.14,77.5
+10,175000,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3156786-i7335664.scope,11.9,97.0
+31,40000,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3157311-i7373269.scope,6.97,17.0
+31,50000,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3158785-i7349810.scope,8.49,29.0
+31,60000,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3160257-i7349906.scope,9.93,45.5
+31,70000,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3161729-i7389602.scope,10.34,76.5
+100,2000,/user.slice/user-1000.slice/user@1000.service/app.slice/run-p3163201-i7358112.scope,4.29,0.0
