@@ -36,7 +36,9 @@ def cpu_stat(pid):
 def measure(nodes, rate):
     args = ["python3", "run_local.py", "--build", "trust2", "--nodes", str(nodes), "--net", "base",
             "--epoch-length", "25", "--rate", str(rate), "--warmup", str(WARMUP), "--duration", str(DURATION)]
-    run = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # run_local.py refuses more than 31 nodes unless told otherwise (DESIGN.md §15.39).
+    env = dict(os.environ, TTRU_MAX_NODES=str(max(nodes, int(os.environ.get("TTRU_MAX_NODES", 31)))))
+    run = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     try:
         start = time.time()
         while len(node_pids()) < nodes:
@@ -59,15 +61,15 @@ def measure(nodes, rate):
 def main():
     cells = CELLS if len(sys.argv) == 1 else [tuple(int(x) for x in c.split(":")) for c in sys.argv[1:]]
     rows = []
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
     for nodes, rate in cells:
         row = measure(nodes, rate)
         print(row, flush=True)
         rows.append(row)
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
-        w.writeheader()
-        w.writerows(rows)
+        with open(OUT, "w", newline="") as fh:       # after every cell: a later failure keeps the rows so far
+            w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+            w.writeheader()
+            w.writerows(rows)
 
 
 if __name__ == "__main__":
